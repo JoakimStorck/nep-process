@@ -1,0 +1,24 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+
+# --- Runtime data / simulation output ---
+*.json
+*.jsonl
+
+# --- Logs / profiling ---
+*.log
+*.pstats
+simlog/
+
+# --- Generated figures ---
+Figure_*.png
+*.pdf
+*.svg
+
+# --- OS / editor ---
+.DS_Store
