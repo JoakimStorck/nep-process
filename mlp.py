@@ -15,7 +15,7 @@ def act_softsign(x: np.ndarray) -> np.ndarray:
     return x / (1.0 + np.abs(x))
 
 
-_ACTS = {
+_ACTS: dict[str, Callable[[np.ndarray], np.ndarray]] = {
     "tanh": act_tanh,
     "softsign": act_softsign,
 }
@@ -24,26 +24,35 @@ _ACTS = {
 @dataclass
 class MLPGenome:
     """
-    Genotype = (policy network) + (traits vector).
+    Genotype = policy network + traits.
 
-    Policy (NN):
-      - layer_sizes: [in, h1, h2, ..., out]
-      - act: activation name for hidden layers
-      - weights/biases: list per layer
+    - Policy: (layer_sizes, act, weights, biases)
+    - Traits: real-valued vector (float32), interpreted elsewhere (phenotype.py)
 
-    Traits:
-      - real-valued vector, mutated slowly
-      - interpreted in Agent.apply_traits() as bounded modifiers of AgentParams
+    NOTE:
+      * This module does NOT define how traits affect behavior/life history.
+      * That mapping is centralized in phenotype.py.
     """
 
     layer_sizes: List[int]
     act: str = "tanh"
+
     weights: List[np.ndarray] | None = None
     biases: List[np.ndarray] | None = None
 
     traits: np.ndarray | None = None  # shape [n_traits], float32
 
-    def init_traits(self, rng: np.random.Generator, n_traits: int = 12, lo: float = -1.0, hi: float = 1.0) -> "MLPGenome":
+    # -------------------------
+    # init/copy
+    # -------------------------
+
+    def init_traits(
+        self,
+        rng: np.random.Generator,
+        n_traits: int = 12,
+        lo: float = -1.0,
+        hi: float = 1.0,
+    ) -> "MLPGenome":
         self.traits = rng.uniform(lo, hi, size=(int(n_traits),)).astype(np.float32)
         return self
 
@@ -55,13 +64,13 @@ class MLPGenome:
         init_traits_if_missing: bool = True,
     ) -> "MLPGenome":
         """
-        Initialize weights/biases. Traits are only created if missing (unless init_traits_if_missing=False).
-        This keeps phenotype stable across architecture rewiring if desired.
+        Initialize policy weights/biases (uniform fan-in scaled).
+        Traits are only created if missing (unless init_traits_if_missing=False).
         """
         self.weights = []
         self.biases = []
         for a, b in zip(self.layer_sizes[:-1], self.layer_sizes[1:]):
-            lim = scale / max(1.0, np.sqrt(a))
+            lim = float(scale) / max(1.0, float(np.sqrt(a)))
             W = rng.uniform(-lim, lim, size=(b, a)).astype(np.float32)
             bias = rng.uniform(-lim, lim, size=(b,)).astype(np.float32)
             self.weights.append(W)
@@ -79,84 +88,30 @@ class MLPGenome:
         g.traits = None if self.traits is None else self.traits.copy()
         return g
 
+    # -------------------------
+    # forward
+    # -------------------------
+
     def forward(self, x: np.ndarray) -> np.ndarray:
+        """
+        Forward pass. Returns raw output (no output activation).
+        """
         assert self.weights is not None and self.biases is not None
         h = x.astype(np.float32, copy=False)
-        act_fn: Callable[[np.ndarray], np.ndarray] = _ACTS.get(self.act, act_tanh)
+        act_fn = _ACTS.get(self.act, act_tanh)
         L = len(self.weights)
         for i in range(L):
             h = (self.weights[i] @ h) + self.biases[i]
             if i < L - 1:
                 h = act_fn(h)
-        return h  # raw output
+        return h
 
-    def mutate_weights(self, rng: np.random.Generator, sigma: float = 0.08, p: float = 0.10) -> None:
-        """
-        Mutate only policy network parameters (weights/biases).
-        Traits are mutated separately via mutate_traits().
-        """
-        assert self.weights is not None and self.biases is not None
-        for i in range(len(self.weights)):
-            W = self.weights[i]
-            B = self.biases[i]
-            mW = rng.random(W.shape) < p
-            mB = rng.random(B.shape) < p
-            if mW.any():
-                W[mW] += rng.normal(0.0, sigma, size=int(mW.sum())).astype(np.float32)
-            if mB.any():
-                B[mB] += rng.normal(0.0, sigma, size=int(mB.sum())).astype(np.float32)
+    # -------------------------
+    # lightweight introspection
+    # -------------------------
 
-    def mutate_traits(self, rng: np.random.Generator, sigma: float = 0.02, p: float = 0.05, clip: float = 2.0) -> None:
-        """
-        Slow phenotypic drift: sparse, small Gaussian perturbations on traits.
-        """
-        if self.traits is None:
-            return
-        t = self.traits
-        mt = rng.random(t.shape) < p
-        if mt.any():
-            t[mt] += rng.normal(0.0, sigma, size=int(mt.sum())).astype(np.float32)
-            if clip is not None and clip > 0.0:
-                t[:] = np.clip(t, -float(clip), float(clip)).astype(np.float32)
-        self.traits = t
+    def n_traits(self) -> int:
+        return 0 if self.traits is None else int(self.traits.shape[0])
 
-    def mutate_architecture(
-        self,
-        rng: np.random.Generator,
-        p_layer: float = 0.15,
-        p_width: float = 0.20,
-        min_h: int = 6,
-        max_h: int = 64,
-        max_hidden_layers: int = 4,
-    ) -> "MLPGenome":
-        """
-        Return new genome (copy) with possibly changed hidden layout.
-        We keep input/output fixed; only hidden layers mutate.
-        Architecture mutation discards old wiring (weights/biases reset),
-        but preserves traits (phenotype) by default.
-        """
-        g = self.copy()
-        in_dim = g.layer_sizes[0]
-        out_dim = g.layer_sizes[-1]
-        hidden = g.layer_sizes[1:-1]
-
-        if rng.random() < 0.10:
-            g.act = "softsign" if g.act == "tanh" else "tanh"
-
-        if rng.random() < p_layer:
-            if len(hidden) < max_hidden_layers and rng.random() < 0.60:
-                w = int(rng.integers(min_h, max_h + 1))
-                pos = int(rng.integers(0, len(hidden) + 1))
-                hidden = hidden[:pos] + [w] + hidden[pos:]
-            elif len(hidden) > 1:
-                pos = int(rng.integers(0, len(hidden)))
-                hidden = hidden[:pos] + hidden[pos + 1 :]
-
-        if hidden and rng.random() < p_width:
-            pos = int(rng.integers(0, len(hidden)))
-            delta = int(rng.integers(-8, 9))
-            hidden[pos] = int(np.clip(hidden[pos] + delta, min_h, max_h))
-
-        g.layer_sizes = [in_dim] + list(hidden) + [out_dim]
-        g.weights, g.biases = None, None
-        return g
+    def policy_key(self) -> str:
+        return f"{'-'.join(map(str, self.layer_sizes))}:{self.act}"

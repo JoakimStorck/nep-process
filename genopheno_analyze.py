@@ -79,6 +79,11 @@ class AgentAgg:
     # offspring count (derived from birth events)
     offspring: int = 0
 
+    # NEW: maturity / mature fitness
+    mature_t: float = float("nan")
+    matured: bool = False
+    offspring_after_mature: int = 0
+    
     # step aggregates (derived phenotypes)
     n_steps: int = 0
     t_first: float = float("nan")
@@ -125,6 +130,11 @@ def analyze(
 ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
     agents: Dict[int, AgentAgg] = {}
 
+    # NEW: births timeline (for mature offspring and drift)
+    births_by_parent: Dict[int, List[float]] = {}
+    parent_child_pairs: List[Tuple[int, int]] = []  # (parent_id, child_id)
+    t_end_seen: float = float("nan")
+    
     # per-agent running means from step records
     rm_speed: Dict[int, RunningMean] = {}
     rm_hunger: Dict[int, RunningMean] = {}
@@ -144,6 +154,12 @@ def analyze(
     steps = 0
 
     for obj in _load_jsonl(life_fp):
+        t_obj = obj.get("t", None)
+        if t_obj is not None:
+            tt = _as_float(t_obj)
+            if tt == tt:
+                t_end_seen = tt if (t_end_seen != t_end_seen) else max(t_end_seen, tt)
+                
         ev = obj.get("event", "")
         if ev == "birth":
             births += 1
@@ -153,6 +169,11 @@ def analyze(
             pid = obj.get("parent_id", None)
             a.parent_id = None if pid is None else int(pid)
 
+            # track parent->child relationships and birth times per parent
+            if a.parent_id is not None and a.parent_id >= 0:
+                births_by_parent.setdefault(a.parent_id, []).append(a.birth_t)
+                parent_child_pairs.append((a.parent_id, aid))
+                
             pol = obj.get("policy", {}) or {}
             a.policy_key = str(pol.get("key", ""))
             a.act = str(pol.get("act", ""))
@@ -215,6 +236,33 @@ def analyze(
         a.mean_F0 = rm_F0.get(aid, RunningMean()).mean()
         a.mean_C0 = rm_C0.get(aid, RunningMean()).mean()
 
+    # ---- finalize maturity + mature offspring metrics
+    # if we didn't see any timestamps, try fallback from deaths
+    if t_end_seen != t_end_seen:
+        ts = [a.death_t for a in agents.values() if a.death_t == a.death_t]
+        t_end_seen = max(ts) if ts else float("nan")
+
+    for aid, a in agents.items():
+        # need birth phenotype A_mature
+        A_m = _as_float((a.phenotype_birth or {}).get("A_mature"))
+        if a.birth_t != a.birth_t or A_m != A_m:
+            continue
+
+        a.mature_t = float(a.birth_t + A_m)
+
+        # matured if survived past mature_t; if alive at end, use t_end_seen
+        if a.death_t == a.death_t:
+            a.matured = bool(a.death_t >= a.mature_t)
+        else:
+            a.matured = bool(t_end_seen == t_end_seen and t_end_seen >= a.mature_t)
+
+        # offspring after maturity = count child births with t >= mature_t
+        child_ts = births_by_parent.get(aid, [])
+        if child_ts:
+            a.offspring_after_mature = int(sum(1 for bt in child_ts if bt == bt and bt >= a.mature_t))
+        else:
+            a.offspring_after_mature = 0
+            
     # ---- population.jsonl summary (optional)
     pop_stats = {}
     if pop_fp and pop_fp.exists():
@@ -281,6 +329,13 @@ def analyze(
     ages = np.array([a.age for a in agents.values() if a.age == a.age], dtype=float)
     offspr = np.array([a.offspring for a in agents.values()], dtype=float)
 
+    matured_flags = np.array([1.0 if a.matured else 0.0 for a in agents.values()], dtype=float)
+    offspr_m = np.array([float(a.offspring_after_mature) for a in agents.values()], dtype=float)
+    # NEW: fitness conditional on reaching maturity
+    matured_mask = np.array([bool(a.matured) for a in agents.values()], dtype=bool)
+    offspr_all = offspr
+    offspr_cond = offspr_all[matured_mask] if matured_mask.size else np.array([], dtype=float)
+    
     summary: Dict[str, Any] = {
         "files": {
             "life": str(life_fp),
@@ -297,6 +352,11 @@ def analyze(
             "lifespan": _pcts(ages),
             "offspring": _pcts(offspr),
             "offspring_share_zero": float(np.mean(offspr == 0.0)) if offspr.size else float("nan"),
+            "matured_share": float(np.mean(matured_flags)) if matured_flags.size else float("nan"),
+            "offspring_after_mature": _pcts(offspr_m),
+            "offspring_after_mature_share_zero": float(np.mean(offspr_m == 0.0)) if offspr_m.size else float("nan"),
+            "offspring_cond_matured": _pcts(offspr_cond),
+            "matured_n": int(matured_mask.sum()) if matured_mask.size else 0,
         },
         "population": pop_stats,
         "world": world_stats,
@@ -309,15 +369,40 @@ def analyze(
         X = np.asarray(trait_mat, dtype=float)
         y_age = np.asarray([a.age for a in agents.values() if a.traits is not None and a.age == a.age], dtype=float)
         y_off = np.asarray([a.offspring for a in agents.values() if a.traits is not None and a.age == a.age], dtype=float)
-
+        y_off_m = np.asarray(
+            [a.offspring_after_mature for a in agents.values() if a.traits is not None and a.age == a.age],
+            dtype=float,
+        )
+        y_matured = np.asarray(
+            [1.0 if a.matured else 0.0 for a in agents.values() if a.traits is not None and a.age == a.age],
+            dtype=float,
+        )
+        # conditional correlations among matured only
+        m_mask = np.asarray(
+            [bool(a.matured) for a in agents.values() if a.traits is not None and a.age == a.age],
+            dtype=bool,
+        )
+        if m_mask.size and np.any(m_mask):
+            X_m = X[m_mask]
+            y_off_matured = y_off[m_mask]
+            K2 = min(12, X_m.shape[1])
+            corr_off_cond = {f"trait_{i}": _pearson(X_m[:, i], y_off_matured) for i in range(K2)}
+        else:
+            corr_off_cond = {}
+        
         K = min(12, X.shape[1])
         corr_age = {f"trait_{i}": _pearson(X[:, i], y_age) for i in range(K)}
         corr_off = {f"trait_{i}": _pearson(X[:, i], y_off) for i in range(K)}
+        corr_off_m = {f"trait_{i}": _pearson(X[:, i], y_off_m) for i in range(K)}
+        corr_matured = {f"trait_{i}": _pearson(X[:, i], y_matured) for i in range(K)}        
         summary["geno_pheno"] = {
             "corr_trait_vs_age": corr_age,
             "corr_trait_vs_offspring": corr_off,
+            "corr_trait_vs_offspring_after_mature": corr_off_m,
+            "corr_trait_vs_matured": corr_matured,
             "n_with_traits_and_age": int(X.shape[0]),
             "trait_dim": int(X.shape[1]),
+            "corr_trait_vs_offspring_cond_matured": corr_off_cond
         }
     else:
         summary["geno_pheno"] = {
@@ -327,6 +412,83 @@ def analyze(
             "trait_dim": 0,
         }
 
+    # ---- parent->child trait regression (heritability proxy)
+    # Uses birth traits only; skips if missing.
+    pc = []
+    for pid, cid in parent_child_pairs:
+        p = agents.get(pid)
+        c = agents.get(cid)
+        if p is None or c is None:
+            continue
+        if p.traits is None or c.traits is None:
+            continue
+        pc.append((np.asarray(p.traits, dtype=float), np.asarray(c.traits, dtype=float)))
+
+    if pc:
+        P = np.stack([x for x, _ in pc], axis=0)
+        C = np.stack([y for _, y in pc], axis=0)
+        K = min(P.shape[1], 12)
+
+        corr_pc = {f"trait_{i}": _pearson(P[:, i], C[:, i]) for i in range(K)}
+        mean_abs_d = {f"trait_{i}": float(np.nanmean(np.abs(C[:, i] - P[:, i]))) for i in range(K)}
+
+        summary["heritability"] = {
+            "n_pairs": int(P.shape[0]),
+            "trait_dim": int(P.shape[1]),
+            "corr_parent_child": corr_pc,
+            "mean_abs_delta": mean_abs_d,
+        }
+    else:
+        summary["heritability"] = {
+            "n_pairs": 0,
+            "trait_dim": 0,
+            "corr_parent_child": {},
+            "mean_abs_delta": {},
+        }
+
+    # ---- drift over time: trait/phenotype stats per time bin (birth events)
+    # crude but very informative to see evolution direction.
+    bin_w = 500.0
+    if t_end_seen == t_end_seen and t_end_seen > 0:
+        nb = int(math.ceil(t_end_seen / bin_w))
+        bins = [(i * bin_w, (i + 1) * bin_w) for i in range(nb)]
+    else:
+        bins = [(0.0, 500.0), (500.0, 1000.0), (1000.0, 1500.0), (1500.0, 2000.0)]
+
+    # collect births only (agents w/ birth_t finite)
+    born_agents = [a for a in agents.values() if a.birth_t == a.birth_t and a.traits is not None]
+    drift_rows = []
+    for lo, hi in bins:
+        bucket = [a for a in born_agents if lo <= a.birth_t < hi]
+        if not bucket:
+            continue
+
+        Xb = np.asarray([a.traits for a in bucket], dtype=float)
+        K = min(12, Xb.shape[1])
+
+        # phenotype fields we care about (if present)
+        def phv(a: AgentAgg, k: str) -> float:
+            return _as_float((a.phenotype_birth or {}).get(k))
+
+        ph_keys = ["A_mature", "p_repro_base", "E_repro_min", "repro_cost", "metabolism_scale"]
+        ph = {k: np.asarray([phv(a, k) for a in bucket], dtype=float) for k in ph_keys}
+
+        drift_rows.append({
+            "t_lo": float(lo),
+            "t_hi": float(hi),
+            "n_births": int(len(bucket)),
+            "traits_mean": {f"trait_{i}": float(np.nanmean(Xb[:, i])) for i in range(K)},
+            "traits_p10":  {f"trait_{i}": float(np.nanpercentile(Xb[:, i], 10)) for i in range(K)},
+            "traits_p50":  {f"trait_{i}": float(np.nanpercentile(Xb[:, i], 50)) for i in range(K)},
+            "traits_p90":  {f"trait_{i}": float(np.nanpercentile(Xb[:, i], 90)) for i in range(K)},
+            "pheno_mean": {k: float(np.nanmean(v)) for k, v in ph.items()},
+        })
+
+    summary["drift"] = {
+        "bin_width": float(bin_w),
+        "bins": drift_rows,
+    }
+    
     return summary, agent_rows
 
 

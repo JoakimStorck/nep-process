@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import math
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -11,6 +11,7 @@ import numpy as np
 from world import World, WorldParams
 from mlp import MLPGenome
 from agent import Agent, AgentParams
+from genetics import child_genome_from_parent, MutationConfig
 
 # new logging
 from simlog.events import Event, EventName
@@ -25,38 +26,24 @@ def torus_wrap(x: float, size: int) -> float:
 @dataclass
 class PopParams:
     init_pop: int = 12
-    max_pop: int = 256  # safety cap
+    max_pop: int = 256
 
-    # reproduction thresholds
-    E_birth: float = 0.78
+    n_traits: int = 12
+
     D_birth_max: float = 0.40
     Fg_birth_max: float = 0.70
 
-    # reproduction cost + offspring init
-    repro_cost_E: float = 0.22
+    E_margin_scale: float = 0.25
+    hunger_weight: float = 1.00
+
+    spawn_jitter_r: float = 1.5
+
+    carcass_yield: float = 0.65
+    carcass_rad: int = 3
+
     child_E_fast: float = 0.40
     child_E_slow: float = 0.40
     child_Fg: float = 0.12
-
-    # spawn placement
-    spawn_jitter_r: float = 1.5
-
-    # genome shape
-    n_traits: int = 12
-
-    # mutation knobs at birth (policy weights)
-    p_arch_birth: float = 0.05
-    w_sigma: float = 0.06
-    w_p: float = 0.10
-
-    # mutation knobs at birth (traits)
-    trait_sigma: float = 0.020
-    trait_p: float = 0.050
-    trait_clip: float = 2.0
-
-    # carcass recycling
-    carcass_yield: float = 0.65
-    carcass_rad: int = 3
 
 
 @dataclass
@@ -64,8 +51,10 @@ class Population:
     WP: WorldParams
     AP: AgentParams
     PP: PopParams
+    MC: MutationConfig = field(default_factory=MutationConfig)
     seed: int = 0
 
+    
     # optional: pass from runner; if None, no logging
     hub: Optional[EventHub] = None
 
@@ -88,6 +77,10 @@ class Population:
         self.rng = np.random.default_rng(self.seed)
         self.world = World(self.WP)
         self._banks = {}
+    
+        # ensure MC uses PP.n_traits (single source of truth for this run)
+        if self.MC.n_traits != int(self.PP.n_traits):
+            self.MC = replace(self.MC, n_traits=int(self.PP.n_traits))
 
         # standard IO dims for NEP agent
         in_dim = 23
@@ -168,6 +161,61 @@ class Population:
             return
         self._emit("step", t, records.step_record(t, a, B0, F0, C0))
 
+    # Genetics helpers
+    def _age_s(self, a: Agent) -> float:
+        return float(self.t - float(getattr(a, "birth_t", self.t)))
+
+    def _can_attempt_repro(self, a: Agent) -> bool:
+        if not a.body.alive:
+            return False
+
+        # local cooldown gate (kept in Agent)
+        if float(getattr(a, "repro_cd_s", 0.0)) > 0.0:
+            return False
+
+        # maturity gate (phenotype)
+        age = self._age_s(a)
+        if age < float(a.pheno.A_mature):
+            return False
+
+        # energy gate (phenotype)
+        if float(a.body.E_total()) < float(a.pheno.E_repro_min):
+            return False
+
+        # optional "health" gates (keep for now)
+        if float(a.body.D) > float(self.PP.D_birth_max):
+            return False
+        if float(a.body.Fg) > float(self.PP.Fg_birth_max):
+            return False
+
+        return True
+
+    def _p_birth(self, a: Agent) -> float:
+        """
+        MV0: phenotype base probability times simple monotone modifiers.
+        Keep cheap and stable. Clamp [0,1].
+        """
+        p0 = float(a.pheno.p_repro_base)
+
+        # Optional shaping by energy margin above minimum
+        if self.PP.E_margin_scale > 0.0:
+            E = float(a.body.E_total())
+            Emin = float(a.pheno.E_repro_min)
+            margin = max(0.0, E - Emin)
+            # saturating ramp: margin / (margin + scale)
+            s = float(self.PP.E_margin_scale)
+            m = margin / (margin + s)
+        else:
+            m = 1.0
+
+        # Hunger modifier (prefer reproduction when not starving)
+        h = float(a.body.hunger())
+        hw = float(self.PP.hunger_weight)
+        hm = max(0.0, 1.0 - h) ** max(0.0, hw)
+
+        p = p0 * m * hm
+        return float(max(0.0, min(1.0, p)))
+        
     # -----------------------
     # policy net + genetics
     # -----------------------
@@ -176,33 +224,12 @@ class Population:
             return x / (1.0 + np.abs(x))
         return np.tanh(x)
 
-    def _mutate_child_genome(self, parent: Agent) -> MLPGenome:
-        g = parent.genome.copy()
-
-        if g.weights is None or g.biases is None:
-            g = g.init_random(self.rng, n_traits=self.PP.n_traits)
-        if g.traits is None:
-            g.init_traits(self.rng, n_traits=self.PP.n_traits)
-
-        if self.rng.random() < self.PP.p_arch_birth:
-            g = g.mutate_architecture(self.rng).init_random(self.rng, n_traits=self.PP.n_traits)
-        else:
-            g.mutate_weights(self.rng, sigma=self.PP.w_sigma, p=self.PP.w_p)
-
-        g.mutate_traits(
-            self.rng,
-            sigma=self.PP.trait_sigma,
-            p=self.PP.trait_p,
-            clip=self.PP.trait_clip,
-        )
-        return g
-
     def _spawn_child(self, parent: Agent) -> Agent:
         dx = float(self.rng.normal(0.0, self.PP.spawn_jitter_r))
         dy = float(self.rng.normal(0.0, self.PP.spawn_jitter_r))
-
-        g_child = self._mutate_child_genome(parent)
-
+    
+        g_child = child_genome_from_parent(parent.genome, rng=self.rng, cfg=self.MC)
+    
         child = Agent(
             AP=self.AP,
             genome=g_child,
@@ -210,9 +237,11 @@ class Population:
             y=torus_wrap(parent.y + dy, self.WP.size),
             heading=float(self.rng.uniform(-math.pi, math.pi)),
         )
+
         child.bind_world(self.world)
         child.birth_t = float(self.t)
 
+        # ParamBank slot
         key = (tuple(g_child.layer_sizes), str(g_child.act))
         bank = self._banks.get(key)
         if bank is None:
@@ -225,6 +254,7 @@ class Population:
         child._policy_key = key
         child._policy_slot = slot
 
+        # newborn state init
         child.body.E_fast = float(min(1.0, max(0.0, self.PP.child_E_fast)))
         child.body.E_slow = float(min(1.0, max(0.0, self.PP.child_E_slow)))
         child.body.Fg = float(min(1.0, max(0.0, self.PP.child_Fg)))
@@ -258,7 +288,7 @@ class Population:
             BFC_list: List[Tuple[float, float, float]] = []
 
             for a in alive:
-                x_in, B0, F0, C0 = a.build_inputs(self.world)
+                x_in, B0, F0, C0 = a.build_inputs(self.world, rng=self.rng)
                 X_list.append(x_in)
                 BFC_list.append((B0, F0, C0))
                 self._emit_step_if_tracked(self.t, a, B0, F0, C0)
@@ -290,7 +320,7 @@ class Population:
 
             for i, a in enumerate(alive):
                 B0, F0, C0 = BFC_list[i]
-                a.apply_outputs(self.world, Y[i], B0, F0, C0)
+                a.apply_outputs(self.world, Y[i], B0, F0, C0, rng=self.rng)
 
         # 2) deaths
         deaths = 0
@@ -308,16 +338,26 @@ class Population:
                 survivors.append(a)
         self.agents = survivors
 
-        # 3) births
+        # 3) births (A: maturity + phenotype energy gate + p_birth + phenotype cost)
         births = 0
         if len(self.agents) < self.PP.max_pop:
             children: List[Agent] = []
             for a in self.agents:
                 if len(self.agents) + len(children) >= self.PP.max_pop:
                     break
-                if a.can_reproduce(self.PP.E_birth, self.PP.D_birth_max, self.PP.Fg_birth_max):
-                    a.pay_repro_cost(self.PP.repro_cost_E)
-                    children.append(self._spawn_child(a))
+
+                if not self._can_attempt_repro(a):
+                    continue
+
+                # Stochastic reproduction
+                if self.rng.random() >= self._p_birth(a):
+                    continue
+
+                # Pay phenotype-driven cost (prefer to charge E_fast via take_energy())
+                a.pay_repro_cost(float(a.pheno.repro_cost))
+
+                children.append(self._spawn_child(a))
+
             births = len(children)
             if children:
                 self.agents.extend(children)
