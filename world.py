@@ -62,6 +62,21 @@ class WorldParams:
     seed_rad_min: int = 3
     seed_rad_max: int = 7
 
+    # Growth window (triangular)
+    T_grow_min: float = 5.0
+    T_grow_opt: float = 25.0
+    T_grow_max: float = 35.0
+    
+    # Temperature-driven dieoff (wither)
+    B_wither_base: float = 0.005   # alltid lite respiration/decay
+    T_cold: float = 0.0
+    cold_width: float = 8.0
+    B_wither_cold: float = 0.060   # extra vid kyla
+    
+    T_hot: float = 33.0
+    hot_width: float = 6.0
+    B_wither_hot: float = 0.020    # extra vid värmestress
+
     # -------------------------
     # Hazard field F
     # -------------------------
@@ -212,51 +227,70 @@ class World:
 
     def step(self) -> None:
         dt = float(self.P.dt)
-
-        # --- Update seasonal temperature and growth gating (per row)
+    
+        # --- Update seasonal temperature (Ty, gy)
         self._update_temperature()
-        g = self.growth_gate_field()  # (s,s) float32 in [0,1]
-
-        # --- Plants: logistic growth + diffusion, modulated by temperature gate g(T)
+        T = self.temperature_field()  # (s,s)
+    
+        P = self.P
+    
+        # --- Growth window G(T) (triangular)
+        G = np.zeros_like(T, dtype=np.float32)
+        Tmin, Topt, Tmax = float(P.T_grow_min), float(P.T_grow_opt), float(P.T_grow_max)
+    
+        if Topt > Tmin + 1e-9:
+            G = np.where((T >= Tmin) & (T < Topt), (T - Tmin) / (Topt - Tmin), G)
+        if Tmax > Topt + 1e-9:
+            G = np.where((T >= Topt) & (T <= Tmax), (Tmax - T) / (Tmax - Topt), G)
+    
+        G = np.clip(G, 0.0, 1.0).astype(np.float32, copy=False)
+    
+        # --- Wither / dieoff m(T)
+        m = np.full_like(T, float(P.B_wither_base), dtype=np.float32)
+    
+        if P.B_wither_cold > 0.0 and P.cold_width > 1e-9:
+            Sc = np.clip((float(P.T_cold) - T) / float(P.cold_width), 0.0, 1.0).astype(np.float32, copy=False)
+            m += float(P.B_wither_cold) * Sc
+    
+        if P.B_wither_hot > 0.0 and P.hot_width > 1e-9:
+            Sh = np.clip((T - float(P.T_hot)) / float(P.hot_width), 0.0, 1.0).astype(np.float32, copy=False)
+            m += float(P.B_wither_hot) * Sh
+    
+        # --- Plants: growth - wither + diffusion
         lapB = self._laplace(self.B)
-        # logistic term multiplied by g: no growth when g=0
-        dB = (self.P.B_regen * g) * (1.0 - self.B / self.P.B_K) * self.B + self.P.B_diff * lapB
+        growth = (float(P.B_regen) * G) * (1.0 - self.B / float(P.B_K)) * self.B
+        wither = m * self.B
+        dB = growth - wither + float(P.B_diff) * lapB
         self.B = _clip01(self.B + np.float32(dt) * dB).astype(np.float32, copy=False)
-
+    
         # --- Hazard: decay + diffusion + stochastic events
         lapF = self._laplace(self.F)
-        dF = (-self.P.F_decay * self.F) + self.P.F_diff * lapF
+        dF = (-P.F_decay * self.F) + P.F_diff * lapF
         self.F = _clip01(self.F + np.float32(dt) * dF).astype(np.float32, copy=False)
-
-        # optional winter scaling: more hazard when growth gate is low (cold)
-        hazard_p = float(self.P.hazard_event_p)
-        if self.P.winter_hazard_scale > 0.0:
-            # use global mean gate as a simple proxy for "winter severity"
-            gbar = float(np.mean(self.gy))
-            hazard_p *= (1.0 + float(self.P.winter_hazard_scale) * (1.0 - gbar))
-
+    
+        hazard_p = float(P.hazard_event_p)
+        if P.winter_hazard_scale > 0.0:
+            gbar = float(np.mean(self.gy))  # gy from _update_temperature()
+            hazard_p *= (1.0 + float(P.winter_hazard_scale) * (1.0 - gbar))
+    
         if hazard_p > 0.0 and random.random() < hazard_p:
-            cx, cy = random.randrange(self.P.size), random.randrange(self.P.size)
-            rad = random.randint(self.P.hazard_event_rad_min, self.P.hazard_event_rad_max)
-            self._add_blob(self.F, cx, cy, amp=self.P.hazard_event_amp, rad=rad)
-
+            cx, cy = random.randrange(P.size), random.randrange(P.size)
+            rad = random.randint(P.hazard_event_rad_min, P.hazard_event_rad_max)
+            self._add_blob(self.F, cx, cy, amp=P.hazard_event_amp, rad=rad)
+    
         # --- Carcass: decay + diffusion
         lapC = self._laplace(self.C)
-        dC = (-self.P.C_decay * self.C) + self.P.C_diff * lapC
+        dC = (-P.C_decay * self.C) + P.C_diff * lapC
         self.C = _clip01(self.C + np.float32(dt) * dC).astype(np.float32, copy=False)
-
-        # --- Germination (blob injections), modulated by local temperature gate
-        # We keep a single-event Bernoulli per step, but accept it based on local row gate.
-        if self.P.seed_p > 0.0 and random.random() < self.P.seed_p:
-            cx, cy = random.randrange(self.P.size), random.randrange(self.P.size)
-            # accept with probability g at that latitude -> no germination in winter/poles if g~0
+    
+        # --- Germination: accept by latitude gate gy[cy]
+        if P.seed_p > 0.0 and random.random() < P.seed_p:
+            cx, cy = random.randrange(P.size), random.randrange(P.size)
             if random.random() < float(self.gy[cy]):
-                rad = random.randint(self.P.seed_rad_min, self.P.seed_rad_max)
-                self._add_blob(self.B, cx, cy, amp=self.P.seed_amp, rad=rad)
-
-        # advance world time
+                rad = random.randint(P.seed_rad_min, P.seed_rad_max)
+                self._add_blob(self.B, cx, cy, amp=P.seed_amp, rad=rad)
+    
         self.t += dt
-
     # -------------------------
     # Sampling
     # -------------------------

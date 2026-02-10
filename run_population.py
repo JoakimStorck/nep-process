@@ -6,6 +6,8 @@ import sys
 import time
 from typing import Optional
 
+from viewer_pygame import WorldViewer, ViewerConfig
+
 from world import WorldParams
 from agent import AgentParams
 from population import Population, PopParams
@@ -64,6 +66,15 @@ if __name__ == "__main__":
     _truncate(a.life_log)
     _truncate(a.world_log)
 
+    viewer = WorldViewer(ViewerConfig(
+        title="NEP World (PyGame)",
+        scale=10,
+        fps_cap=60,
+        render_every=2,   # render var 2:a simstep
+        mode="CBF",
+        draw_agents=True,
+    ))
+    
     WP = WorldParams(size=a.size, dt=0.02)
     AP = AgentParams(dt=WP.dt)
     PP = PopParams(init_pop=a.init_pop, max_pop=a.max_pop)
@@ -123,12 +134,20 @@ if __name__ == "__main__":
         next_wall = last_wall + max(0.05, float(a.wall_tick))
 
         while pop.t < float(a.T) and len(pop.agents) > 0:
-            b, d = pop.step()  # <-- now authoritative counts, no snapshot sets
-
+        
+            # --- PyGame viewer: process events early, allow pause/quit
+            if viewer.paused:
+                if not viewer.update(pop, births=0, deaths=0):
+                    break
+                continue
+        
+            # --- Step simulation ONCE
+            b, d = pop.step()
+        
             births_total += int(b)
             deaths_total += int(d)
-
-            # sim-time ticker (stdout)
+        
+            # --- sim-time ticker (stdout)
             if float(a.tick) > 0.0 and pop.t >= next_tick_t:
                 next_tick_t = pop.t + float(a.tick)
                 mean_E, mean_D = pop.mean_stats()
@@ -137,14 +156,20 @@ if __name__ == "__main__":
                     f"b={births_total:6d} d={deaths_total:6d}  mean_E={mean_E:.3f} mean_D={mean_D:.3f}",
                     flush=True,
                 )
-
-            # wall-time keepalive
+        
+            # --- wall-time keepalive
             now = time.perf_counter()
             if now >= next_wall:
                 next_wall = now + max(0.05, float(a.wall_tick))
                 sys.stdout.write(".")
                 sys.stdout.flush()
-
+        
+            # --- Render AFTER stepping
+            if not viewer.update(pop, births=b, deaths=d):
+                break
+        
+        viewer.close()
+            
         mean_E, mean_D = pop.mean_stats()
         print(
             "\n"
