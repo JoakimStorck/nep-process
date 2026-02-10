@@ -10,7 +10,7 @@ import numpy as np
 
 from world import World, clamp
 from mlp import MLPGenome
-from phenotype import Phenotype, derive_pheno
+from phenotype import Phenotype, derive_pheno, phenotype_summary
 
 def torus_wrap(x: float, size: int) -> float:
     return x % size
@@ -50,7 +50,7 @@ class AgentParams:
     compute_cost: float = 0.006
     slow_to_fast: float = 0.030
     fast_to_slow: float = 0.006
-    hazard_to_damage: float = 0.11
+    hazard_to_damage: float = 0.03
 
     hazard_to_fatigue: float = 0.08
     fatigue_recover: float = 0.020
@@ -110,26 +110,25 @@ class Body:
 
         return float(0.6 * d_fast + 0.4 * d_slow)
 
-    def step(self, speed, activity, hazard, intake, age_s: float, A_mature: float, senesc_rate: float, senesc_shape: float):
+    def step(self, speed, activity, hazard, intake, pheno: Phenotype):
         """
-        Adds A + D frailty couplings:
-    
-        A) Low energy => higher effective hazard_to_damage; healing becomes harder.
-        D) Damage => higher effective fatigue_effort and lower effective fatigue_recover.
-    
-        Notes:
-        - No extra state required; only local effective coefficients.
-        - Keeps original death criteria (E_total <= 0 or D >= D_max).
+        Damage dynamics (no internal clock):
+          D += inflow(hazard + effort + metabolic stress per drain) - repair(rest + E + intake),
+        with frailty coupling via D itself.
         """
         if not self.alive:
             return
         dt = self.P.dt
-    
-        # --- energy dynamics (unchanged) ---
-        drain = dt * (self.P.basal + self.P.move_cost * speed + self.P.compute_cost * activity)
-        self.E_fast = clamp(self.E_fast + 0.95 * intake - 0.7 * drain, 0.0, 1.0)
-        self.E_slow = clamp(self.E_slow + 0.30 * intake - 0.3 * drain, 0.0, 1.0)
-    
+
+        # --- energy dynamics (metabolism scales drain_rate) ---
+        drain_rate = float(pheno.metabolism_scale) * (
+            self.P.basal + self.P.move_cost * float(speed) + self.P.compute_cost * float(activity)
+        )
+        drain = dt * drain_rate
+
+        self.E_fast = clamp(self.E_fast + 0.95 * float(intake) - 0.7 * drain, 0.0, 1.0)
+        self.E_slow = clamp(self.E_slow + 0.30 * float(intake) - 0.3 * drain, 0.0, 1.0)
+
         pull = self.P.slow_to_fast * dt * max(0.0, 0.6 - self.E_fast)
         push = self.P.fast_to_slow * dt * max(0.0, self.E_fast - 0.75)
         pull = min(pull, self.E_slow)
@@ -138,90 +137,67 @@ class Body:
         self.E_fast += pull
         self.E_fast -= push
         self.E_slow += push
-    
-        # --- frailty: compute once per step ---
+
+        # --- normalized state ---
         Et = self.E_total()
         e_lack = clamp(1.0 - Et, 0.0, 1.0)
         d_norm = clamp(self.D / max(self.P.D_max, 1e-9), 0.0, 1.0)
-    
-        # ------------------------------------------------------------
-        # Motion/activity decomposition (needed for both fatigue + healing)
-        # ------------------------------------------------------------
-        speed_n = clamp(speed / max(self.P.v_max, 1e-9), 0.0, 1.0)
-        effort = speed_n + 0.6 * activity
+
+        # motion/activity decomposition
+        speed_n = clamp(float(speed) / max(self.P.v_max, 1e-9), 0.0, 1.0)
+        effort = speed_n + 0.6 * float(activity)
         rest = (
             max(0.0, 1.0 - speed_n)
-            * max(0.0, 1.0 - activity)
-            * (0.25 + 0.75 * max(0.0, 1.0 - hazard))  # <- mjuk gate mot hazard
+            * max(0.0, 1.0 - float(activity))
+            * (0.25 + 0.75 * max(0.0, 1.0 - float(hazard)))
         )
 
-        # ============================================================
-        # A) Low energy => hazard more damaging; healing depends on rest+intake
-        #    + healing slowed by fatigue and by high damage
-        # ============================================================
-        k_hazard = 1.2
-        hazard_to_damage_eff = self.P.hazard_to_damage * (1.0 + k_hazard * e_lack)
-        
-        # Normalize intake to [0,1] using a plausible per-step max:
-        # max_got ≈ want = eat_rate*dt*(0.25+0.75*hunger) ≤ eat_rate*dt
-        # so max_intake ≈ eat_gain*eat_rate*dt
+        # intake normalization (as before)
         max_intake = max(1e-9, self.P.eat_gain * self.P.eat_rate * dt)
-        intake_n = clamp(intake / max_intake, 0.0, 1.0)
-        
-        # "Well-fed" and "well-rested" should heal faster:
-        fed = 1.0 - e_lack          # ~Et
-        fresh = 1.0 - self.Fg       # low fatigue -> high fresh
-                
-        heal_base = 0.010
-        heal_food = 0.030
-        
-        # Make healing strongly gated by rest, then modulate by fed/fresh/low-D
-        heal_rate = (heal_base + heal_food * intake_n)
-        heal_rate *= (0.25 + 0.75 * fed)            # hungry -> slower
-        heal_rate *= (0.75 + 0.25 * fresh)          # fatigued -> slower
-        
-        heal = dt * (0.2 + 0.8 * rest) * heal_rate
+        intake_n = clamp(float(intake) / max_intake, 0.0, 1.0)
 
-        # age normalized after maturity
-        age_post = max(0.0, age_s - A_mature)
-        
-        # "senesc_shape" styr hur sent rampen slår i:
-        # tau i sekunder: låg shape => tidig ålderdom, hög shape => senare
-        tau = 60.0 + 240.0 * senesc_shape   # 1–5 min till tydlig åldring, justera senare
-        
-        # ramp i [0,1): 0 nära mognad, asymptotiskt 1
-        ramp = age_post / (age_post + tau)
-        
-        # senescence damage per second
-        dD_sen = senesc_rate * ramp
-        
-        # optional: gör läkning sämre när rampen växer
-        heal /= (1.0 + 3.0 * senesc_rate * (age_post / max(1.0, tau)))
+        # --- damage inflow ---
+        susc = float(pheno.susceptibility)
+        frail = 1.0 + float(pheno.frailty_gain) * d_norm
+        k_E = 1.2  # energy lack amplifies damage
 
-        self.D = clamp(
-            self.D + dt * (hazard_to_damage_eff * hazard + dD_sen) - heal,
-            0.0,
-            self.P.D_max
-        )        
-        # ============================================================
-        # D) Damage => worse fatigue dynamics (more effort cost, less recovery)
-        # ============================================================
-        k_eff = 0.4
-        fatigue_effort_eff = self.P.fatigue_effort * (1.0 + k_eff * d_norm)
-    
-        k_rec = 0.05
-        fatigue_recover_eff = self.P.fatigue_recover * max(0.0, (1.0 - k_rec * d_norm))
-    
+        dD_haz = dt * (self.P.hazard_to_damage * susc * (1.0 + k_E * e_lack) * frail * float(hazard))
+
+        k_eff = 0.02  # MV0: small activity damage channel
+        dD_eff = dt * (k_eff * susc * (1.0 + k_E * e_lack) * frail * effort)
+
+        dD_met = dt * (float(pheno.stress_per_drain) * drain_rate)
+
+        dD_in = dD_haz + dD_eff + dD_met
+
+        # --- repair outflow ---
+        E_rep_min = 0.20
+        G_E = clamp((Et - E_rep_min) / (1.0 - E_rep_min), 0.0, 1.0)
+        G_rest = 0.2 + 0.8 * rest
+        G_int = 0.3 + 0.7 * intake_n
+        fresh = 1.0 - self.Fg
+        G_fresh = 0.75 + 0.25 * fresh
+
+        frailty_damp = 1.0 / (1.0 + float(pheno.frailty_gain) * d_norm)
+
+        dD_rep = dt * float(pheno.repair_capacity) * G_rest * G_E * G_int * G_fresh * frailty_damp
+
+        self.D = clamp(self.D + dD_in - dD_rep, 0.0, self.P.D_max)
+
+        # --- fatigue dynamics (kept; optionally make it depend on frailty too) ---
+        fatigue_effort_eff = self.P.fatigue_effort * (1.0 + 0.4 * d_norm)
+        fatigue_recover_eff = self.P.fatigue_recover * max(0.0, (1.0 - 0.05 * d_norm))
+
         self.Fg = clamp(
             self.Fg + dt * (
                 fatigue_effort_eff * effort
-                + self.P.hazard_to_fatigue * hazard
+                + self.P.hazard_to_fatigue * float(hazard)
                 - fatigue_recover_eff * rest
             ),
             0.0,
             1.0,
         )
-    
+
         if self.E_total() <= 0.0 or self.D >= self.P.D_max:
             self.alive = False
 
@@ -313,9 +289,6 @@ class RaySensors:
         # weighted averages (no new w)
         accB = (Bp * self._w[None, :]).sum(axis=1, dtype=np.float32) / self._wsum
         accF = (Fp * self._w[None, :]).sum(axis=1, dtype=np.float32) / self._wsum
-
-        # noise: (helst) från en Generator du skickar in, men behåll din fallback
-        rng = rng if rng is not None else np.random.default_rng()
         
         sig = float(self.P.noise_sigma)
         if sig > 0.0:
@@ -405,17 +378,7 @@ class Agent:
         self.pheno = derive_pheno(self.genome.traits)
 
     def phenotype_summary(self) -> dict:
-        p = self.pheno
-        return {
-            "A_mature": float(p.A_mature),
-            "p_repro_base": float(p.p_repro_base),
-            "E_repro_min": float(p.E_repro_min),
-            "repro_cost": float(p.repro_cost),
-            "metabolism_scale": float(p.metabolism_scale),
-            "risk_aversion": float(p.risk_aversion),
-            "sociability": float(p.sociability),
-            "mobility": float(p.mobility),
-        }
+        return phenotype_summary(self.pheno)
         
     def _build_obs(self, B0: float, F0: float, C0: float, rays_B: List[float], rays_F: List[float]) -> np.ndarray:
         n = len(rays_B)
@@ -524,10 +487,7 @@ class Agent:
             activity=activity,
             hazard=F0,
             intake=intake,
-            age_s=self.age_s,
-            A_mature=float(self.pheno.A_mature),
-            senesc_rate=float(getattr(self.pheno, "senescence_rate", 0.0)),
-            senesc_shape=float(getattr(self.pheno, "senescence_shape", 0.5)),
+            pheno=self.pheno,
         )
 
         return float(B0), float(F0), float(C0)
@@ -538,28 +498,24 @@ class Agent:
         return self.apply_outputs(world, y, B0, F0, C0)
 
     # --- reproduction hooks (Population uses these) ---
-    def can_reproduce(self, E_birth: float, D_max: float, Fg_max: float) -> bool:
-        if not self.body.alive:
-            return False
-        if self.repro_cd_s > 0.0:
-            return False
-    
-        # vNext: maturity gate (use agent-local clock; Population can later use birth_t+t)
-        if self.age_s < float(self.pheno.A_mature):
-            return False
-    
-        # vNext: phenotype-controlled energy gate (keep backward compat: allow caller to tighten)
-        E_min = max(float(E_birth), float(self.pheno.E_repro_min))
-        if self.body.E_total() < E_min:
-            return False
-    
-        # keep existing “health gates” for now (Population can later own these)
-        if self.body.D > float(D_max):
-            return False
-        if self.body.Fg > float(Fg_max):
-            return False
-    
+
+    def ready_to_reproduce(self) -> bool:
+        if not self.body.alive: return False
+        if self.repro_cd_s > 0: return False
+        if self.age_s < self.pheno.A_mature: return False
+        if self.body.E_total() < self.pheno.E_repro_min: return False
+        # ev. fertility shutdown:
+        # if self.body.D > ... or self.body.Fg > ...: return False
         return True
+    
+    def wants_to_reproduce(self, rng: np.random.Generator) -> bool:
+        if not self.ready_to_reproduce():
+            return False
+        # rate per second -> probability per dt
+        # interpret p_repro_base as "attempt rate" (1/s), NOT per-attempt prob
+        lam = float(self.pheno.repro_rate)
+        p = 1.0 - math.exp(-lam * float(self.AP.dt))
+        return bool(rng.random() < p)
 
     def pay_repro_cost(self, cost_E: float) -> float:
         # vNext: phenotype-driven cost (keep compat: allow caller to increase it)
@@ -568,4 +524,13 @@ class Agent:
         removed = self.body.take_energy(cost)
         self.repro_cd_s = float(self.AP.repro_cooldown_s)
         return removed
-        
+
+    def init_newborn_state(self, parent_pheno: Phenotype) -> None:
+        # newborn body state from parent's phenotype
+        self.body.E_fast = clamp(float(parent_pheno.child_E_fast), 0.0, 1.0)
+        self.body.E_slow = clamp(float(parent_pheno.child_E_slow), 0.0, 1.0)
+        self.body.Fg     = clamp(float(parent_pheno.child_Fg), 0.0, 1.0)
+        self.body.D      = 0.0
+        self.repro_cd_s  = float(self.AP.repro_cooldown_s)
+        self.age_s       = 0.0
+

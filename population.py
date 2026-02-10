@@ -26,24 +26,20 @@ def torus_wrap(x: float, size: int) -> float:
 @dataclass
 class PopParams:
     init_pop: int = 12
-    max_pop: int = 256
+    max_pop: int = 2000
 
     n_traits: int = 12
 
-    D_birth_max: float = 0.40
-    Fg_birth_max: float = 0.70
+    #D_birth_max: float = 0.40
+    #Fg_birth_max: float = 0.70
 
-    E_margin_scale: float = 0.25
-    hunger_weight: float = 1.00
+    #E_margin_scale: float = 0.25
+    #hunger_weight: float = 1.00
 
     spawn_jitter_r: float = 1.5
 
     carcass_yield: float = 0.65
     carcass_rad: int = 3
-
-    child_E_fast: float = 0.40
-    child_E_slow: float = 0.40
-    child_Fg: float = 0.12
 
 
 @dataclass
@@ -103,7 +99,8 @@ class Population:
 
             # birth time for age
             a.birth_t = float(self.t)
-
+            a.init_newborn_state(a.pheno)            
+            
             # allocate slot in bank and write genome params once
             key = (tuple(g.layer_sizes), str(g.act))
             bank = self._banks.get(key)
@@ -237,30 +234,27 @@ class Population:
             y=torus_wrap(parent.y + dy, self.WP.size),
             heading=float(self.rng.uniform(-math.pi, math.pi)),
         )
-
+    
         child.bind_world(self.world)
         child.birth_t = float(self.t)
-
-        # ParamBank slot
+    
+        # ParamBank slot (policy weights cached by architecture+act)
         key = (tuple(g_child.layer_sizes), str(g_child.act))
         bank = self._banks.get(key)
         if bank is None:
             bank = ParamBank.create(key[0], key[1], capacity=self.PP.max_pop)
             self._banks[key] = bank
-
+    
         slot = bank.alloc()
         bank.write_genome(slot, g_child)
-
+    
         child._policy_key = key
         child._policy_slot = slot
-
-        # newborn state init
-        child.body.E_fast = float(min(1.0, max(0.0, self.PP.child_E_fast)))
-        child.body.E_slow = float(min(1.0, max(0.0, self.PP.child_E_slow)))
-        child.body.Fg = float(min(1.0, max(0.0, self.PP.child_Fg)))
-        child.body.D = 0.0
-        child.repro_cd_s = float(child.AP.repro_cooldown_s)
-
+    
+        # newborn physiology: provision from parent phenotype
+        # (requires: Phenotype has child_E_fast/child_E_slow/child_Fg and derive_pheno sets them)
+        child.init_newborn_state(parent.pheno)
+    
         self._emit_birth(self.t, child, parent)
         return child
 
@@ -338,29 +332,23 @@ class Population:
                 survivors.append(a)
         self.agents = survivors
 
-        # 3) births (A: maturity + phenotype energy gate + p_birth + phenotype cost)
+        # 3) births (agent-decided; population just executes + enforces max_pop)
         births = 0
         if len(self.agents) < self.PP.max_pop:
             children: List[Agent] = []
             for a in self.agents:
                 if len(self.agents) + len(children) >= self.PP.max_pop:
                     break
-
-                if not self._can_attempt_repro(a):
+                if not a.body.alive:
                     continue
-
-                # Stochastic reproduction
-                if self.rng.random() >= self._p_birth(a):
-                    continue
-
-                # Pay phenotype-driven cost (prefer to charge E_fast via take_energy())
-                a.pay_repro_cost(float(a.pheno.repro_cost))
-
-                children.append(self._spawn_child(a))
-
-            births = len(children)
+        
+                if a.wants_to_reproduce(rng=self.rng):   # agent decides
+                    a.pay_repro_cost(float(a.pheno.repro_cost))
+                    children.append(self._spawn_child(a))
+        
             if children:
                 self.agents.extend(children)
+            births = len(children)
 
         # 4) advance time (convention: events refer to state at this.t, before increment)
         # If you prefer "after", move this up and pass self.t after increment.
