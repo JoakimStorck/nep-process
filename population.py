@@ -28,7 +28,7 @@ class PopParams:
     init_pop: int = 12
     max_pop: int = 2000
 
-    n_traits: int = 12
+    n_traits: int = 14
 
     #D_birth_max: float = 0.40
     #Fg_birth_max: float = 0.70

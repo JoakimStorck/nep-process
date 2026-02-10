@@ -13,23 +13,58 @@ def clamp(x: float, lo: float, hi: float) -> float:
     return lo if x < lo else hi if x > hi else x
 
 
+def _clip01(x: np.ndarray) -> np.ndarray:
+    return np.clip(x, 0.0, 1.0)
+
+
 @dataclass
 class WorldParams:
     size: int = 64
     dt: float = 0.02
 
-    # --- Plant biomass field B (food)
+    # -------------------------
+    # Temperature / seasons
+    # -------------------------
+    # One "year" in simulation time units
+    year_len: float = 256.0
+
+    # Mean temperature profile (latitudinal):
+    # T_mean(y) = T_eq - dT_pole * |lat(y)|^lat_p
+    T_eq: float = 30.0          # mean at equator
+    dT_pole: float = 30.0       # equator->pole mean drop (=> mean at poles ~ 0)
+    lat_p: float = 1.5          # shape of mean profile
+
+    # Seasonal amplitude profile:
+    # A(y) = A_eq + (A_pole - A_eq) * |lat(y)|^amp_q
+    A_eq: float = 3.0
+    A_pole: float = 15.0
+    amp_q: float = 1.5
+
+    # Seasonal phase offset (radians). Controls what t=0 means.
+    # Example: 0 -> sin phase starts at 0; tweak if you want "mid-summer at t=0".
+    season_phase0: float = 0.0
+
+    # Growth gating thresholds (degC): g(T) in [0,1]
+    # g(T)=0 for T<=T0, g(T)=1 for T>=T1 (linear in between)
+    T0: float = 0.0
+    T1: float = 20.0
+
+    # -------------------------
+    # Plant biomass field B (food)
+    # -------------------------
     B_regen: float = 0.060
     B_K: float = 1.0
     B_diff: float = 0.050
 
-    # Germination / ecology forcing
+    # Germination / ecology forcing (blob injections)
     seed_p: float = 0.00035
     seed_amp: float = 0.55
     seed_rad_min: int = 3
     seed_rad_max: int = 7
 
-    # --- Hazard field F
+    # -------------------------
+    # Hazard field F
+    # -------------------------
     F_decay: float = 0.010
     F_diff: float = 0.030
 
@@ -38,7 +73,12 @@ class WorldParams:
     hazard_event_rad_min: int = 5
     hazard_event_rad_max: int = 12
 
-    # --- Carcass field C
+    # Optional: make hazards more frequent in cold seasons/latitudes (0 disables)
+    winter_hazard_scale: float = 0.0  # e.g. 1.0 -> up to +100% when g(T)=0
+
+    # -------------------------
+    # Carcass field C
+    # -------------------------
     C_decay: float = 0.020
     C_diff: float = 0.015
 
@@ -49,9 +89,38 @@ class World:
 
     def __post_init__(self) -> None:
         s = int(self.P.size)
+
         self.B = np.zeros((s, s), dtype=np.float32)
         self.F = np.zeros((s, s), dtype=np.float32)
         self.C = np.zeros((s, s), dtype=np.float32)
+
+        # internal world time (so step() doesn't need args)
+        self.t = 0.0
+
+        # Precompute latitudinal profiles (depend only on y)
+        ys = np.arange(s, dtype=np.float32)
+        lat = 2.0 * (ys / np.float32(max(1, s - 1))) - 1.0  # [-1, +1]
+        abs_lat = np.abs(lat)
+
+        hemi_south = (lat < 0.0).astype(np.float32)  # 1 in south, 0 otherwise
+
+        # mean temp profile: equator -> poles
+        Tmean_y = np.float32(self.P.T_eq) - np.float32(self.P.dT_pole) * (abs_lat ** np.float32(self.P.lat_p))
+
+        # amplitude profile: small at equator, larger at poles
+        Amp_y = np.float32(self.P.A_eq) + (np.float32(self.P.A_pole) - np.float32(self.P.A_eq)) * (
+            abs_lat ** np.float32(self.P.amp_q)
+        )
+
+        self._lat = lat                 # (s,)
+        self._abs_lat = abs_lat         # (s,)
+        self._hemi_south = hemi_south   # (s,) float32 0/1
+        self._Tmean_y = Tmean_y         # (s,)
+        self._Amp_y = Amp_y             # (s,)
+
+        # For debugging/inspection (last computed)
+        self.Ty = np.zeros((s,), dtype=np.float32)     # temperature per row
+        self.gy = np.ones((s,), dtype=np.float32)      # growth gate per row
 
         # initial ecology
         self.B.fill(np.float32(0.08))
@@ -62,6 +131,60 @@ class World:
         for _ in range(7):
             self._add_blob(self.F, random.randrange(s), random.randrange(s), amp=0.8, rad=10)
 
+    # -------------------------
+    # Temperature / season helpers
+    # -------------------------
+    def _update_temperature(self) -> None:
+        """
+        Updates:
+          - self.Ty: temperature per y-row
+          - self.gy: growth gating g(T) per y-row in [0,1]
+        Uses:
+          - equator at center
+          - mean temperature decreases towards poles
+          - seasonal sinusoid in anti-phase between hemispheres
+        """
+        P = self.P
+        year_len = float(P.year_len)
+        if year_len <= 1e-9:
+            year_len = 1.0
+
+        # phase in [0, 2pi)
+        phase = 2.0 * math.pi * ((self.t % year_len) / year_len)
+        phase -= float(P.season_phase0)
+
+        # anti-phase in south hemisphere (add pi where lat<0)
+        # We use hemi_south as 0/1 to avoid branching
+        S_y = np.sin(np.float32(phase) + np.float32(math.pi) * self._hemi_south).astype(np.float32, copy=False)
+
+        Ty = self._Tmean_y + self._Amp_y * S_y
+        self.Ty = Ty
+
+        # growth gate: 0 below T0, 1 above T1, linear between
+        T0 = float(P.T0)
+        T1 = float(P.T1)
+        if T1 <= T0 + 1e-9:
+            # degenerate: hard threshold at T0
+            gy = (Ty >= np.float32(T0)).astype(np.float32)
+        else:
+            gy = (Ty - np.float32(T0)) / np.float32(T1 - T0)
+            gy = np.clip(gy, 0.0, 1.0).astype(np.float32, copy=False)
+
+        self.gy = gy
+
+    def temperature_field(self) -> np.ndarray:
+        """Returns temperature as (size,size) float32 via broadcasting from Ty."""
+        s = int(self.P.size)
+        return np.broadcast_to(self.Ty[:, None], (s, s)).astype(np.float32, copy=False)
+
+    def growth_gate_field(self) -> np.ndarray:
+        """Returns growth gate g(T) as (size,size) float32 via broadcasting from gy."""
+        s = int(self.P.size)
+        return np.broadcast_to(self.gy[:, None], (s, s)).astype(np.float32, copy=False)
+
+    # -------------------------
+    # Ecology kernels
+    # -------------------------
     def _add_blob(self, A: np.ndarray, cx: int, cy: int, amp: float, rad: int) -> None:
         s = int(self.P.size)
         rr = float(rad * rad)
@@ -90,31 +213,49 @@ class World:
     def step(self) -> None:
         dt = float(self.P.dt)
 
-        # Plants: logistic growth + diffusion
-        lapB = self._laplace(self.B)
-        dB = self.P.B_regen * (1.0 - self.B / self.P.B_K) * self.B + self.P.B_diff * lapB
-        self.B = np.clip(self.B + dt * dB, 0.0, 1.0)
+        # --- Update seasonal temperature and growth gating (per row)
+        self._update_temperature()
+        g = self.growth_gate_field()  # (s,s) float32 in [0,1]
 
-        # Hazard: decay + diffusion + stochastic events
+        # --- Plants: logistic growth + diffusion, modulated by temperature gate g(T)
+        lapB = self._laplace(self.B)
+        # logistic term multiplied by g: no growth when g=0
+        dB = (self.P.B_regen * g) * (1.0 - self.B / self.P.B_K) * self.B + self.P.B_diff * lapB
+        self.B = _clip01(self.B + np.float32(dt) * dB).astype(np.float32, copy=False)
+
+        # --- Hazard: decay + diffusion + stochastic events
         lapF = self._laplace(self.F)
         dF = (-self.P.F_decay * self.F) + self.P.F_diff * lapF
-        self.F = np.clip(self.F + dt * dF, 0.0, 1.0)
+        self.F = _clip01(self.F + np.float32(dt) * dF).astype(np.float32, copy=False)
 
-        if self.P.hazard_event_p > 0.0 and random.random() < self.P.hazard_event_p:
+        # optional winter scaling: more hazard when growth gate is low (cold)
+        hazard_p = float(self.P.hazard_event_p)
+        if self.P.winter_hazard_scale > 0.0:
+            # use global mean gate as a simple proxy for "winter severity"
+            gbar = float(np.mean(self.gy))
+            hazard_p *= (1.0 + float(self.P.winter_hazard_scale) * (1.0 - gbar))
+
+        if hazard_p > 0.0 and random.random() < hazard_p:
             cx, cy = random.randrange(self.P.size), random.randrange(self.P.size)
             rad = random.randint(self.P.hazard_event_rad_min, self.P.hazard_event_rad_max)
             self._add_blob(self.F, cx, cy, amp=self.P.hazard_event_amp, rad=rad)
 
-        # Carcass: decay + diffusion
+        # --- Carcass: decay + diffusion
         lapC = self._laplace(self.C)
         dC = (-self.P.C_decay * self.C) + self.P.C_diff * lapC
-        self.C = np.clip(self.C + dt * dC, 0.0, 1.0)
+        self.C = _clip01(self.C + np.float32(dt) * dC).astype(np.float32, copy=False)
 
-        # Germination
+        # --- Germination (blob injections), modulated by local temperature gate
+        # We keep a single-event Bernoulli per step, but accept it based on local row gate.
         if self.P.seed_p > 0.0 and random.random() < self.P.seed_p:
             cx, cy = random.randrange(self.P.size), random.randrange(self.P.size)
-            rad = random.randint(self.P.seed_rad_min, self.P.seed_rad_max)
-            self._add_blob(self.B, cx, cy, amp=self.P.seed_amp, rad=rad)
+            # accept with probability g at that latitude -> no germination in winter/poles if g~0
+            if random.random() < float(self.gy[cy]):
+                rad = random.randint(self.P.seed_rad_min, self.P.seed_rad_max)
+                self._add_blob(self.B, cx, cy, amp=self.P.seed_amp, rad=rad)
+
+        # advance world time
+        self.t += dt
 
     # -------------------------
     # Sampling
@@ -140,8 +281,10 @@ class World:
         y0 = int(math.floor(y)) % s
         x1 = x0 + 1
         y1 = y0 + 1
-        if x1 == s: x1 = 0
-        if y1 == s: y1 = 0
+        if x1 == s:
+            x1 = 0
+        if y1 == s:
+            y1 = 0
 
         fx = float(x - math.floor(x))
         fy = float(y - math.floor(y))
@@ -324,8 +467,10 @@ def sample_bilinear_scalar(
     y0 = int(yf)
     x1 = x0 + 1
     y1 = y0 + 1
-    if x1 == s: x1 = 0
-    if y1 == s: y1 = 0
+    if x1 == s:
+        x1 = 0
+    if y1 == s:
+        y1 = 0
 
     fx = xf - x0
     fy = yf - y0
@@ -349,3 +494,4 @@ def sample_bilinear_scalar(
     Cv = c0 * fy1 + c1 * fy
 
     return Bv, Fv, Cv
+
