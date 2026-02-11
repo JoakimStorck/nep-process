@@ -187,6 +187,24 @@ class World:
         s = int(self.P.size)
         return np.broadcast_to(self.gy[:, None], (s, s)).astype(np.float32, copy=False)
 
+    def temperature_at(self, x: float, y: float) -> float:
+        """
+        Local temperature at (x,y). Since temperature is latitudinal only (Ty by row),
+        we do linear interpolation in y for smoothness.
+        """
+        s = int(self.P.size)
+        if not hasattr(self, "Ty") or self.Ty.size == 0:
+            return 0.0
+    
+        yf = float(y) % s
+        y0 = int(math.floor(yf)) % s
+        y1 = (y0 + 1) % s
+        fy = yf - math.floor(yf)
+    
+        t0 = float(self.Ty[y0])
+        t1 = float(self.Ty[y1])
+        return (1.0 - fy) * t0 + fy * t1
+        
     # -------------------------
     # Ecology kernels
     # -------------------------

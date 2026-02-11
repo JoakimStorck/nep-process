@@ -65,6 +65,9 @@ class AgentParams:
     eat_rate: float = 0.10  # biomass pool/sec scaling (times dt)
     eat_gain: float = 0.6
 
+    # Damage
+    E_rep_min: float = 0.10
+    
     # reproduction (used by Population; Agent maintains cooldown locally)
     repro_cooldown_s: float = 8.0
 
@@ -171,7 +174,7 @@ class Body:
         dD_in = dD_haz + dD_eff + dD_met
 
         # --- repair outflow ---
-        E_rep_min = 0.20
+        E_rep_min = float(self.P.E_rep_min)
         G_E = clamp((Et - E_rep_min) / (1.0 - E_rep_min), 0.0, 1.0)
         G_rest = 0.2 + 0.8 * rest
         G_int = 0.3 + 0.7 * intake_n
@@ -453,7 +456,37 @@ class Agent:
         inh_move = float(1.0 / (1.0 + np.exp(-float(y[2]))))
         inh_eat = float(1.0 / (1.0 + np.exp(-float(y[3]))))
         explore_drive = float(1.0 / (1.0 + np.exp(-float(y[4]))))
-    
+
+        # --- Cold-avoidance modulation (genetic via phenotype) -----------------
+        # local temperature (degC)
+        Tloc = world.temperature_at(self.x, self.y) if hasattr(world, "temperature_at") else 0.0
+
+        # coldness in [0,1], relative to a comfort threshold
+        # (tune these two constants; keep them agent-side for now)
+        T_comfort = 10.0   # below this we start "caring"
+        T_width   = 12.0   # how quickly aversion ramps up
+        coldness = clamp((T_comfort - Tloc) / max(T_width, 1e-9), 0.0, 1.0)
+
+        # genetically scaled drive
+        cold_drive = float(self.pheno.cold_aversion) * float(coldness)
+
+        # 1) reduce effective thrust (avoid spending energy moving in cold)
+        thrust_eff = thrust * (1.0 - 0.85 * cold_drive)
+
+        # 2) steering bias towards equator when cold:
+        # temperature varies with latitude only => move y toward mid-row
+        s = int(world.P.size)
+        mid = 0.5 * (s - 1)
+        dy = (mid - float(self.y))
+        # choose "move toward mid" as a target heading (up/down only)
+        target_heading = math.atan2(dy, 0.0)  # points along +y/-y toward mid
+        # signed angular error
+        err = self._signed_angle(target_heading - self.heading)
+        bias_turn = clamp(err / math.pi, -1.0, 1.0)  # normalize
+
+        # add bias into turn command (only when cold)
+        turn = clamp(turn + 0.80 * cold_drive * bias_turn, -1.0, 1.0)
+        
         allow_move = 1.0 - inh_move
         allow_eat = 1.0 - inh_eat
     
@@ -464,7 +497,7 @@ class Agent:
     
         fatigue = self.body.Fg
         fatigue_factor = clamp(1.0 - 0.9 * fatigue, 0.05, 1.0)
-        speed = self.AP.v_max * allow_move * fatigue_factor * thrust
+        speed = self.AP.v_max * allow_move * fatigue_factor * thrust_eff
         self.last_speed = speed
     
         self.x = torus_wrap(self.x + dt * speed * math.cos(self.heading), world.P.size)

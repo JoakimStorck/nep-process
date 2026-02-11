@@ -46,6 +46,7 @@ class Phenotype:
     risk_aversion: float
     sociability: float
     mobility: float
+    cold_aversion: float
 
 
 # ---- Fixed trait indices (explicit + stable) ----
@@ -67,6 +68,7 @@ _T_MOB             = 11
 _T_CHILD_E_FAST = 12
 _T_CHILD_E_SLOW = 13
 _T_CHILD_FG     = 14
+_T_COLD_AV      = 15
 
 @dataclass(frozen=True)
 class PhenoRanges:
@@ -107,6 +109,9 @@ class PhenoRanges:
     child_Fg_min: float = 0.00
     child_Fg_max: float = 0.40
 
+    cold_aversion_min: float = 0.0
+    cold_aversion_max: float = 1.0
+    
 def derive_pheno(traits: np.ndarray | None, R: PhenoRanges = PhenoRanges()) -> Phenotype:
     # u in [0,1]
     u_mature   = _sigmoid(_get_trait(traits, _T_A_MATURE))
@@ -123,11 +128,12 @@ def derive_pheno(traits: np.ndarray | None, R: PhenoRanges = PhenoRanges()) -> P
     u_risk     = _sigmoid(_get_trait(traits, _T_RISK_AV))
     u_soc      = _sigmoid(_get_trait(traits, _T_SOC))
     u_mob      = _sigmoid(_get_trait(traits, _T_MOB))
-
+    u_cold     = _sigmoid(_get_trait(traits, _T_COLD_AV))
+    
     u_cef  = _sigmoid(_get_trait(traits, _T_CHILD_E_FAST))
     u_ces  = _sigmoid(_get_trait(traits, _T_CHILD_E_SLOW))
     u_cfg  = _sigmoid(_get_trait(traits, _T_CHILD_FG))
-    
+
     return Phenotype(
         A_mature=float(_lerp(R.A_mature_min, R.A_mature_max, u_mature)),
         repro_rate=float(_lerp(R.repro_rate_min, R.repro_rate_max, u_prepro)),
@@ -143,6 +149,7 @@ def derive_pheno(traits: np.ndarray | None, R: PhenoRanges = PhenoRanges()) -> P
         risk_aversion=float(u_risk),
         sociability=float(u_soc),
         mobility=float(u_mob),
+        cold_aversion=float(_lerp(R.cold_aversion_min, R.cold_aversion_max, u_cold)),
 
         child_E_fast=float(_lerp(R.child_E_fast_min, R.child_E_fast_max, u_cef)),
         child_E_slow=float(_lerp(R.child_E_slow_min, R.child_E_slow_max, u_ces)),
@@ -166,4 +173,5 @@ def phenotype_summary(p: Phenotype) -> dict[str, float]:
         "risk_aversion": float(p.risk_aversion),
         "sociability": float(p.sociability),
         "mobility": float(p.mobility),
+        "cold_aversion": float(p.cold_aversion),
     }
