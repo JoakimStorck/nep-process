@@ -117,8 +117,6 @@ class World:
         lat = 2.0 * (ys / np.float32(max(1, s - 1))) - 1.0  # [-1, +1]
         abs_lat = np.abs(lat)
 
-        hemi_south = (lat < 0.0).astype(np.float32)  # 1 in south, 0 otherwise
-
         # mean temp profile: equator -> poles
         Tmean_y = np.float32(self.P.T_eq) - np.float32(self.P.dT_pole) * (abs_lat ** np.float32(self.P.lat_p))
 
@@ -129,7 +127,6 @@ class World:
 
         self._lat = lat                 # (s,)
         self._abs_lat = abs_lat         # (s,)
-        self._hemi_south = hemi_south   # (s,) float32 0/1
         self._Tmean_y = Tmean_y         # (s,)
         self._Amp_y = Amp_y             # (s,)
 
@@ -150,43 +147,36 @@ class World:
     # Temperature / season helpers
     # -------------------------
     def _update_temperature(self) -> None:
-        """
-        Updates:
-          - self.Ty: temperature per y-row
-          - self.gy: growth gating g(T) per y-row in [0,1]
-        Uses:
-          - equator at center
-          - mean temperature decreases towards poles
-          - seasonal sinusoid in anti-phase between hemispheres
-        """
         P = self.P
         year_len = float(P.year_len)
         if year_len <= 1e-9:
             year_len = 1.0
-
+    
         # phase in [0, 2pi)
         phase = 2.0 * math.pi * ((self.t % year_len) / year_len)
         phase -= float(P.season_phase0)
-
-        # anti-phase in south hemisphere (add pi where lat<0)
-        # We use hemi_south as 0/1 to avoid branching
-        S_y = np.sin(np.float32(phase) + np.float32(math.pi) * self._hemi_south).astype(np.float32, copy=False)
-
+    
+        # global seasonal driver
+        s = np.float32(math.sin(phase))
+    
+        # CONTINUOUS hemispheric modulation (smooth across equator)
+        # lat is in [-1, +1]
+        S_y = self._lat.astype(np.float32, copy=False) * s  # (s,)
+    
         Ty = self._Tmean_y + self._Amp_y * S_y
         self.Ty = Ty
-
+    
         # growth gate: 0 below T0, 1 above T1, linear between
         T0 = float(P.T0)
         T1 = float(P.T1)
         if T1 <= T0 + 1e-9:
-            # degenerate: hard threshold at T0
             gy = (Ty >= np.float32(T0)).astype(np.float32)
         else:
             gy = (Ty - np.float32(T0)) / np.float32(T1 - T0)
             gy = np.clip(gy, 0.0, 1.0).astype(np.float32, copy=False)
-
+    
         self.gy = gy
-
+    
     def temperature_field(self) -> np.ndarray:
         """Returns temperature as (size,size) float32 via broadcasting from Ty."""
         s = int(self.P.size)
@@ -227,14 +217,19 @@ class World:
 
     def step(self) -> None:
         dt = float(self.P.dt)
-    
-        # --- Update seasonal temperature (Ty, gy)
-        self._update_temperature()
-        T = self.temperature_field()  # (s,s)
-    
         P = self.P
     
-        # --- Growth window G(T) (triangular)
+        # --- Update seasonal temperature (Ty, gy) and build T-field
+        self._update_temperature()
+        T = self.temperature_field()  # (s,s) float32 degC
+    
+        # ------------------------------------------------------------------
+        # Vegetation dynamics:
+        #   growth:  logistic, scaled by a temperature "growth window" G(T)
+        #   wither:  baseline + cold/heat stress m(T) that actively reduces B
+        # ------------------------------------------------------------------
+    
+        # --- Growth window G(T) (triangular around an optimum)
         G = np.zeros_like(T, dtype=np.float32)
         Tmin, Topt, Tmax = float(P.T_grow_min), float(P.T_grow_opt), float(P.T_grow_max)
     
@@ -242,35 +237,42 @@ class World:
             G = np.where((T >= Tmin) & (T < Topt), (T - Tmin) / (Topt - Tmin), G)
         if Tmax > Topt + 1e-9:
             G = np.where((T >= Topt) & (T <= Tmax), (Tmax - T) / (Tmax - Topt), G)
-    
         G = np.clip(G, 0.0, 1.0).astype(np.float32, copy=False)
     
-        # --- Wither / dieoff m(T)
+        # --- Wither / dieoff rate m(T) >= 0
         m = np.full_like(T, float(P.B_wither_base), dtype=np.float32)
     
-        if P.B_wither_cold > 0.0 and P.cold_width > 1e-9:
+        if float(P.B_wither_cold) > 0.0 and float(P.cold_width) > 1e-9:
             Sc = np.clip((float(P.T_cold) - T) / float(P.cold_width), 0.0, 1.0).astype(np.float32, copy=False)
             m += float(P.B_wither_cold) * Sc
     
-        if P.B_wither_hot > 0.0 and P.hot_width > 1e-9:
+        if float(P.B_wither_hot) > 0.0 and float(P.hot_width) > 1e-9:
             Sh = np.clip((T - float(P.T_hot)) / float(P.hot_width), 0.0, 1.0).astype(np.float32, copy=False)
             m += float(P.B_wither_hot) * Sh
     
         # --- Plants: growth - wither + diffusion
         lapB = self._laplace(self.B)
+    
+        # logistic growth only when temperature window is open
         growth = (float(P.B_regen) * G) * (1.0 - self.B / float(P.B_K)) * self.B
+    
+        # active dieoff / respiration / frost/heat stress
         wither = m * self.B
+    
         dB = growth - wither + float(P.B_diff) * lapB
         self.B = _clip01(self.B + np.float32(dt) * dB).astype(np.float32, copy=False)
     
-        # --- Hazard: decay + diffusion + stochastic events
+        # ------------------------------------------------------------------
+        # Hazard field F: decay + diffusion + stochastic hazard events
+        # ------------------------------------------------------------------
         lapF = self._laplace(self.F)
-        dF = (-P.F_decay * self.F) + P.F_diff * lapF
+        dF = (-float(P.F_decay) * self.F) + float(P.F_diff) * lapF
         self.F = _clip01(self.F + np.float32(dt) * dF).astype(np.float32, copy=False)
     
         hazard_p = float(P.hazard_event_p)
-        if P.winter_hazard_scale > 0.0:
-            gbar = float(np.mean(self.gy))  # gy from _update_temperature()
+        if float(P.winter_hazard_scale) > 0.0:
+            # winter severity proxy: low mean gate => colder on average
+            gbar = float(np.mean(self.gy))
             hazard_p *= (1.0 + float(P.winter_hazard_scale) * (1.0 - gbar))
     
         if hazard_p > 0.0 and random.random() < hazard_p:
@@ -278,19 +280,39 @@ class World:
             rad = random.randint(P.hazard_event_rad_min, P.hazard_event_rad_max)
             self._add_blob(self.F, cx, cy, amp=P.hazard_event_amp, rad=rad)
     
-        # --- Carcass: decay + diffusion
+        # ------------------------------------------------------------------
+        # Carcass field C: decay + diffusion
+        # ------------------------------------------------------------------
         lapC = self._laplace(self.C)
-        dC = (-P.C_decay * self.C) + P.C_diff * lapC
+        dC = (-float(P.C_decay) * self.C) + float(P.C_diff) * lapC
         self.C = _clip01(self.C + np.float32(dt) * dC).astype(np.float32, copy=False)
     
-        # --- Germination: accept by latitude gate gy[cy]
-        if P.seed_p > 0.0 and random.random() < P.seed_p:
+        # ------------------------------------------------------------------
+        # Germination / seeding: season- and latitude-dependent
+        #   - event frequency scales with local growth window G(T) at that latitude
+        #   - this makes seeds primarily happen in the growing season
+        # ------------------------------------------------------------------
+        seed_p = float(P.seed_p)
+        if seed_p > 0.0:
             cx, cy = random.randrange(P.size), random.randrange(P.size)
-            if random.random() < float(self.gy[cy]):
-                rad = random.randint(P.seed_rad_min, P.seed_rad_max)
-                self._add_blob(self.B, cx, cy, amp=P.seed_amp, rad=rad)
     
+            # local season factor: use G at this latitude (constant across x)
+            Gcy = float(G[cy, 0])
+    
+            # effective probability this step
+            seed_p_eff = seed_p * Gcy
+    
+            if seed_p_eff > 0.0 and random.random() < seed_p_eff:
+                rad = random.randint(P.seed_rad_min, P.seed_rad_max)
+    
+                # optionally scale amplitude by season too (keeps winter seeds weak)
+                amp = float(P.seed_amp) * (0.25 + 0.75 * Gcy)
+    
+                self._add_blob(self.B, cx, cy, amp=amp, rad=rad)
+    
+        # advance world time
         self.t += dt
+    
     # -------------------------
     # Sampling
     # -------------------------

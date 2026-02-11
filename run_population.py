@@ -135,15 +135,16 @@ if __name__ == "__main__":
 
         while pop.t < float(a.T) and len(pop.agents) > 0:
         
-            # --- PyGame viewer: process events early, allow pause/quit
+            # --- PyGame viewer: always keep window responsive (quit/pause/hotkeys)
+            if not viewer.update(pop, births_total=births_total, deaths_total=deaths_total):
+                break
+        
+            # --- If paused: do NOT advance simulation time/state
             if viewer.paused:
-                if not viewer.update(pop, births=0, deaths=0):
-                    break
                 continue
         
-            # --- Step simulation ONCE
+            # --- Step simulation ONCE (authoritative b/d this step)
             b, d = pop.step()
-        
             births_total += int(b)
             deaths_total += int(d)
         
@@ -163,10 +164,6 @@ if __name__ == "__main__":
                 next_wall = now + max(0.05, float(a.wall_tick))
                 sys.stdout.write(".")
                 sys.stdout.flush()
-        
-            # --- Render AFTER stepping
-            if not viewer.update(pop, births=b, deaths=d):
-                break
         
         viewer.close()
             
