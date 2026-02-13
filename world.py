@@ -337,10 +337,15 @@ class World:
     def sample_bilinear_many(self, xs: np.ndarray, ys: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         return _sample_bilinear_many_layers(self.B, self.F, self.C, xs, ys, self.P.size)
 
-    def sample_bilinear_many_BF(self, xs: np.ndarray, ys: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        xs = np.asarray(xs, dtype=np.float32)
-        ys = np.asarray(ys, dtype=np.float32)
-        return _sample_bilinear_many_BF(self.B, self.F, xs, ys, self.P.size)
+    def sample_bilinear_many_BF(
+        self,
+        xs: np.ndarray,
+        ys: np.ndarray,
+        outB: Optional[np.ndarray] = None,
+        outF: Optional[np.ndarray] = None,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        # anta xs/ys redan float32
+        return _sample_bilinear_many_BF(self.B, self.F, xs, ys, self.P.size, outB=outB, outF=outF)
 
     def sample_bilinear(self, x: float, y: float) -> Tuple[float, float, float]:
         return sample_bilinear_scalar(self.B, self.F, self.C, x, y, self.P.size)
@@ -444,41 +449,79 @@ class World:
 # -------------------------
 # Sampling kernels
 # -------------------------
+from typing import Tuple, Optional
+import numpy as np
+
+from typing import Optional, Tuple
+import numpy as np
+
 def _sample_bilinear_many_BF(
     B: np.ndarray, F: np.ndarray,
     xs: np.ndarray, ys: np.ndarray,
-    size: int
+    size: int,
+    outB: Optional[np.ndarray] = None,
+    outF: Optional[np.ndarray] = None,
+    tmp: Optional[np.ndarray] = None,   # <-- NY: scratch buffer (float32, same shape as xs)
 ) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Assumes xs,ys are float32 and already wrapped to [0,size).
+    B,F should be float32, C-contiguous.
+    """
     s = int(size)
 
+    # int coords (truncate ok since xs,ys >= 0)
     x0 = xs.astype(np.int32, copy=False)
     y0 = ys.astype(np.int32, copy=False)
 
-    fx = xs - x0
-    fy = ys - y0
+    # frac parts (already float32)
+    fx  = xs - x0
+    fy  = ys - y0
     fx1 = np.float32(1.0) - fx
     fy1 = np.float32(1.0) - fy
 
-    x0 = x0 % s
-    y0 = y0 % s
+    # neighbors (wrap only at boundary)
     x1 = x0 + 1
     y1 = y0 + 1
-    x1 = np.where(x1 == s, 0, x1)
-    y1 = np.where(y1 == s, 0, y1)
+    x1[x1 == s] = 0
+    y1[y1 == s] = 0
 
+    # gather corners (float32 arrays)
     B00 = B[y0, x0]; B10 = B[y0, x1]; B01 = B[y1, x0]; B11 = B[y1, x1]
     F00 = F[y0, x0]; F10 = F[y0, x1]; F01 = F[y1, x0]; F11 = F[y1, x1]
 
-    B0 = B00 * fx1 + B10 * fx
-    B1 = B01 * fx1 + B11 * fx
-    Bout = B0 * fy1 + B1 * fy
+    # outputs
+    if outB is None:
+        outB = np.empty(xs.shape, dtype=np.float32)
+    if outF is None:
+        outF = np.empty(xs.shape, dtype=np.float32)
+    if tmp is None:
+        tmp = np.empty(xs.shape, dtype=np.float32)
 
-    F0 = F00 * fx1 + F10 * fx
-    F1 = F01 * fx1 + F11 * fx
-    Fout = F0 * fy1 + F1 * fy
+    # --- B out ---
+    # outB = (B00*fx1 + B10*fx)*fy1
+    np.multiply(B00, fx1, out=outB)
+    outB += B10 * fx
+    outB *= fy1
 
-    return Bout.astype(np.float32, copy=False), Fout.astype(np.float32, copy=False)
+    # tmp = (B01*fx1 + B11*fx)*fy
+    np.multiply(B01, fx1, out=tmp)
+    tmp += B11 * fx
+    tmp *= fy
 
+    outB += tmp
+
+    # --- F out ---
+    np.multiply(F00, fx1, out=outF)
+    outF += F10 * fx
+    outF *= fy1
+
+    np.multiply(F01, fx1, out=tmp)
+    tmp += F11 * fx
+    tmp *= fy
+
+    outF += tmp
+
+    return outB, outF
 
 def _sample_bilinear_many_layers(
     B: np.ndarray, F: np.ndarray, C: np.ndarray,

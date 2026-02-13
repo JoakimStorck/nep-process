@@ -36,6 +36,7 @@ class Phenotype:
     stress_per_drain: float     # damage per unit drain_rate
     repair_capacity: float      # max repair rate
     frailty_gain: float         # how strongly D amplifies inflow / reduces repair
+    E_rep_min: float
 
     # Children
     child_E_fast: float
@@ -69,6 +70,8 @@ _T_CHILD_E_FAST = 12
 _T_CHILD_E_SLOW = 13
 _T_CHILD_FG     = 14
 _T_COLD_AV      = 15
+
+_T_E_REP_MIN = 16
 
 @dataclass(frozen=True)
 class PhenoRanges:
@@ -111,6 +114,9 @@ class PhenoRanges:
 
     cold_aversion_min: float = 0.0
     cold_aversion_max: float = 1.0
+
+    E_rep_min_min: float = 0.00
+    E_rep_min_max: float = 0.35
     
 def derive_pheno(traits: np.ndarray | None, R: PhenoRanges = PhenoRanges()) -> Phenotype:
     # u in [0,1]
@@ -134,6 +140,8 @@ def derive_pheno(traits: np.ndarray | None, R: PhenoRanges = PhenoRanges()) -> P
     u_ces  = _sigmoid(_get_trait(traits, _T_CHILD_E_SLOW))
     u_cfg  = _sigmoid(_get_trait(traits, _T_CHILD_FG))
 
+    u_erep = _sigmoid(_get_trait(traits, _T_E_REP_MIN))
+
     return Phenotype(
         A_mature=float(_lerp(R.A_mature_min, R.A_mature_max, u_mature)),
         repro_rate=float(_lerp(R.repro_rate_min, R.repro_rate_max, u_prepro)),
@@ -146,6 +154,8 @@ def derive_pheno(traits: np.ndarray | None, R: PhenoRanges = PhenoRanges()) -> P
         repair_capacity=float(_lerp(R.repair_capacity_min, R.repair_capacity_max, u_rep)),
         frailty_gain=float(_lerp(R.frailty_gain_min, R.frailty_gain_max, u_frail)),
 
+        E_rep_min=float(_lerp(R.E_rep_min_min, R.E_rep_min_max, u_erep)),
+        
         risk_aversion=float(u_risk),
         sociability=float(u_soc),
         mobility=float(u_mob),
@@ -163,6 +173,7 @@ def phenotype_summary(p: Phenotype) -> dict[str, float]:
         "repro_rate": float(p.repro_rate),
         "E_repro_min": float(p.E_repro_min),
         "repro_cost": float(p.repro_cost),
+        "E_rep_min": float(p.E_rep_min),        
 
         "metabolism_scale": float(p.metabolism_scale),
         "susceptibility": float(p.susceptibility),

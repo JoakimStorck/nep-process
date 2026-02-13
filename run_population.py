@@ -14,7 +14,7 @@ from population import Population, PopParams
 
 from simlog.jsonl import JsonlWriter
 from simlog.sinks import EventHub
-from simlog.observers import StepLogger, PopLogger, LifeLogger, WorldLogger
+from simlog.observers import StepLogger, PopLogger, LifeLogger, WorldLogger, SampleLogger
 
 
 def parse_args() -> argparse.Namespace:
@@ -30,11 +30,13 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--pop_log", type=str, default="pop.jsonl")
     ap.add_argument("--life_log", type=str, default="life.jsonl")
     ap.add_argument("--world_log", type=str, default="world.jsonl")
+    ap.add_argument("--sample_log", type=str, default="sample.jsonl")
 
     # periods (sim-time seconds)
     ap.add_argument("--step_every", type=float, default=0.5)
     ap.add_argument("--pop_every", type=float, default=1.0)
     ap.add_argument("--world_every", type=float, default=2.0)
+    ap.add_argument("--sample_every", type=float, default=1.0)
 
     # step tracking
     ap.add_argument("--track_id", type=int, default=-1, help="Agent id to track in steps.jsonl (-1 = no filter).")
@@ -49,6 +51,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--flush_pop", type=int, default=1)
     ap.add_argument("--flush_life", type=int, default=1)
     ap.add_argument("--flush_world", type=int, default=1)
+    ap.add_argument("--flush_sample", type=int, default=1)
 
     return ap.parse_args()
 
@@ -65,11 +68,12 @@ if __name__ == "__main__":
     _truncate(a.pop_log)
     _truncate(a.life_log)
     _truncate(a.world_log)
+    _truncate(a.sample_log)
 
     viewer = WorldViewer(ViewerConfig(
         title="NEP World (PyGame)",
         scale=10,
-        fps_cap=60,
+        fps_cap=0,
         render_every=2,   # render var 2:a simstep
         mode="CBF",
         draw_agents=True,
@@ -81,7 +85,7 @@ if __name__ == "__main__":
 
     print(
         f"START: T={a.T} dt={WP.dt} size={a.size} init_pop={a.init_pop} max_pop={a.max_pop} seed={a.seed}\n"
-        f"  step_log={a.step_log} pop_log={a.pop_log} life_log={a.life_log} world_log={a.world_log}",
+        f"  step_log={a.step_log} pop_log={a.pop_log} life_log={a.life_log} world_log={a.world_log}, sample_log={a.sample_log}",
         flush=True,
     )
 
@@ -90,14 +94,16 @@ if __name__ == "__main__":
         JsonlWriter(a.pop_log, flush_every=int(a.flush_pop)) as w_pop,
         JsonlWriter(a.life_log, flush_every=int(a.flush_life)) as w_life,
         JsonlWriter(a.world_log, flush_every=int(a.flush_world)) as w_world,
+        JsonlWriter(a.sample_log, flush_every=int(a.flush_sample)) as w_sample,
     ):
         # create loggers
         step_logger = StepLogger(w=w_steps, every_s=float(a.step_every), track_id=None)
         pop_logger = PopLogger(w=w_pop, every_s=float(a.pop_every))
         life_logger = LifeLogger(w=w_life)          # no gating
         world_logger = WorldLogger(w=w_world, every_s=float(a.world_every))
+        sample_logger = SampleLogger(w=w_sample, every_s=float(a.sample_every))
 
-        hub = EventHub([step_logger, pop_logger, life_logger, world_logger])
+        hub = EventHub([step_logger, pop_logger, life_logger, world_logger, sample_logger])
 
         # build population with hub
         pop = Population(WP=WP, AP=AP, PP=PP, seed=a.seed, hub=hub)

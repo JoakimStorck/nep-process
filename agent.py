@@ -57,6 +57,9 @@ class AgentParams:
     fatigue_effort: float = 0.050
     D_max: float = 1.0
 
+    E_rep_min: float = 0.10
+    k_rep: float = 0.35   # energy cost per unit repaired damage (tune)
+    
     # kinematics
     v_max: float = 2.2
     turn_rate: float = 2.2
@@ -64,9 +67,6 @@ class AgentParams:
     # eating
     eat_rate: float = 0.10  # biomass pool/sec scaling (times dt)
     eat_gain: float = 0.6
-
-    # Damage
-    E_rep_min: float = 0.10
     
     # reproduction (used by Population; Agent maintains cooldown locally)
     repro_cooldown_s: float = 8.0
@@ -174,7 +174,7 @@ class Body:
         dD_in = dD_haz + dD_eff + dD_met
 
         # --- repair outflow ---
-        E_rep_min = float(self.P.E_rep_min)
+        E_rep_min = float(pheno.E_rep_min)
         G_E = clamp((Et - E_rep_min) / (1.0 - E_rep_min), 0.0, 1.0)
         G_rest = 0.2 + 0.8 * rest
         G_int = 0.3 + 0.7 * intake_n
@@ -184,7 +184,17 @@ class Body:
         frailty_damp = 1.0 / (1.0 + float(pheno.frailty_gain) * d_norm)
 
         dD_rep = dt * float(pheno.repair_capacity) * G_rest * G_E * G_int * G_fresh * frailty_damp
-
+        
+        # --- energy cost for repair (A) ---
+        k_rep = float(getattr(self.P, "k_rep", 0.35))
+        E_need = max(0.0, k_rep * float(dD_rep))
+        
+        if E_need > 0.0:
+            E_paid = self.take_energy(E_need)  # drains fast+slow proportionally (good)
+            if E_paid < E_need:
+                # Not enough energy => scale repair down to what we could pay for
+                dD_rep *= (E_paid / max(E_need, 1e-12))
+                
         self.D = clamp(self.D + dD_in - dD_rep, 0.0, self.P.D_max)
 
         # --- fatigue dynamics (kept; optionally make it depend on frailty too) ---
@@ -205,6 +215,9 @@ class Body:
             self.alive = False
 
 
+from dataclasses import dataclass, field
+import numpy as np
+
 @dataclass
 class RaySensors:
     P: "AgentParams"
@@ -213,15 +226,30 @@ class RaySensors:
     # cached geometry/buffers
     _n: int = field(init=False, default=0)
     _m: int = field(init=False, default=0)
-    _ang_base: np.ndarray = field(init=False)
-    _d: np.ndarray = field(init=False)
-    _w: np.ndarray = field(init=False)
-    _wsum: np.float32 = field(init=False)
-    _dx: np.ndarray = field(init=False)
-    _dy: np.ndarray = field(init=False)
-    _xs: np.ndarray = field(init=False)
-    _ys: np.ndarray = field(init=False)
 
+    _ang_base: np.ndarray = field(init=False)   # (n,) float32
+    _ang: np.ndarray = field(init=False)        # (n,) float32   (ang_base + heading)
+    _d: np.ndarray = field(init=False)          # (m,) float32
+    _w: np.ndarray = field(init=False)          # (m,) float32
+    _wsum: np.float32 = field(init=False)       # float32
+    _inv_wsum: np.float32 = field(init=False)   # float32
+
+    _dx: np.ndarray = field(init=False)         # (n,) float32
+    _dy: np.ndarray = field(init=False)         # (n,) float32
+    _xs: np.ndarray = field(init=False)         # (n,m) float32
+    _ys: np.ndarray = field(init=False)         # (n,m) float32
+
+    # sampling + reductions (avoid per-call allocs)
+    _Bp: np.ndarray = field(init=False)         # (n,m) float32
+    _Fp: np.ndarray = field(init=False)         # (n,m) float32
+    _accB: np.ndarray = field(init=False)       # (n,) float32
+    _accF: np.ndarray = field(init=False)       # (n,) float32
+
+    # noise buffers (optional but fast)
+    _noiseB: np.ndarray = field(init=False)     # (n,) float32
+    _noiseF: np.ndarray = field(init=False)     # (n,) float32
+    _noise64: np.ndarray = field(init=False)    # float64 buffer for RNG out
+    
     def __post_init__(self) -> None:
         self._rebuild_cache()
 
@@ -229,86 +257,161 @@ class RaySensors:
         n = int(self.P.n_rays)
         step = float(self.P.ray_step)
         ray_len = float(self.P.ray_len)
-
+    
         self._n = max(0, n)
-
+    
+        def z1(dtype=np.float32):
+            return np.zeros((0,), dtype=dtype)
+    
+        def z2(dtype=np.float32):
+            return np.zeros((0, 0), dtype=dtype)
+    
         if self._n <= 0 or step <= 0.0 or ray_len <= 0.0:
             self._m = 0
-            self._ang_base = np.zeros((0,), dtype=np.float32)
-            self._d = np.zeros((0,), dtype=np.float32)
-            self._w = np.zeros((0,), dtype=np.float32)
-            self._wsum = np.float32(1.0)
-            self._dx = np.zeros((0,), dtype=np.float32)
-            self._dy = np.zeros((0,), dtype=np.float32)
-            self._xs = np.zeros((0, 0), dtype=np.float32)
-            self._ys = np.zeros((0, 0), dtype=np.float32)
+    
+            self._ang_base = z1()
+            self._ang      = z1()
+            self._d        = z1()
+            self._w        = z1()
+    
+            self._wsum     = np.float32(1.0)
+            self._inv_wsum = np.float32(1.0)
+    
+            self._dx = z1()
+            self._dy = z1()
+            self._xs = z2()
+            self._ys = z2()
+    
+            self._Bp = z2()
+            self._Fp = z2()
+    
+            self._accB = z1()
+            self._accF = z1()
+    
+            self._noiseB  = z1()
+            self._noiseF  = z1()
+            self._noise64 = z1(dtype=np.float64)
+    
             return
 
-        self._ang_base = (np.float32(2.0 * np.pi) *
-                          (np.arange(self._n, dtype=np.float32) / np.float32(self._n)))
+        # angles (0..2pi) for rays
+        self._ang_base = (
+            np.float32(2.0 * np.pi)
+            * (np.arange(self._n, dtype=np.float32) / np.float32(self._n))
+        )
+        self._ang = np.empty((self._n,), dtype=np.float32)
 
+        # distances along ray
         self._d = np.arange(step, ray_len + 1e-6, step, dtype=np.float32)
         self._m = int(self._d.size)
 
-        self._w = (np.float32(1.0) / (np.float32(1.0) + np.float32(0.25) * self._d)).astype(np.float32, copy=False)
+        # weights (precompute)
+        # w = 1/(1 + 0.25*d)
+        self._w = (np.float32(1.0) / (np.float32(1.0) + np.float32(0.25) * self._d)).astype(
+            np.float32, copy=False
+        )
         self._wsum = np.sum(self._w, dtype=np.float32) + np.float32(1e-9)
+        self._inv_wsum = np.float32(1.0) / self._wsum
 
+        # working buffers
         self._dx = np.empty((self._n,), dtype=np.float32)
         self._dy = np.empty((self._n,), dtype=np.float32)
         self._xs = np.empty((self._n, self._m), dtype=np.float32)
         self._ys = np.empty((self._n, self._m), dtype=np.float32)
 
-    def sense(self, world: "World", x: float, y: float, heading: float,
-              rng: np.random.Generator | None = None) -> Tuple[Tuple[float, float, float], List[float], List[float]]:
+        # sampling outputs + reductions
+        self._Bp = np.empty((self._n, self._m), dtype=np.float32)
+        self._Fp = np.empty((self._n, self._m), dtype=np.float32)
+        self._accB = np.empty((self._n,), dtype=np.float32)
+        self._accF = np.empty((self._n,), dtype=np.float32)
 
-        # base sample: fast scalar
+        # noise buffers
+        self._noiseB = np.empty((self._n,), dtype=np.float32)
+        self._noiseF = np.empty((self._n,), dtype=np.float32)
+        self._noise64 = np.empty((self._n,), dtype=np.float64)
+
+    def sense(
+        self,
+        world: "World",
+        x: float,
+        y: float,
+        heading: float,
+        rng: np.random.Generator | None = None,
+    ) -> tuple[tuple[float, float, float], np.ndarray, np.ndarray]:
+    
+        # base sample (scalar)
         B0, F0, C0 = world.sample_bilinear(x, y)
-
-        n = self._n
-        m = self._m
+    
+        n = int(self._n)
+        m = int(self._m)
         if n <= 0 or m <= 0:
-            return (B0, F0, C0), [0.0] * max(0, n), [0.0] * max(0, n)
-
-        # angles -> dx/dy (no new allocations)
-        ang = self._ang_base + np.float32(heading)
-        np.cos(ang, out=self._dx)
-        np.sin(ang, out=self._dy)
-
-        ws = np.float32(self.world_size)
+            # return views (no alloc)
+            if n > 0:
+                self._accB[:n].fill(0.0)
+                self._accF[:n].fill(0.0)
+                return (float(B0), float(F0), float(C0)), self._accB[:n], self._accF[:n]
+            # n==0
+            return (float(B0), float(F0), float(C0)), self._accB[:0], self._accF[:0]
+    
+        # --- angles -> dx/dy (in-place)
+        np.add(self._ang_base, np.float32(heading), out=self._ang)  # (n,)
+        np.cos(self._ang, out=self._dx)                             # (n,)
+        np.sin(self._ang, out=self._dy)                             # (n,)
+    
+        # --- ray grids (reuse _xs/_ys)
         xx = np.float32(x)
         yy = np.float32(y)
-
-        # fill sample grids (reuse buffers)
-        # xs = (x + dx[:,None]*d[None,:]) % ws
-        self._xs[:] = xx + self._dx[:, None] * self._d[None, :]
-        self._ys[:] = yy + self._dy[:, None] * self._d[None, :]
-        # wrap
-        self._xs[:] = np.mod(self._xs, ws)
-        self._ys[:] = np.mod(self._ys, ws)
-
-        # sample only B and F for rays
-        Bp, Fp = world.sample_bilinear_many_BF(self._xs, self._ys)  # (n,m)
-
-        # weighted averages (no new w)
-        accB = (Bp * self._w[None, :]).sum(axis=1, dtype=np.float32) / self._wsum
-        accF = (Fp * self._w[None, :]).sum(axis=1, dtype=np.float32) / self._wsum
-        
+    
+        np.multiply(self._dx[:, None], self._d[None, :], out=self._xs)
+        self._xs += xx
+        np.multiply(self._dy[:, None], self._d[None, :], out=self._ys)
+        self._ys += yy
+    
+        # --- wrap to [0, ws) in-place (om samplern antar wrap)
+        ws = np.float32(self.world_size)
+        np.mod(self._xs, ws, out=self._xs)
+        np.mod(self._ys, ws, out=self._ys)
+    
+        # --- sample into preallocated outputs (no alloc)
+        # kräver att World.sample_bilinear_many_BF accepterar outB/outF
+        world.sample_bilinear_many_BF(self._xs, self._ys, outB=self._Bp, outF=self._Fp)
+    
+        # --- weighted reduction: (n,m) @ (m,) -> (n,)
+        np.matmul(self._Bp, self._w, out=self._accB)
+        np.matmul(self._Fp, self._w, out=self._accF)
+    
+        # scale
+        self._accB *= self._inv_wsum
+        self._accF *= self._inv_wsum
+    
+        # --- noise: Generator.normal() saknar out -> använd standard_normal(out=...)
         sig = float(self.P.noise_sigma)
-        if sig > 0.0:
-            noiseB = rng.normal(0.0, sig, size=n).astype(np.float32, copy=False)
-            noiseF = rng.normal(0.0, sig, size=n).astype(np.float32, copy=False)
-            accB = accB + noiseB
-            accF = accF + noiseF
-        
-            B0 = float(np.clip(B0 + rng.normal(0.0, sig * 0.5), 0.0, 1.0))
-            F0 = float(np.clip(F0 + rng.normal(0.0, sig * 0.5), 0.0, 1.0))
-            C0 = float(np.clip(C0 + rng.normal(0.0, sig * 0.5), 0.0, 1.0))
-
-        accB = np.clip(accB, 0.0, 1.0).astype(np.float32, copy=False)
-        accF = np.clip(accF, 0.0, 1.0).astype(np.float32, copy=False)
-
-        return (B0, F0, C0), accB.tolist(), accF.tolist()
-
+        if sig > 0.0 and (rng is not None):
+            # noiseB
+            rng.standard_normal(size=n, out=self._noise64)  # float64 buffer
+            self._noiseB[:] = (self._noise64 * sig).astype(np.float32, copy=False)
+            # noiseF
+            rng.standard_normal(size=n, out=self._noise64)
+            self._noiseF[:] = (self._noise64 * sig).astype(np.float32, copy=False)
+    
+            self._accB += self._noiseB
+            self._accF += self._noiseF
+    
+            # scalar noise + scalar clamp (snabbare än np.clip)
+            b = float(B0 + rng.normal(0.0, sig * 0.5))
+            f = float(F0 + rng.normal(0.0, sig * 0.5))
+            c = float(C0 + rng.normal(0.0, sig * 0.5))
+            B0 = 0.0 if b < 0.0 else (1.0 if b > 1.0 else b)
+            F0 = 0.0 if f < 0.0 else (1.0 if f > 1.0 else f)
+            C0 = 0.0 if c < 0.0 else (1.0 if c > 1.0 else c)
+        else:
+            B0 = float(B0); F0 = float(F0); C0 = float(C0)
+    
+        # --- clamp rays in-place
+        np.clip(self._accB, 0.0, 1.0, out=self._accB)
+        np.clip(self._accF, 0.0, 1.0, out=self._accF)
+    
+        return (B0, F0, C0), self._accB, self._accF
 
 @dataclass
 class Agent:
@@ -345,6 +448,11 @@ class Agent:
     last_speed: float = 0.0
     age_s: float = 0.0
     repro_cd_s: float = 0.0
+
+    # for tracking
+    last_B0: float = 0.0
+    last_F0: float = 0.0
+    last_C0: float = 0.0    
 
     def __post_init__(self) -> None:
         # Ensure per-agent AP instance (NOT trait-modified anymore; keep stable baseline).
@@ -425,17 +533,13 @@ class Agent:
         )
         return x
 
-    def build_inputs(self, world: World, rng: np.random.Generator) -> Tuple[np.ndarray, float, float, float]:
-        """
-        Sense + build NN input. Returns (x_in, B0, F0, C0).
-        """
+    def build_inputs(self, world, rng):
         if not self.body.alive:
-            # caller should skip dead agents
-            return np.zeros((23,), dtype=np.float32), 0.0, 0.0, 0.0
+            return None, 0.0, 0.0, 0.0
     
         (B0, F0, C0), rays_B, rays_F = self.sensors.sense(world, self.x, self.y, self.heading, rng=rng)
-        x_in = self._build_obs(B0, F0, C0, rays_B, rays_F)
-        return x_in.astype(np.float32, copy=False), float(B0), float(F0), float(C0)
+        x_in = self._build_obs(B0, F0, C0, rays_B, rays_F)  # ska redan vara float32
+        return x_in, float(B0), float(F0), float(C0)
     
     def apply_outputs(self, world: World, y: np.ndarray, B0: float, F0: float, C0: float,
                       rng: np.random.Generator) -> Tuple[float, float, float]:
@@ -523,6 +627,10 @@ class Agent:
             pheno=self.pheno,
         )
 
+        self.last_B0 = float(B0)
+        self.last_F0 = float(F0)
+        self.last_C0 = float(C0)
+    
         return float(B0), float(F0), float(C0)
         
     def step(self, world: World) -> Tuple[float, float, float]:

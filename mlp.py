@@ -49,7 +49,7 @@ class MLPGenome:
     def init_traits(
         self,
         rng: np.random.Generator,
-        n_traits: int = 12,
+        n_traits: int,
         lo: float = -1.0,
         hi: float = 1.0,
     ) -> "MLPGenome":
@@ -60,7 +60,7 @@ class MLPGenome:
         self,
         rng: np.random.Generator,
         scale: float = 0.6,
-        n_traits: int = 12,
+        n_traits: int | None = None,
         init_traits_if_missing: bool = True,
     ) -> "MLPGenome":
         """

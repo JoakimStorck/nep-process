@@ -28,19 +28,15 @@ class PopParams:
     init_pop: int = 12
     max_pop: int = 2000
 
-    n_traits: int = 14
-
-    #D_birth_max: float = 0.40
-    #Fg_birth_max: float = 0.70
-
-    #E_margin_scale: float = 0.25
-    #hunger_weight: float = 1.00
+    n_traits: int = 17
 
     spawn_jitter_r: float = 1.5
 
     carcass_yield: float = 0.65
     carcass_rad: int = 3
-
+    
+    sample_dt: float = 1.0        # logga var 1.0 s (simtid)
+    sample_avoid_repeat_k: int = 0 # 0=off, annars undvik senaste k ids
 
 @dataclass
 class Population:
@@ -65,6 +61,10 @@ class Population:
 
     _banks: dict[tuple, "ParamBank"] = field(init=False, default_factory=dict)
 
+    # Agent sampling
+    _next_sample_t: float = 0.0
+    _recent_sample_ids: List[int] = field(default_factory=list)
+
     # world logging knobs (gating lives in logger)
     world_log_with_percentiles: bool = True
 
@@ -73,7 +73,10 @@ class Population:
         self.rng = np.random.default_rng(self.seed)
         self.world = World(self.WP)
         self._banks = {}
-    
+
+        self._next_sample_t = 0.0
+        self._recent_sample_ids = []
+
         # ensure MC uses PP.n_traits (single source of truth for this run)
         if self.MC.n_traits != int(self.PP.n_traits):
             self.MC = replace(self.MC, n_traits=int(self.PP.n_traits))
@@ -148,6 +151,9 @@ class Population:
             ),
         )
 
+    def _emit_sample(self, t: float, a: Agent) -> None:
+        self._emit("sample", t, records.sample_record(t, a, pop_n=len(self.agents)))
+    
     def _emit_world(self, t: float) -> None:
         self._emit("world", t, records.world_record(t, self.world, with_percentiles=self.world_log_with_percentiles))
 
@@ -275,19 +281,22 @@ class Population:
         # 0) advance world first
         self.world.step()
 
-        # 1) alive list
+        # 1) alive list (prealloc + no stack)
         alive: List[Agent] = [a for a in self.agents if a.body.alive]
         if alive:
-            X_list: List[np.ndarray] = []
-            BFC_list: List[Tuple[float, float, float]] = []
+            n = len(alive)
+            X = np.empty((n, 23), dtype=np.float32)  # 23 = in_dim
+            BFC_list: List[Tuple[float, float, float]] = [None] * n  # type: ignore
 
-            for a in alive:
+            for i, a in enumerate(alive):
                 x_in, B0, F0, C0 = a.build_inputs(self.world, rng=self.rng)
-                X_list.append(x_in)
-                BFC_list.append((B0, F0, C0))
-                self._emit_step_if_tracked(self.t, a, B0, F0, C0)
 
-            X = np.stack(X_list, axis=0).astype(np.float32, copy=False)
+                # Expect x_in to already be float32 and shape (23,).
+                # If not, this assignment will still coerce/copy only when needed.
+                X[i] = x_in
+                BFC_list[i] = (B0, F0, C0)
+
+                self._emit_step_if_tracked(self.t, a, B0, F0, C0)
 
             # group by bank key
             groups: dict[tuple, list[int]] = {}
@@ -350,6 +359,29 @@ class Population:
                 self.agents.extend(children)
             births = len(children)
 
+        # 3.5) random cross-section sampling (one agent per sample_dt)
+        sd = float(self.PP.sample_dt)
+        if sd > 0.0 and self.t + 1e-12 >= self._next_sample_t:
+            alive_now = [a for a in self.agents if a.body.alive]
+            if alive_now:
+                # optional anti-repeat
+                if int(self.PP.sample_avoid_repeat_k) > 0 and self._recent_sample_ids:
+                    k = int(self.PP.sample_avoid_repeat_k)
+                    recent = set(self._recent_sample_ids[-k:])
+                    pool = [a for a in alive_now if int(a.id) not in recent]
+                    if pool:
+                        alive_now = pool
+        
+                a_pick = alive_now[int(self.rng.integers(0, len(alive_now)))]
+                self._emit_sample(self.t, a_pick)
+        
+                if int(self.PP.sample_avoid_repeat_k) > 0:
+                    self._recent_sample_ids.append(int(a_pick.id))
+        
+            # advance next target (handle if dt >> sd)
+            while self._next_sample_t <= self.t + 1e-12:
+                self._next_sample_t += sd
+                
         # 4) advance time (convention: events refer to state at this.t, before increment)
         # If you prefer "after", move this up and pass self.t after increment.
         # Here we keep your previous convention stable.

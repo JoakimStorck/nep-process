@@ -128,6 +128,15 @@ class WorldViewer:
     def paused(self) -> bool:
         return self._paused
 
+    def _throttle(self) -> None:
+        cap = int(getattr(self.cfg, "fps_cap", 0) or 0)
+        if cap > 0:
+            self._clock.tick(cap)
+        else:
+            pass
+            # ingen throttling (ingen sleep)
+            #self._clock.tick(0)
+            
     # ---------- rendering ----------
     def _ensure_screen(self, size: int) -> None:
         if self._screen is not None:
@@ -350,7 +359,7 @@ class WorldViewer:
             return False
 
         if self.cfg.render_every > 1 and (self._step % self.cfg.render_every != 0):
-            self._clock.tick(self.cfg.fps_cap)
+            self._throttle()
             return True
 
         rgb = self._make_rgb(pop.world)
@@ -360,7 +369,7 @@ class WorldViewer:
         self._draw_hud(pop, births_total=births_total, deaths_total=deaths_total)
 
         self.pg.display.flip()
-        self._clock.tick(self.cfg.fps_cap)
+        self._throttle()
         return True
 
     def close(self) -> None:
