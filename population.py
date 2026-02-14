@@ -278,9 +278,13 @@ class Population:
         """
         dt = float(self.WP.dt)
 
-        # 0) advance world first
+         # (A) uppdatera världens fält
         self.world.step()
-
+    
+        # (B) bygg agent-occupancy från aktuella agentpositioner
+        self.world.rebuild_agent_layer(self.agents)
+    
+        # (C) agentsteg (sensing + policy + move + eat + body)
         # 1) alive list (prealloc + no stack)
         alive: List[Agent] = [a for a in self.agents if a.body.alive]
         if alive:

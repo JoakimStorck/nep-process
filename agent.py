@@ -116,7 +116,7 @@ class Body:
 
         return float(0.6 * d_fast + 0.4 * d_slow)
     
-    def step(self, speed, activity, hazard, intake, pheno: Phenotype, sense_level: int = 0):
+    def step(self, speed, activity, hazard, intake, pheno: Phenotype):
         """
         Damage dynamics (no internal clock):
           D += inflow(hazard + effort + metabolic stress per drain) - repair(rest + E + intake),
@@ -452,6 +452,59 @@ class RaySensors:
     
         return (B0, F0, C0), self._accB, self._accF
 
+    def see_agent_first_hit(
+        self,
+        world: "World",
+        x: float,
+        y: float,
+        heading: float,
+        self_id: int,
+    ) -> tuple[float, float, float]:
+        """
+        Returns (present, bearing_u, dist_u)
+          present in {0,1}
+          bearing_u in [0,1)  (ray index / n)
+          dist_u in [0,1]     (distance / ray_len)
+        First-hit semantics: scan distance outward; first encountered agent stops scan.
+        """
+        n = int(self._n)
+        m = int(self._m)
+        if n <= 0 or m <= 0:
+            return 0.0, 0.0, 0.0
+
+        # Ray geometry exactly like in sense()
+        np.add(self._ang_base, np.float32(heading), out=self._ang)
+        np.cos(self._ang, out=self._dx)
+        np.sin(self._ang, out=self._dy)
+
+        xx = np.float32(x)
+        yy = np.float32(y)
+
+        np.multiply(self._dx[:, None], self._d[None, :], out=self._xs)
+        self._xs += xx
+        np.multiply(self._dy[:, None], self._d[None, :], out=self._ys)
+        self._ys += yy
+
+        ws = np.float32(self.world_size)
+        np.mod(self._xs, ws, out=self._xs)
+        np.mod(self._ys, ws, out=self._ys)
+
+        A = world.A
+        s = int(self.world_size)
+
+        # distance-first scan => first hit
+        for j in range(m):
+            for i in range(n):
+                ix = int(self._xs[i, j]) % s
+                iy = int(self._ys[i, j]) % s
+                aid = int(A[iy, ix])
+                if aid != 0 and aid != int(self_id):
+                    bearing_u = float(i) / float(n)
+                    dist_u = float(self._d[j] / max(float(self.P.ray_len), 1e-9))
+                    return 1.0, bearing_u, dist_u
+
+        return 0.0, 0.0, 0.0
+
 @dataclass
 class Agent:
     """
@@ -539,38 +592,49 @@ class Agent:
     def phenotype_summary(self) -> dict:
         return phenotype_summary(self.pheno)
         
-    def _build_obs(self, B0: float, F0: float, C0: float, rays_B: List[float], rays_F: List[float]) -> np.ndarray:
-        n = len(rays_B)
-        iB = max(range(n), key=lambda i: rays_B[i])
-        iF = max(range(n), key=lambda i: rays_F[i])
-
-        aB = 2.0 * math.pi * (iB / n)
-        aF = 2.0 * math.pi * (iF / n)
-
-        hunger = self.body.hunger()
-        fatigue = self.body.Fg
-        D = self.body.D
-
+    def _build_obs(
+        self,
+        B0: float,
+        F0: float,
+        C0: float,
+        rays_B,
+        rays_F,
+    ) -> np.ndarray:
+        # rays_* kan vara np.ndarray; gör robust och snabb
+        rb = np.asarray(rays_B, dtype=np.float32)
+        rf = np.asarray(rays_F, dtype=np.float32)
+    
+        n = int(rb.shape[0])
+        if n <= 0:
+            # Inga rays: sätt allt rays-baserat till 0 och riktningar neutrala
+            meanB = meanF = maxB = maxF = 0.0
+            aB = aF = 0.0
+        else:
+            iB = int(np.argmax(rb))
+            iF = int(np.argmax(rf))
+    
+            aB = 2.0 * math.pi * (iB / n)
+            aF = 2.0 * math.pi * (iF / n)
+    
+            meanB = float(rb.mean())
+            meanF = float(rf.mean())
+            maxB  = float(rb[iB])
+            maxF  = float(rf[iF])
+    
+        hunger = float(self.body.hunger())
+        fatigue = float(self.body.Fg)
+        D = float(self.body.D)
+    
+        # obs är ALLTID definierad
         obs = np.array(
-            [
-                B0,
-                F0,
-                C0,
-                float(sum(rays_B) / n),
-                float(sum(rays_F) / n),
-                float(max(rays_B)),
-                float(max(rays_F)),
-                hunger,
-                fatigue,
-            ],
+            [float(B0), float(F0), float(C0), meanB, meanF, maxB, maxF, hunger, fatigue],
             dtype=np.float32,
         )
-
-        # update trace (local time)
+    
+        # update trace
         a = 0.06
         self.obs_trace = (1.0 - a) * self.obs_trace + a * obs
-
-        # final input:
+    
         # obs (9) + trace (9) + dirs(4) + D(1) = 23
         x = np.concatenate(
             [
@@ -587,6 +651,14 @@ class Agent:
     
         (B0, F0, C0), rays_B, rays_F = self.sensors.sense(world, self.x, self.y, self.heading, rng=rng)
         x_in = self._build_obs(B0, F0, C0, rays_B, rays_F)  # ska redan vara float32
+
+        N, Nu, Nd = self.sensors.see_agent_first_hit(world, self.x, self.y, self.heading, self.id)
+
+        # t.ex. till riktning som cos/sin (stabilare än u direkt)
+        aN = 2.0 * math.pi * Nu
+        cN = math.cos(aN)
+        sN = math.sin(aN)
+
         return x_in, float(B0), float(F0), float(C0)
     
     def apply_outputs(self, world: World, y: np.ndarray, B0: float, F0: float, C0: float,
@@ -673,7 +745,6 @@ class Agent:
             hazard=F0,
             intake=intake,
             pheno=self.pheno,
-            sense_level=self.sense_level,
         )
 
         self.last_B0 = float(B0)
@@ -688,7 +759,7 @@ class Agent:
         return self.apply_outputs(world, y, B0, F0, C0)
 
     # --- reproduction hooks (Population uses these) ---
-
+    
     def ready_to_reproduce(self) -> bool:
         if not self.body.alive: return False
         if self.repro_cd_s > 0: return False

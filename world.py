@@ -105,6 +105,7 @@ class World:
     def __post_init__(self) -> None:
         s = int(self.P.size)
 
+        self.A = np.zeros((s, s), dtype=np.int32)   # agent occupancy (0 = tomt, annars agent_id)
         self.B = np.zeros((s, s), dtype=np.float32)
         self.F = np.zeros((s, s), dtype=np.float32)
         self.C = np.zeros((s, s), dtype=np.float32)
@@ -204,7 +205,19 @@ class World:
         t0 = float(self.Ty[y0])
         t1 = float(self.Ty[y1])
         return (1.0 - fy) * t0 + fy * t1
-        
+
+    def rebuild_agent_layer(self, agents) -> None:
+        """Populate self.A with alive agents. Call once per simulation step."""
+        A = self.A
+        A.fill(0)
+        s = int(self.P.size)
+        for ag in agents:
+            if not ag.body.alive:
+                continue
+            ix = int(ag.x) % s
+            iy = int(ag.y) % s
+            A[iy, ix] = int(ag.id)
+            
     # -------------------------
     # Ecology kernels
     # -------------------------
@@ -236,7 +249,7 @@ class World:
     def step(self) -> None:
         dt = float(self.P.dt)
         P = self.P
-    
+
         # --- Update seasonal temperature (Ty, gy) and build T-field
         self._update_temperature()
         T = self.temperature_field()  # (s,s) float32 degC
