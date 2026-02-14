@@ -139,22 +139,26 @@ if __name__ == "__main__":
         last_wall = time.perf_counter()
         next_wall = last_wall + max(0.05, float(a.wall_tick))
 
-        while pop.t < float(a.T) and len(pop.agents) > 0:
+        # -------------------------
+        # SIM LOOP (runs until T or extinction or user quits)
+        # -------------------------
+        user_quit = False
         
-            # --- PyGame viewer: always keep window responsive (quit/pause/hotkeys)
+        while True:
             if not viewer.update(pop, births_total=births_total, deaths_total=deaths_total):
+                user_quit = True
                 break
         
-            # --- If paused: do NOT advance simulation time/state
             if viewer.paused:
                 continue
         
-            # --- Step simulation ONCE (authoritative b/d this step)
+            if pop.t >= float(a.T) or len(pop.agents) == 0:
+                break
+        
             b, d = pop.step()
             births_total += int(b)
             deaths_total += int(d)
         
-            # --- sim-time ticker (stdout)
             if float(a.tick) > 0.0 and pop.t >= next_tick_t:
                 next_tick_t = pop.t + float(a.tick)
                 mean_E, mean_D = pop.mean_stats()
@@ -164,15 +168,23 @@ if __name__ == "__main__":
                     flush=True,
                 )
         
-            # --- wall-time keepalive
             now = time.perf_counter()
             if now >= next_wall:
                 next_wall = now + max(0.05, float(a.wall_tick))
                 sys.stdout.write(".")
                 sys.stdout.flush()
         
+        # -------------------------
+        # VIEWER LOOP (only if sim ended naturally)
+        # -------------------------
+        if not user_quit:
+            while True:
+                if not viewer.update(pop, births_total=births_total, deaths_total=deaths_total):
+                    break
+                time.sleep(0.01)
+        
         viewer.close()
-            
+
         mean_E, mean_D = pop.mean_stats()
         print(
             "\n"
@@ -180,3 +192,4 @@ if __name__ == "__main__":
             f"mean_E={mean_E:.3f} mean_D={mean_D:.3f}",
             flush=True,
         )
+

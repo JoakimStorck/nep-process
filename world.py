@@ -469,10 +469,12 @@ def _sample_bilinear_many_BF(
     """
     s = int(size)
 
-    # int coords (truncate ok since xs,ys >= 0)
     x0 = xs.astype(np.int32, copy=False)
     y0 = ys.astype(np.int32, copy=False)
-
+    
+    x0 %= s
+    y0 %= s
+    
     # frac parts (already float32)
     fx  = xs - x0
     fy  = ys - y0

@@ -58,7 +58,7 @@ class AgentParams:
     D_max: float = 1.0
 
     E_rep_min: float = 0.10
-    k_rep: float = 0.35   # energy cost per unit repaired damage (tune)
+    k_rep: float = 0.45   # energy cost per unit repaired damage (tune)
     
     # kinematics
     v_max: float = 2.2
@@ -71,6 +71,9 @@ class AgentParams:
     # reproduction (used by Population; Agent maintains cooldown locally)
     repro_cooldown_s: float = 8.0
 
+    sense_cost_L1: float = 0.0015
+    sense_cost_L2: float = 0.0035
+    sense_cost_L3: float = 0.0065
 
 @dataclass
 class Body:
@@ -112,8 +115,8 @@ class Body:
         self.E_slow = clamp(self.E_slow - d_slow, 0.0, 1.0)
 
         return float(0.6 * d_fast + 0.4 * d_slow)
-
-    def step(self, speed, activity, hazard, intake, pheno: Phenotype):
+    
+    def step(self, speed, activity, hazard, intake, pheno: Phenotype, sense_level: int = 0):
         """
         Damage dynamics (no internal clock):
           D += inflow(hazard + effort + metabolic stress per drain) - repair(rest + E + intake),
@@ -122,16 +125,45 @@ class Body:
         if not self.alive:
             return
         dt = self.P.dt
-
+    
+        # ---------------------------------------------------------
+        # SENSING upkeep (discrete) -> adds to energy drain_rate
+        # ---------------------------------------------------------
+        # sense_strength assumed in [0,1]. Map to 0..3.
+        u_sense = float(getattr(pheno, "sense_strength", 0.0))
+        if u_sense < 0.25:
+            sense_level = 0
+        elif u_sense < 0.50:
+            sense_level = 1
+        elif u_sense < 0.75:
+            sense_level = 2
+        else:
+            sense_level = 3
+    
+        # per-second upkeep costs (add these to AgentParams)
+        #   sense_cost_L1, sense_cost_L2, sense_cost_L3
+        sense_cost = 0.0
+        if sense_level == 1:
+            sense_cost = float(getattr(self.P, "sense_cost_L1", 0.0))
+        elif sense_level == 2:
+            sense_cost = float(getattr(self.P, "sense_cost_L2", 0.0))
+        elif sense_level >= 3:
+            sense_cost = float(getattr(self.P, "sense_cost_L3", 0.0))
+    
         # --- energy dynamics (metabolism scales drain_rate) ---
+        # (option: also treat sensing as "neural processing" by adding a small compute term;
+        # here we keep it as pure upkeep in drain_rate)
         drain_rate = float(pheno.metabolism_scale) * (
-            self.P.basal + self.P.move_cost * float(speed) + self.P.compute_cost * float(activity)
+            self.P.basal
+            + self.P.move_cost * float(speed)
+            + self.P.compute_cost * float(activity)
+            + sense_cost
         )
         drain = dt * drain_rate
-
+    
         self.E_fast = clamp(self.E_fast + 0.95 * float(intake) - 0.7 * drain, 0.0, 1.0)
         self.E_slow = clamp(self.E_slow + 0.30 * float(intake) - 0.3 * drain, 0.0, 1.0)
-
+    
         pull = self.P.slow_to_fast * dt * max(0.0, 0.6 - self.E_fast)
         push = self.P.fast_to_slow * dt * max(0.0, self.E_fast - 0.75)
         pull = min(pull, self.E_slow)
@@ -140,12 +172,12 @@ class Body:
         self.E_fast += pull
         self.E_fast -= push
         self.E_slow += push
-
+    
         # --- normalized state ---
         Et = self.E_total()
         e_lack = clamp(1.0 - Et, 0.0, 1.0)
         d_norm = clamp(self.D / max(self.P.D_max, 1e-9), 0.0, 1.0)
-
+    
         # motion/activity decomposition
         speed_n = clamp(float(speed) / max(self.P.v_max, 1e-9), 0.0, 1.0)
         effort = speed_n + 0.6 * float(activity)
@@ -154,25 +186,32 @@ class Body:
             * max(0.0, 1.0 - float(activity))
             * (0.25 + 0.75 * max(0.0, 1.0 - float(hazard)))
         )
-
+    
         # intake normalization (as before)
         max_intake = max(1e-9, self.P.eat_gain * self.P.eat_rate * dt)
         intake_n = clamp(float(intake) / max_intake, 0.0, 1.0)
-
+    
         # --- damage inflow ---
         susc = float(pheno.susceptibility)
         frail = 1.0 + float(pheno.frailty_gain) * d_norm
         k_E = 1.2  # energy lack amplifies damage
-
-        dD_haz = dt * (self.P.hazard_to_damage * susc * (1.0 + k_E * e_lack) * frail * float(hazard))
-
+    
+        dD_haz = dt * (
+            self.P.hazard_to_damage
+            * susc
+            * (1.0 + k_E * e_lack)
+            * frail
+            * float(hazard)
+        )
+    
         k_eff = 0.02  # MV0: small activity damage channel
         dD_eff = dt * (k_eff * susc * (1.0 + k_E * e_lack) * frail * effort)
-
+    
+        # IMPORTANT: uses drain_rate including sense upkeep => sensing adds metabolic stress too
         dD_met = dt * (float(pheno.stress_per_drain) * drain_rate)
-
+    
         dD_in = dD_haz + dD_eff + dD_met
-
+    
         # --- repair outflow ---
         E_rep_min = float(pheno.E_rep_min)
         G_E = clamp((Et - E_rep_min) / (1.0 - E_rep_min), 0.0, 1.0)
@@ -180,27 +219,27 @@ class Body:
         G_int = 0.3 + 0.7 * intake_n
         fresh = 1.0 - self.Fg
         G_fresh = 0.75 + 0.25 * fresh
-
+    
         frailty_damp = 1.0 / (1.0 + float(pheno.frailty_gain) * d_norm)
-
+    
         dD_rep = dt * float(pheno.repair_capacity) * G_rest * G_E * G_int * G_fresh * frailty_damp
-        
+    
         # --- energy cost for repair (A) ---
         k_rep = float(getattr(self.P, "k_rep", 0.35))
         E_need = max(0.0, k_rep * float(dD_rep))
-        
+    
         if E_need > 0.0:
             E_paid = self.take_energy(E_need)  # drains fast+slow proportionally (good)
             if E_paid < E_need:
                 # Not enough energy => scale repair down to what we could pay for
                 dD_rep *= (E_paid / max(E_need, 1e-12))
-                
+    
         self.D = clamp(self.D + dD_in - dD_rep, 0.0, self.P.D_max)
-
+    
         # --- fatigue dynamics (kept; optionally make it depend on frailty too) ---
         fatigue_effort_eff = self.P.fatigue_effort * (1.0 + 0.4 * d_norm)
         fatigue_recover_eff = self.P.fatigue_recover * max(0.0, (1.0 - 0.05 * d_norm))
-
+    
         self.Fg = clamp(
             self.Fg + dt * (
                 fatigue_effort_eff * effort
@@ -210,7 +249,7 @@ class Body:
             0.0,
             1.0,
         )
-
+    
         if self.E_total() <= 0.0 or self.D >= self.P.D_max:
             self.alive = False
 
@@ -454,6 +493,8 @@ class Agent:
     last_F0: float = 0.0
     last_C0: float = 0.0    
 
+    sense_level: int = field(init=False, default=0)    
+
     def __post_init__(self) -> None:
         # Ensure per-agent AP instance (NOT trait-modified anymore; keep stable baseline).
         self.AP = replace(self.AP)
@@ -472,9 +513,16 @@ class Agent:
         # Derive phenotype once (fixed for lifetime unless you later add plasticity)
         self.apply_traits()
 
+        # Apply sensing phenotype -> AP knobs, then rebuild sensors
+        self.sense_level = _sense_level(self.pheno.sense_strength)
+        _apply_sense_to_AP(self.AP, self.sense_level)
+        # sensors must reflect updated AP:
+        self.sensors = RaySensors(self.AP, world_size=64)
+    
+
     def bind_world(self, world: World) -> None:
         self.sensors = RaySensors(self.AP, world_size=world.P.size)
-
+    
     @staticmethod
     def _signed_angle(a: float) -> float:
         return (a + math.pi) % (2.0 * math.pi) - math.pi
@@ -625,6 +673,7 @@ class Agent:
             hazard=F0,
             intake=intake,
             pheno=self.pheno,
+            sense_level=self.sense_level,
         )
 
         self.last_B0 = float(B0)
@@ -632,7 +681,7 @@ class Agent:
         self.last_C0 = float(C0)
     
         return float(B0), float(F0), float(C0)
-        
+
     def step(self, world: World) -> Tuple[float, float, float]:
         x_in, B0, F0, C0 = self.build_inputs(world)
         y = self.genome.forward(x_in)
@@ -675,3 +724,30 @@ class Agent:
         self.repro_cd_s  = float(self.AP.repro_cooldown_s)
         self.age_s       = 0.0
 
+def _sense_level(u: float) -> int:
+    # u in [0,1] -> 0..3
+    if u < 0.25: return 0
+    if u < 0.50: return 1
+    if u < 0.75: return 2
+    return 3
+
+def _apply_sense_to_AP(AP: AgentParams, level: int) -> None:
+    # Basnivå (level 0) är din nuvarande default.
+    # Höj stegvis: fler strålar + längre räckvidd + mindre brus.
+    if level <= 0:
+        AP.n_rays = 12
+        AP.ray_len = 7.0
+        AP.noise_sigma = 0.06
+    elif level == 1:
+        AP.n_rays = 16
+        AP.ray_len = 8.0
+        AP.noise_sigma = 0.055
+    elif level == 2:
+        AP.n_rays = 24
+        AP.ray_len = 10.0
+        AP.noise_sigma = 0.050
+    else:  # level 3
+        AP.n_rays = 32
+        AP.ray_len = 12.0
+        AP.noise_sigma = 0.045
+        

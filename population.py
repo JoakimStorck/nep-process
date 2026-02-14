@@ -28,7 +28,7 @@ class PopParams:
     init_pop: int = 12
     max_pop: int = 2000
 
-    n_traits: int = 17
+    n_traits: int = 18
 
     spawn_jitter_r: float = 1.5
 

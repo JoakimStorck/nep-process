@@ -49,6 +49,8 @@ class Phenotype:
     mobility: float
     cold_aversion: float
 
+    sense_strength: float
+    
 
 # ---- Fixed trait indices (explicit + stable) ----
 _T_A_MATURE        = 0
@@ -72,6 +74,7 @@ _T_CHILD_FG     = 14
 _T_COLD_AV      = 15
 
 _T_E_REP_MIN = 16
+_T_SENSE = 17
 
 @dataclass(frozen=True)
 class PhenoRanges:
@@ -142,6 +145,8 @@ def derive_pheno(traits: np.ndarray | None, R: PhenoRanges = PhenoRanges()) -> P
 
     u_erep = _sigmoid(_get_trait(traits, _T_E_REP_MIN))
 
+    u_sense = _sigmoid(_get_trait(traits, _T_SENSE))
+
     return Phenotype(
         A_mature=float(_lerp(R.A_mature_min, R.A_mature_max, u_mature)),
         repro_rate=float(_lerp(R.repro_rate_min, R.repro_rate_max, u_prepro)),
@@ -160,6 +165,7 @@ def derive_pheno(traits: np.ndarray | None, R: PhenoRanges = PhenoRanges()) -> P
         sociability=float(u_soc),
         mobility=float(u_mob),
         cold_aversion=float(_lerp(R.cold_aversion_min, R.cold_aversion_max, u_cold)),
+        sense_strength = float(u_sense),
 
         child_E_fast=float(_lerp(R.child_E_fast_min, R.child_E_fast_max, u_cef)),
         child_E_slow=float(_lerp(R.child_E_slow_min, R.child_E_slow_max, u_ces)),
@@ -185,4 +191,5 @@ def phenotype_summary(p: Phenotype) -> dict[str, float]:
         "sociability": float(p.sociability),
         "mobility": float(p.mobility),
         "cold_aversion": float(p.cold_aversion),
+        "sense_strength": float(p.sense_strength),
     }

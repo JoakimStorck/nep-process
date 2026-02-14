@@ -35,7 +35,7 @@ class MutationConfig:
     arch_p: float = 0.0  # probability to attempt mutate_architecture when enabled
 
     # init ranges (only used if missing traits)
-    n_traits: int = 12
+    n_traits: int = 18
     traits_init_lo: float = -1.0
     traits_init_hi: float = 1.0
 
