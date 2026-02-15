@@ -68,9 +68,11 @@ def _apply_sense_to_AP(AP: "AgentParams", level: int) -> None:
 # -------------------------
 @dataclass
 class AgentParams:
+
+    # time discretization
     dt: float = 0.02
 
-    # sensors
+    # sensing / perception
     n_rays: int = 12
     ray_len: float = 7.0
     ray_step: float = 1.0
@@ -80,51 +82,52 @@ class AgentParams:
     v_max: float = 2.2
     turn_rate: float = 2.2
 
-    # eating (world pool units -> internal energy units)
-    eat_rate: float = 0.10   # pool/sec scaling (times dt)
-    eat_gain: float = 0.6    # usable internal energy per unit "food" removed
+    # feeding: world pool units -> internal energy units
+    eat_rate: float = 0.10
+    eat_gain: float = 0.6
 
-    # --- energy / mass balance (MV0, unbounded) ---
-    # Start state
-    M0: float = 1.0     # body mass (energy-equivalent)
-    E0: float = 0.40    # total energy buffer (energy-equivalent)
+    # initial physiological state
+    M0: float = 1.0     # initial body mass
+    E0: float = 0.40    # initial total energy buffer
 
-    # Capacity of "readily usable" energy scales with mass
+    # energy storage capacity (scales with mass)
     E_cap_per_M: float = 0.60
 
-    # Maintenance/metabolism: drain scales with mass
-    basal: float = 0.006
+    # basal metabolism (allometric in FAS I-2A)
+    k_basal: float = 0.0
+    basal: float = 0.006   # legacy fallback
+
+    # activity-related metabolic costs
     move_cost: float = 0.035
     compute_cost: float = 0.006
 
-    # Sensing upkeep (added into drain)
+    # sensing upkeep costs
     sense_cost_L1: float = 0.0015
     sense_cost_L2: float = 0.0035
     sense_cost_L3: float = 0.0065
 
-    # Catabolism: convert mass to energy on deficit
-    M_to_E_eff: float = 1.0     # MV0: 1.0 = no losses
-    I_to_M_eff: float = 1.0     # MV0: 1.0 = no losses
+    # energy–mass conversion efficiencies
+    M_to_E_eff: float = 1.0
+    I_to_M_eff: float = 1.0
 
-    # starvation / weakness
-    M_crit: float = 0.30   # below this: weakness ramps
-    M_min: float = 0.10    # below this: collapse / death
+    # starvation and weakness dynamics
+    M_crit: float = 0.30
+    M_min: float = 0.10
+    v_weak_min: float = 0.25
+    rep_weak_min: float = 0.20
+    starve_stress_gain: float = 1.0
 
-    v_weak_min: float = 0.25      # minimum movement factor at extreme weakness
-    rep_weak_min: float = 0.20    # minimum repair factor at extreme weakness
-    starve_stress_gain: float = 1.0  # extra stress when weak
-
-    # damage / fatigue
+    # damage and fatigue dynamics
     hazard_to_damage: float = 0.03
     hazard_to_fatigue: float = 0.08
     fatigue_recover: float = 0.020
     fatigue_effort: float = 0.050
     D_max: float = 1.0
 
-    # repair economics
-    k_rep: float = 0.45   # energy cost per unit repaired damage
+    # repair energy cost
+    k_rep: float = 0.45
 
-    # reproduction (used by Population; Agent maintains cooldown locally)
+    # reproduction (handled by Population)
     repro_cooldown_s: float = 8.0
 
 
@@ -134,20 +137,28 @@ class AgentParams:
 @dataclass
 class Body:
     P: AgentParams
+
+    # energy buffers (weighted in E_total)
     E_fast: float = 0.0
     E_slow: float = 0.0
-    M: float = 0.0
-    D: float = 0.0
-    Fg: float = 0.15
+
+    # structural state
+    M: float = 0.0        # body mass
+    D: float = 0.0        # accumulated damage
+    Fg: float = 0.15      # fatigue level
+
+    # life state
     alive: bool = True
-    # --- Ledger diagnostics (per-individual, internal only) ---
+
+    # energy ledger diagnostics (per-individual)
     last_ledger: dict | None = None
     ledger_steps: int = 0
     ledger_bad_steps: int = 0
     ledger_max_abs: float = 0.0
     ledger_max_rel: float = 0.0
     ledger_worst: dict | None = None
-    # --- Numerical guards (per-individual, internal only) ---
+
+    # numerical guard diagnostics (per-individual)
     guard_steps: int = 0
     guard_killed: int = 0
     guard_clamp_steps: int = 0
@@ -338,8 +349,9 @@ class Body:
         # ---------------------------------------------------------
         sense_cost = float(self._sense_cost(pheno))
         M_eff = max(1e-9, float(self.M))
-    
-        out_basal = dt * float(pheno.metabolism_scale) * M_eff * float(self.P.basal)
+        k_basal = float(getattr(self.P, "k_basal", getattr(self.P, "basal", 0.0)))
+        
+        out_basal = dt * float(pheno.metabolism_scale) * (M_eff ** 0.75) * k_basal
         out_move = dt * float(pheno.metabolism_scale) * M_eff * float(self.P.move_cost) * float(speed)
         out_compute = dt * float(pheno.metabolism_scale) * M_eff * float(self.P.compute_cost) * float(activity)
         out_sense = dt * float(pheno.metabolism_scale) * M_eff * sense_cost
