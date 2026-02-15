@@ -29,28 +29,29 @@ class Phenotype:
     repro_rate: float
     E_repro_min: float
     repro_cost: float
+    M_repro_min: float
 
     # Metabolism + aging via damage (no internal clock)
-    metabolism_scale: float     # scales energy drain_rate
-    susceptibility: float       # scales hazard/effort damage inflow
-    stress_per_drain: float     # damage per unit drain_rate
-    repair_capacity: float      # max repair rate
-    frailty_gain: float         # how strongly D amplifies inflow / reduces repair
+    metabolism_scale: float
+    susceptibility: float
+    stress_per_drain: float
+    repair_capacity: float
+    frailty_gain: float
     E_rep_min: float
 
     # Children
     child_E_fast: float
     child_E_slow: float
     child_Fg: float
-    
+    child_M: float   # NEW
+
     # Placeholders / later
     risk_aversion: float
     sociability: float
     mobility: float
     cold_aversion: float
-
     sense_strength: float
-    
+
 
 # ---- Fixed trait indices (explicit + stable) ----
 _T_A_MATURE        = 0
@@ -68,13 +69,16 @@ _T_RISK_AV         = 9
 _T_SOC             = 10
 _T_MOB             = 11
 
-_T_CHILD_E_FAST = 12
-_T_CHILD_E_SLOW = 13
-_T_CHILD_FG     = 14
-_T_COLD_AV      = 15
+_T_CHILD_E_FAST    = 12
+_T_CHILD_E_SLOW    = 13
+_T_CHILD_FG        = 14
+_T_COLD_AV         = 15
 
-_T_E_REP_MIN = 16
-_T_SENSE = 17
+_T_E_REP_MIN       = 16
+_T_SENSE           = 17
+
+_T_CHILD_M         = 18
+_T_M_REPRO_MIN     = 19
 
 @dataclass(frozen=True)
 class PhenoRanges:
@@ -86,28 +90,33 @@ class PhenoRanges:
     repro_rate_min: float = 0.20
     repro_rate_max: float = 0.50
 
-    E_repro_min_min: float = 0.40
-    E_repro_min_max: float = 1.20
+    # reproduction
+    E_repro_min_min: float = 0.05
+    E_repro_min_max: float = 0.35
+    
+    repro_cost_min: float = 0.01
+    repro_cost_max: float = 0.08
 
-    repro_cost_min: float = 0.05
-    repro_cost_max: float = 0.40
-
-    # metabolism + damage/repair (MV0 conservative)
+    # metabolism + damage/repair
     metabolism_min: float = 0.85
     metabolism_max: float = 1.15
 
     susceptibility_min: float = 0.70
     susceptibility_max: float = 1.40
 
-    stress_per_drain_min: float = 0.02
-    stress_per_drain_max: float = 0.20
+    stress_per_drain_min: float = 0.01
+    stress_per_drain_max: float = 0.05
 
     repair_capacity_min: float = 0.01
-    repair_capacity_max: float = 0.1
+    repair_capacity_max: float = 0.10
 
     frailty_gain_min: float = 0.0
     frailty_gain_max: float = 3.0
 
+    E_rep_min_min: float = 0.00
+    E_rep_min_max: float = 0.35
+
+    # children
     child_E_fast_min: float = 0.10
     child_E_fast_max: float = 0.70
     child_E_slow_min: float = 0.10
@@ -115,14 +124,19 @@ class PhenoRanges:
     child_Fg_min: float = 0.00
     child_Fg_max: float = 0.40
 
+    # NEW: child mass at birth
+    # OBS: välj intervall efter din mass-enhet. Här startar vi konservativt.
+    child_M_min: float = 0.15
+    child_M_max: float = 0.60
+
     cold_aversion_min: float = 0.0
     cold_aversion_max: float = 1.0
 
-    E_rep_min_min: float = 0.00
-    E_rep_min_max: float = 0.35
-    
+    # reproduction mass gate (absolute M units)
+    M_repro_min_min: float = 0.18
+    M_repro_min_max: float = 0.45
+
 def derive_pheno(traits: np.ndarray | None, R: PhenoRanges = PhenoRanges()) -> Phenotype:
-    # u in [0,1]
     u_mature   = _sigmoid(_get_trait(traits, _T_A_MATURE))
     u_prepro   = _sigmoid(_get_trait(traits, _T_P_REPRO))
     u_emin     = _sigmoid(_get_trait(traits, _T_E_REPRO_MIN))
@@ -137,39 +151,46 @@ def derive_pheno(traits: np.ndarray | None, R: PhenoRanges = PhenoRanges()) -> P
     u_risk     = _sigmoid(_get_trait(traits, _T_RISK_AV))
     u_soc      = _sigmoid(_get_trait(traits, _T_SOC))
     u_mob      = _sigmoid(_get_trait(traits, _T_MOB))
+
+    u_cef      = _sigmoid(_get_trait(traits, _T_CHILD_E_FAST))
+    u_ces      = _sigmoid(_get_trait(traits, _T_CHILD_E_SLOW))
+    u_cfg      = _sigmoid(_get_trait(traits, _T_CHILD_FG))
+
     u_cold     = _sigmoid(_get_trait(traits, _T_COLD_AV))
+    u_erep     = _sigmoid(_get_trait(traits, _T_E_REP_MIN))
+    u_sense    = _sigmoid(_get_trait(traits, _T_SENSE))
+
+    # NEW
+    u_childM   = _sigmoid(_get_trait(traits, _T_CHILD_M))
+
+    u_mrepro = _sigmoid(_get_trait(traits, _T_M_REPRO_MIN))
     
-    u_cef  = _sigmoid(_get_trait(traits, _T_CHILD_E_FAST))
-    u_ces  = _sigmoid(_get_trait(traits, _T_CHILD_E_SLOW))
-    u_cfg  = _sigmoid(_get_trait(traits, _T_CHILD_FG))
-
-    u_erep = _sigmoid(_get_trait(traits, _T_E_REP_MIN))
-
-    u_sense = _sigmoid(_get_trait(traits, _T_SENSE))
-
     return Phenotype(
         A_mature=float(_lerp(R.A_mature_min, R.A_mature_max, u_mature)),
         repro_rate=float(_lerp(R.repro_rate_min, R.repro_rate_max, u_prepro)),
         E_repro_min=float(_lerp(R.E_repro_min_min, R.E_repro_min_max, u_emin)),
         repro_cost=float(_lerp(R.repro_cost_min, R.repro_cost_max, u_cost)),
-
+    
+        # NEW
+        M_repro_min=float(_lerp(R.M_repro_min_min, R.M_repro_min_max, u_mrepro)),
+    
         metabolism_scale=float(_lerp(R.metabolism_min, R.metabolism_max, u_metab)),
         susceptibility=float(_lerp(R.susceptibility_min, R.susceptibility_max, u_susc)),
         stress_per_drain=float(_lerp(R.stress_per_drain_min, R.stress_per_drain_max, u_spd)),
         repair_capacity=float(_lerp(R.repair_capacity_min, R.repair_capacity_max, u_rep)),
         frailty_gain=float(_lerp(R.frailty_gain_min, R.frailty_gain_max, u_frail)),
-
         E_rep_min=float(_lerp(R.E_rep_min_min, R.E_rep_min_max, u_erep)),
-        
+    
+        child_E_fast=float(_lerp(R.child_E_fast_min, R.child_E_fast_max, u_cef)),
+        child_E_slow=float(_lerp(R.child_E_slow_min, R.child_E_slow_max, u_ces)),
+        child_Fg=float(_lerp(R.child_Fg_min, R.child_Fg_max, u_cfg)),
+        child_M=float(_lerp(R.child_M_min, R.child_M_max, u_childM)),
+    
         risk_aversion=float(u_risk),
         sociability=float(u_soc),
         mobility=float(u_mob),
         cold_aversion=float(_lerp(R.cold_aversion_min, R.cold_aversion_max, u_cold)),
-        sense_strength = float(u_sense),
-
-        child_E_fast=float(_lerp(R.child_E_fast_min, R.child_E_fast_max, u_cef)),
-        child_E_slow=float(_lerp(R.child_E_slow_min, R.child_E_slow_max, u_ces)),
-        child_Fg=float(_lerp(R.child_Fg_min, R.child_Fg_max, u_cfg)),
+        sense_strength=float(u_sense),
     )
 
 
@@ -179,13 +200,19 @@ def phenotype_summary(p: Phenotype) -> dict[str, float]:
         "repro_rate": float(p.repro_rate),
         "E_repro_min": float(p.E_repro_min),
         "repro_cost": float(p.repro_cost),
-        "E_rep_min": float(p.E_rep_min),        
+        "M_repro_min": float(p.M_repro_min),   # NEW
+        "E_rep_min": float(p.E_rep_min),
 
         "metabolism_scale": float(p.metabolism_scale),
         "susceptibility": float(p.susceptibility),
         "stress_per_drain": float(p.stress_per_drain),
         "repair_capacity": float(p.repair_capacity),
         "frailty_gain": float(p.frailty_gain),
+
+        "child_E_fast": float(p.child_E_fast),
+        "child_E_slow": float(p.child_E_slow),
+        "child_Fg": float(p.child_Fg),
+        "child_M": float(p.child_M),   # NEW
 
         "risk_aversion": float(p.risk_aversion),
         "sociability": float(p.sociability),

@@ -347,6 +347,12 @@ def main() -> None:
     fig._keys = keys              # type: ignore[attr-defined]
     fig._queue = Q                # type: ignore[attr-defined]
 
+    # Set window title
+    try:
+        fig.canvas.manager.set_window_title("NEP – Pheno Plot")
+    except Exception:
+        pass
+        
     plt.show()
 
 

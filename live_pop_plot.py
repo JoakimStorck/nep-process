@@ -270,6 +270,12 @@ def main() -> None:
     fig._live_timer = tmr
     fig._series = series
 
+    # Set window title
+    try:
+        fig.canvas.manager.set_window_title("NEP – Pop Plot")
+    except Exception:
+        pass
+        
     plt.show()
 
 

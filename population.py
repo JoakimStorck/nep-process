@@ -28,7 +28,7 @@ class PopParams:
     init_pop: int = 12
     max_pop: int = 2000
 
-    n_traits: int = 18
+    n_traits: int = 20
 
     spawn_jitter_r: float = 1.5
 
@@ -133,9 +133,26 @@ class Population:
     def _emit_birth(self, t: float, child: Agent, parent: Optional[Agent]) -> None:
         self._emit("birth", t, records.birth_record(t, child, parent))
 
-    def _emit_death(self, t: float, agent: Agent, carcass_amount: float, carcass_rad: int) -> None:
-        self._emit("death", t, records.death_record(t, agent, carcass_amount, carcass_rad))
-
+    def _emit_death(
+        self,
+        t: float,
+        agent: Agent,
+        carcass_amount: float,
+        carcass_rad: int,
+        carcass_amount_field: float | None = None,
+    ) -> None:
+        self._emit(
+            "death",
+            t,
+            records.death_record(
+                t,
+                agent,
+                carcass_amount=carcass_amount,
+                carcass_rad=carcass_rad,
+                carcass_amount_field=carcass_amount_field,
+            ),
+        )
+        
     def _emit_population(self, t: float, births: int, deaths: int) -> None:
         mean_E, mean_D = self.mean_stats()
         self._emit(
@@ -335,29 +352,72 @@ class Population:
         for a in self.agents:
             if not a.body.alive:
                 self._banks[a._policy_key].release(a._policy_slot)
-
-                amp = self.PP.carcass_yield * float(a.body.E_total())
-                self.world.add_carcass(a.x, a.y, amount=amp, rad=self.PP.carcass_rad)
-
+        
+                M = float(getattr(a.body, "M", -1.0))
+                Et = float(a.body.E_total())
+                D  = float(a.body.D)
+        
+                # "mass carcass yield" (true mass units)
+                amp_mass = float(self.PP.carcass_yield) * max(0.0, M)
+        
+                # map mass -> C field amplitude (0..1-ish)
+                C_unit = float(getattr(self.world.P, "C_unit_mass", 1.0))  # WorldParams
+                amp_field = amp_mass / max(1e-9, C_unit)
+        
+                # Optional visibility floor in *field units* (not mass units)
+                AMP_FIELD_MIN = 0.02
+                if amp_field > 0.0 and amp_field < AMP_FIELD_MIN:
+                    amp_field = AMP_FIELD_MIN
+        
+                self.world.add_carcass(a.x, a.y, amount=amp_field, rad=self.PP.carcass_rad)        
                 deaths += 1
-                self._emit_death(self.t, a, carcass_amount=amp, carcass_rad=self.PP.carcass_rad)
+        
+                # IMPORTANT: log mass (true) and field amp (for debugging)
+                self._emit_death(
+                    self.t,
+                    a,
+                    carcass_amount=amp_mass,
+                    carcass_amount_field=amp_field,
+                    carcass_rad=self.PP.carcass_rad,
+                )
             else:
                 survivors.append(a)
         self.agents = survivors
 
-        # 3) births (agent-decided; population just executes + enforces max_pop)
+        # 3) births (agent-decided; population executes + enforces max_pop)
         births = 0
         if len(self.agents) < self.PP.max_pop:
             children: List[Agent] = []
+        
             for a in self.agents:
                 if len(self.agents) + len(children) >= self.PP.max_pop:
                     break
                 if not a.body.alive:
                     continue
         
-                if a.wants_to_reproduce(rng=self.rng):   # agent decides
-                    a.pay_repro_cost(float(a.pheno.repro_cost))
-                    children.append(self._spawn_child(a))
+                if not a.wants_to_reproduce(rng=self.rng):
+                    continue
+        
+                # --- (0) Compute targets from PARENT phenotype ---
+                child_M_target = float(getattr(a.pheno, "child_M", 0.0))
+                child_M_target = max(float(a.AP.M_min), child_M_target)
+        
+                # --- (1) Hard mass budget check BEFORE paying energy cost ---
+                # Parent must not go below M_min after funding child's mass
+                if float(a.body.M) - child_M_target < float(a.AP.M_min):
+                    continue
+        
+                # --- (2) Pay reproduction energy cost (sets cooldown) ---
+                _ = a.pay_repro_cost(float(a.pheno.repro_cost))
+        
+                # --- (3) Transfer mass to child (hard budget) ---
+                a.body.M = float(a.body.M) - child_M_target  # safe due to check above
+        
+                # --- (4) Spawn child and initialize with funded mass ---
+                child = self._spawn_child(a)
+                child.init_newborn_state(a.pheno, child_M_from_parent=child_M_target)
+        
+                children.append(child)
         
             if children:
                 self.agents.extend(children)

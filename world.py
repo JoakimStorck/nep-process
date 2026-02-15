@@ -49,18 +49,17 @@ class WorldParams:
     T0: float = 0.0
     T1: float = 20.0
 
-    # -------------------------
-    # Plant biomass field B (food)
-    # -------------------------
-    B_regen: float = 0.060
-    B_K: float = 1.0
-    B_diff: float = 0.050
-
-    # Germination / ecology forcing (blob injections)
-    seed_p: float = 0.00035
-    seed_amp: float = 0.55
-    seed_rad_min: int = 3
-    seed_rad_max: int = 7
+    # Plant biomass field B
+    B_regen       = 0.025   # 0.060 -> 0.018 -> 0.025
+    B_K: float    = 1.0
+    B_diff        = 0.006   # 0.050 -> 0.006
+    B_wither_base = 0.005   # 0.005 -> 0.015?
+    
+    # Seeding (patch driver)
+    seed_p       = 0.0010   # 0.00035 -> 0.0010
+    seed_amp     = 0.22     # 0.55 -> 0.22
+    seed_rad_min = 2        # 3 -> 2
+    seed_rad_max = 5        # 7 -> 5
 
     # Growth window (triangular)
     T_grow_min: float = 5.0
@@ -68,7 +67,6 @@ class WorldParams:
     T_grow_max: float = 35.0
     
     # Temperature-driven dieoff (wither)
-    B_wither_base: float = 0.005   # alltid lite respiration/decay
     T_cold: float = 0.0
     cold_width: float = 8.0
     B_wither_cold: float = 0.060   # extra vid kyla
@@ -80,13 +78,13 @@ class WorldParams:
     # -------------------------
     # Hazard field F
     # -------------------------
-    F_decay: float = 0.010
-    F_diff: float = 0.030
+    F_decay: float = 0.025
+    F_diff: float = 0.010
 
     hazard_event_p: float = 0.0012
     hazard_event_amp: float = 0.70
-    hazard_event_rad_min: int = 5
-    hazard_event_rad_max: int = 12
+    hazard_event_rad_min: int = 3
+    hazard_event_rad_max: int = 6
 
     # Optional: make hazards more frequent in cold seasons/latitudes (0 disables)
     winter_hazard_scale: float = 0.0  # e.g. 1.0 -> up to +100% when g(T)=0
@@ -94,9 +92,9 @@ class WorldParams:
     # -------------------------
     # Carcass field C
     # -------------------------
-    C_decay: float = 0.020
-    C_diff: float = 0.015
-
+    C_decay: float = 0.05
+    C_diff: float = 0.00
+    C_unit_mass: float = 2.0   # mass units that correspond to +1.0 "carcass field"
 
 @dataclass
 class World:

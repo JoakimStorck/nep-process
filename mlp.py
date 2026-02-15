@@ -77,8 +77,10 @@ class MLPGenome:
             self.biases.append(bias)
 
         if init_traits_if_missing and self.traits is None:
-            self.init_traits(rng, n_traits=n_traits)
-
+            if n_traits is None:
+                raise ValueError("init_random: n_traits måste anges när traits saknas.")
+            self.init_traits(rng, n_traits=int(n_traits))
+            
         return self
 
     def copy(self) -> "MLPGenome":
