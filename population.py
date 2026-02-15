@@ -152,22 +152,32 @@ class Population:
                 carcass_amount_field=carcass_amount_field,
             ),
         )
-        
+            
     def _emit_population(self, t: float, births: int, deaths: int) -> None:
         mean_E, mean_D = self.mean_stats()
-        self._emit(
-            "population",
-            t,
-            records.population_record(
-                t=t,
-                pop_n=len(self.agents),
-                births=births,
-                deaths=deaths,
-                mean_E=mean_E,
-                mean_D=mean_D,
-            ),
+    
+        payload = records.population_record(
+            t=t,
+            pop_n=len(self.agents),
+            births=births,
+            deaths=deaths,
+            mean_E=mean_E,
+            mean_D=mean_D,
         )
-
+    
+        # Optional: birth-loop diagnostics (set in step(); absent => defaults)
+        diag = getattr(self, "_last_birth_diag", None) or {}
+        payload.update(
+            {
+                "repro_alive": int(diag.get("alive", 0)),
+                "repro_wants": int(diag.get("wants", 0)),
+                "repro_fail_mass": int(diag.get("fail_mass", 0)),
+                "repro_spawned": int(diag.get("spawned", births)),
+            }
+        )
+    
+        self._emit("population", t, payload)
+        
     def _emit_sample(self, t: float, a: Agent) -> None:
         self._emit("sample", t, records.sample_record(t, a, pop_n=len(self.agents)))
     
@@ -202,39 +212,16 @@ class Population:
         if float(a.body.E_total()) < float(a.pheno.E_repro_min):
             return False
 
-        # optional "health" gates (keep for now)
-        if float(a.body.D) > float(self.PP.D_birth_max):
+        # optional "health" gates (defaults: off)
+        D_birth_max  = float(getattr(self.PP, "D_birth_max", 1e9))
+        Fg_birth_max = float(getattr(self.PP, "Fg_birth_max", 1e9))
+
+        if float(a.body.D) > D_birth_max:
             return False
-        if float(a.body.Fg) > float(self.PP.Fg_birth_max):
+        if float(a.body.Fg) > Fg_birth_max:
             return False
 
         return True
-
-    def _p_birth(self, a: Agent) -> float:
-        """
-        MV0: phenotype base probability times simple monotone modifiers.
-        Keep cheap and stable. Clamp [0,1].
-        """
-        p0 = float(a.pheno.p_repro_base)
-
-        # Optional shaping by energy margin above minimum
-        if self.PP.E_margin_scale > 0.0:
-            E = float(a.body.E_total())
-            Emin = float(a.pheno.E_repro_min)
-            margin = max(0.0, E - Emin)
-            # saturating ramp: margin / (margin + scale)
-            s = float(self.PP.E_margin_scale)
-            m = margin / (margin + s)
-        else:
-            m = 1.0
-
-        # Hunger modifier (prefer reproduction when not starving)
-        h = float(a.body.hunger())
-        hw = float(self.PP.hunger_weight)
-        hm = max(0.0, 1.0 - h) ** max(0.0, hw)
-
-        p = p0 * m * hm
-        return float(max(0.0, min(1.0, p)))
         
     # -----------------------
     # policy net + genetics
@@ -281,6 +268,38 @@ class Population:
         self._emit_birth(self.t, child, parent)
         return child
 
+    def _child_M_target(self, a: Agent) -> float:
+        m = float(getattr(a.pheno, "child_M", 0.0))
+        return max(float(a.AP.M_min), m)
+    
+    def _can_fund_child_mass(self, a: Agent, child_M: float) -> bool:
+        # Parent must not go below M_min after funding child's mass
+        return (float(a.body.M) - float(child_M)) >= float(a.AP.M_min)
+    
+    def _try_spawn_child(self, parent: Agent) -> Optional[Agent]:
+        """
+        Execute reproduction side-effects in a single place:
+          - pay energy cost (sets cooldown)
+          - transfer mass budget
+          - spawn child + initialize newborn state
+        Returns child if successful, else None.
+        """
+        child_M = self._child_M_target(parent)
+    
+        if not self._can_fund_child_mass(parent, child_M):
+            return None
+    
+        # Pay reproduction energy cost (sets cooldown)
+        _ = parent.pay_repro_cost(float(parent.pheno.repro_cost))
+    
+        # Transfer mass to child (hard budget)
+        parent.body.M = float(parent.body.M) - child_M
+    
+        # Spawn child and initialize with funded mass
+        child = self._spawn_child(parent)
+        child.init_newborn_state(parent.pheno, child_M_from_parent=child_M)
+        return child
+    
     # -----------------------
     # main loop
     # -----------------------
@@ -388,67 +407,68 @@ class Population:
         births = 0
         if len(self.agents) < self.PP.max_pop:
             children: List[Agent] = []
-        
+
+            n_alive = 0
+            n_wants = 0
+            n_fail_mass = 0
+            n_spawned = 0
+
             for a in self.agents:
                 if len(self.agents) + len(children) >= self.PP.max_pop:
                     break
                 if not a.body.alive:
                     continue
-        
+
+                n_alive += 1
+
                 if not a.wants_to_reproduce(rng=self.rng):
                     continue
-        
-                # --- (0) Compute targets from PARENT phenotype ---
-                child_M_target = float(getattr(a.pheno, "child_M", 0.0))
-                child_M_target = max(float(a.AP.M_min), child_M_target)
-        
-                # --- (1) Hard mass budget check BEFORE paying energy cost ---
-                # Parent must not go below M_min after funding child's mass
-                if float(a.body.M) - child_M_target < float(a.AP.M_min):
+                n_wants += 1
+
+                child = self._try_spawn_child(a)
+                if child is None:
+                    n_fail_mass += 1
                     continue
-        
-                # --- (2) Pay reproduction energy cost (sets cooldown) ---
-                _ = a.pay_repro_cost(float(a.pheno.repro_cost))
-        
-                # --- (3) Transfer mass to child (hard budget) ---
-                a.body.M = float(a.body.M) - child_M_target  # safe due to check above
-        
-                # --- (4) Spawn child and initialize with funded mass ---
-                child = self._spawn_child(a)
-                child.init_newborn_state(a.pheno, child_M_from_parent=child_M_target)
-        
+
                 children.append(child)
-        
+                n_spawned += 1
+
             if children:
                 self.agents.extend(children)
             births = len(children)
 
+            self._last_birth_diag = {
+                "alive": n_alive,
+                "wants": n_wants,
+                "fail_mass": n_fail_mass,
+                "spawned": n_spawned,
+            }
+
+        if len(self.agents) >= self.PP.max_pop:
+            self._last_birth_diag = {"alive": 0, "wants": 0, "fail_mass": 0, "spawned": 0}
+    
         # 3.5) random cross-section sampling (one agent per sample_dt)
         sd = float(self.PP.sample_dt)
         if sd > 0.0 and self.t + 1e-12 >= self._next_sample_t:
             alive_now = [a for a in self.agents if a.body.alive]
             if alive_now:
-                # optional anti-repeat
                 if int(self.PP.sample_avoid_repeat_k) > 0 and self._recent_sample_ids:
                     k = int(self.PP.sample_avoid_repeat_k)
                     recent = set(self._recent_sample_ids[-k:])
                     pool = [a for a in alive_now if int(a.id) not in recent]
                     if pool:
                         alive_now = pool
-        
+
                 a_pick = alive_now[int(self.rng.integers(0, len(alive_now)))]
                 self._emit_sample(self.t, a_pick)
-        
+
                 if int(self.PP.sample_avoid_repeat_k) > 0:
                     self._recent_sample_ids.append(int(a_pick.id))
-        
-            # advance next target (handle if dt >> sd)
+
             while self._next_sample_t <= self.t + 1e-12:
                 self._next_sample_t += sd
-                
-        # 4) advance time (convention: events refer to state at this.t, before increment)
-        # If you prefer "after", move this up and pass self.t after increment.
-        # Here we keep your previous convention stable.
+
+        # 4) advance time
         self._emit_world(self.t)
         self._emit_population(self.t, births=births, deaths=deaths)
 
