@@ -140,7 +140,14 @@ class Body:
     D: float = 0.0
     Fg: float = 0.15
     alive: bool = True
-
+    # --- Ledger diagnostics (per-individual, internal only) ---
+    last_ledger: dict | None = None
+    ledger_steps: int = 0
+    ledger_bad_steps: int = 0
+    ledger_max_abs: float = 0.0
+    ledger_max_rel: float = 0.0
+    ledger_worst: dict | None = None
+    
     def E_total(self) -> float:
         return 0.6 * float(self.E_fast) + 0.4 * float(self.E_slow)
 
@@ -236,77 +243,92 @@ class Body:
         """
         if not self.alive:
             return
-
+    
         dt = float(self.P.dt)
-
+    
+        # ---------------------------------------------------------
+        # (0) Energy ledger (increment 1: transparency, no physics change)
+        # ---------------------------------------------------------
+        E_before = float(self.E_total())
+        M_before = float(self.M)
+    
         # ---------------------------------------------------------
         # (1) Intake -> E (buffer) then M (surplus)
         # ---------------------------------------------------------
         got = max(0.0, float(food_got))
-        I = float(self.P.eat_gain) * got  # internal energy units
-
+        E_in = float(self.P.eat_gain) * got  # internal energy units (same as previous I)
+    
         # buffer capacity scales with current mass (before growth this step)
         Et = float(self.E_total())
         Ecap = float(self.E_cap())
         room = max(0.0, Ecap - Et)
-
-        dE = min(I, room)
-        if dE > 0.0:
+    
+        dE_store = min(E_in, room)  # energy that actually enters E_fast/E_slow
+        if dE_store > 0.0:
             # bias to fast store (life support)
-            self.E_fast = float(self.E_fast) + (0.85 * dE) / 0.6
-            self.E_slow = float(self.E_slow) + (0.15 * dE) / 0.4
-
-        surplus = max(0.0, I - dE)
-        if surplus > 0.0:
-            self.M = float(self.M) + float(self.P.I_to_M_eff) * surplus
-
+            self.E_fast = float(self.E_fast) + (0.85 * dE_store) / 0.6
+            self.E_slow = float(self.E_slow) + (0.15 * dE_store) / 0.4
+    
+        # surplus energy converted to mass (note: leaves the E-ledger)
+        E_to_M = max(0.0, E_in - dE_store)
+        if E_to_M > 0.0:
+            dM_grow = float(self.P.I_to_M_eff) * E_to_M
+            self.M = float(self.M) + dM_grow
+        else:
+            dM_grow = 0.0
+    
         # ---------------------------------------------------------
-        # (2) Drain (maintenance scales with M)
+        # (2) Drain (maintenance scales with M) — now split into components
+        #     (increment 1: identical math, just expanded)
         # ---------------------------------------------------------
         sense_cost = float(self._sense_cost(pheno))
         M_eff = max(1e-9, float(self.M))
-
-        drain_rate = float(pheno.metabolism_scale) * M_eff * (
-            float(self.P.basal)
-            + float(self.P.move_cost) * float(speed)
-            + float(self.P.compute_cost) * float(activity)
-            + sense_cost
-        )
-        drain = dt * drain_rate
-
-        paid = self.take_energy(drain)
-        deficit = max(0.0, drain - paid)
-
+    
+        out_basal = dt * float(pheno.metabolism_scale) * M_eff * float(self.P.basal)
+        out_move = dt * float(pheno.metabolism_scale) * M_eff * float(self.P.move_cost) * float(speed)
+        out_compute = dt * float(pheno.metabolism_scale) * M_eff * float(self.P.compute_cost) * float(activity)
+        out_sense = dt * float(pheno.metabolism_scale) * M_eff * sense_cost
+    
+        E_out_drain = out_basal + out_move + out_compute + out_sense
+    
+        paid = self.take_energy(E_out_drain)
+        deficit = max(0.0, E_out_drain - paid)
+    
         # ---------------------------------------------------------
         # (3) Catabolism: M -> E to cover deficit
         # ---------------------------------------------------------
+        E_from_M = 0.0
+        dM_cat = 0.0
+    
         if deficit > 0.0:
             eff = max(1e-12, float(self.P.M_to_E_eff))
-            dM = deficit / eff
-
-            if dM >= float(self.M):
+            dM_cat = deficit / eff
+    
+            if dM_cat >= float(self.M):
                 # burn all remaining mass
                 self.M = 0.0
                 self.E_fast = 0.0
                 self.E_slow = 0.0
+                # in this terminal case we don't bother forcing ledger closure;
+                # agent is effectively dead-in-waiting (handled below).
             else:
-                self.M = float(self.M) - dM
-                dE2 = eff * dM
+                self.M = float(self.M) - dM_cat
+                E_from_M = eff * dM_cat
                 # put conversion energy in fast then pay deficit
-                self.E_fast = float(self.E_fast) + (dE2 / 0.6)
+                self.E_fast = float(self.E_fast) + (E_from_M / 0.6)
                 _ = self.take_energy(deficit)
-
+    
         # refresh energy state for downstream gating
         Et = float(self.E_total())
         Ecap = float(self.E_cap())
-
+    
         # ---------------------------------------------------------
         # (4) Damage + repair + fatigue (keep in [0,1])
         # ---------------------------------------------------------
         # normalized proxies
         e_lack = clamp((Ecap - Et) / max(Ecap, 1e-9), 0.0, 1.0)
         d_norm = clamp(float(self.D) / max(float(self.P.D_max), 1e-9), 0.0, 1.0)
-
+    
         speed_n = clamp(float(speed) / max(float(self.P.v_max), 1e-9), 0.0, 1.0)
         effort = speed_n + 0.6 * float(activity)
         rest = (
@@ -314,20 +336,22 @@ class Body:
             * max(0.0, 1.0 - float(activity))
             * (0.25 + 0.75 * max(0.0, 1.0 - float(hazard)))
         )
-
-        # intake normalization for repair gating (use I)
-        # upper bound is a soft scale; keep stable
+    
+        # intake normalization for repair gating (use E_in)
         I_ref = max(1e-9, float(self.P.eat_gain) * float(self.P.eat_rate) * dt)
-        intake_n = clamp(I / I_ref, 0.0, 1.0)
-
+        intake_n = clamp(E_in / I_ref, 0.0, 1.0)
+    
         # weakness coupling
         w = float(self.weakness())
         starve_stress = 1.0 + float(self.P.starve_stress_gain) * (1.0 - w)
-
+    
         susc = float(pheno.susceptibility)
         frail = 1.0 + float(pheno.frailty_gain) * d_norm
         k_E = 1.2
-
+    
+        # NOTE: keep dD_met using the *rate* (pre-dt) as before
+        drain_rate = (out_basal + out_move + out_compute + out_sense) / max(dt, 1e-12)
+    
         dD_haz = dt * (
             float(self.P.hazard_to_damage)
             * susc
@@ -336,45 +360,45 @@ class Body:
             * float(hazard)
             * starve_stress
         )
-
+    
         k_eff = 0.02
         dD_eff = dt * (k_eff * susc * (1.0 + k_E * e_lack) * frail * effort * starve_stress)
-
+    
         dD_met = dt * (float(pheno.stress_per_drain) * drain_rate * starve_stress)
-
+    
         dD_in = dD_haz + dD_eff + dD_met
-
+    
         # --- repair outflow ---
         E_rep_min = float(pheno.E_rep_min)
-        # normalize against Ecap, not absolute 1.0
-        # If Et >= (E_rep_min * Ecap), allow repair.
         E_thr = E_rep_min * Ecap
         G_E = clamp((Et - E_thr) / max(Ecap - E_thr, 1e-9), 0.0, 1.0)
-
+    
         G_rest = 0.2 + 0.8 * rest
         G_int = 0.3 + 0.7 * intake_n
         fresh = 1.0 - float(self.Fg)
         G_fresh = 0.75 + 0.25 * fresh
-
+    
         frailty_damp = 1.0 / (1.0 + float(pheno.frailty_gain) * d_norm)
         rep_fac = float(self.repair_factor())
-
+    
         dD_rep = dt * float(pheno.repair_capacity) * rep_fac * G_rest * G_E * G_int * G_fresh * frailty_damp
-
-        # energy cost for repair
+    
+        # energy cost for repair (ledger this explicitly)
+        E_out_repair = 0.0
         k_rep = float(getattr(self.P, "k_rep", 0.45))
         E_need = max(0.0, k_rep * float(dD_rep))
         if E_need > 0.0:
             E_paid = self.take_energy(E_need)
+            E_out_repair = E_paid
             if E_paid < E_need:
                 dD_rep *= (E_paid / max(E_need, 1e-12))
-
+    
         self.D = clamp(float(self.D) + float(dD_in) - float(dD_rep), 0.0, float(self.P.D_max))
-
+    
         # fatigue
         fatigue_effort_eff = float(self.P.fatigue_effort) * (1.0 + 0.4 * d_norm)
         fatigue_recover_eff = float(self.P.fatigue_recover) * max(0.0, (1.0 - 0.05 * d_norm))
-
+    
         self.Fg = clamp(
             float(self.Fg)
             + dt
@@ -386,17 +410,102 @@ class Body:
             0.0,
             1.0,
         )
-
+    
         # ---------------------------------------------------------
         # (5) Death conditions
         # ---------------------------------------------------------
         if float(self.D) >= float(self.P.D_max):
             self.alive = False
             return
-
+    
         if float(self.M) <= float(self.P.M_min):
             self.alive = False
             return
+    
+        # ---------------------------------------------------------
+        # (6) Ledger finalize + hardened drift accounting (increment 1B)
+        # ---------------------------------------------------------
+        E_after = float(self.E_total())
+        M_after = float(self.M)
+
+        expected_E_after = (
+            E_before
+            + dE_store      # actual stored intake into E buffers
+            + E_from_M      # energy created by catabolism (internal units)
+            - E_out_drain   # maintenance drain (attempted)
+            - E_out_repair  # actual paid repair energy
+        )
+
+        drift = E_after - expected_E_after
+        drift_abs = abs(drift)
+
+        # Robust scale for relative drift (prevents div-by-small)
+        scale = max(
+            1.0,
+            abs(E_before),
+            abs(E_after),
+            abs(dE_store),
+            abs(E_out_drain),
+            abs(E_out_repair),
+            abs(E_from_M),
+        )
+        drift_rel = drift / scale
+        drift_rel_abs = abs(drift_rel)
+
+        # tolerances (can be overridden via AgentParams; defaults are conservative)
+        eps_abs = float(getattr(self.P, "ledger_eps_abs", 1e-8))
+        eps_rel = float(getattr(self.P, "ledger_eps_rel", 1e-12))
+        ok = (drift_abs <= eps_abs) or (drift_rel_abs <= eps_rel)
+
+        # Counters (per-individual)
+        self.ledger_steps = int(getattr(self, "ledger_steps", 0)) + 1
+        if not ok:
+            self.ledger_bad_steps = int(getattr(self, "ledger_bad_steps", 0)) + 1
+
+        # Max trackers
+        self.ledger_max_abs = max(float(getattr(self, "ledger_max_abs", 0.0)), drift_abs)
+        self.ledger_max_rel = max(float(getattr(self, "ledger_max_rel", 0.0)), drift_rel_abs)
+
+        # Store last ledger snapshot for later logging/records
+        self.last_ledger = {
+            "ok": ok,
+            "eps_abs": eps_abs,
+            "eps_rel": eps_rel,
+            "scale": scale,
+            "drift": drift,
+            "drift_abs": drift_abs,
+            "drift_rel": drift_rel,
+            "E_before": E_before,
+            "E_in": E_in,
+            "E_store": dE_store,
+            "E_to_M": E_to_M,
+            "E_out_basal": out_basal,
+            "E_out_move": out_move,
+            "E_out_compute": out_compute,
+            "E_out_sense": out_sense,
+            "E_out_drain": E_out_drain,
+            "E_out_repair": E_out_repair,
+            "E_from_M": E_from_M,
+            "deficit": deficit,
+            "E_after": E_after,
+            "M_before": M_before,
+            "dM_grow": dM_grow,
+            "dM_cat": dM_cat,
+            "M_after": M_after,
+        }
+
+        # Keep a worst-case snapshot (by absolute drift)
+        prev_worst = float(getattr(self, "ledger_max_abs", 0.0))
+        # NOTE: ledger_max_abs already updated; compare against prior value:
+        if drift_abs >= prev_worst:
+            self.ledger_worst = dict(self.last_ledger)
+
+        # Optional strict mode
+        if bool(getattr(self.P, "assert_ledger", False)) and (not ok):
+            raise AssertionError(
+                f"Energy ledger drift: abs={drift_abs:.3e} rel={drift_rel:.3e} "
+                f"(eps_abs={eps_abs:.3e}, eps_rel={eps_rel:.3e})"
+            )
 
 
 # -------------------------
