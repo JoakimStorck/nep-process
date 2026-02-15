@@ -94,8 +94,7 @@ class AgentParams:
     E_cap_per_M: float = 0.60
 
     # basal metabolism (allometric in FAS I-2A)
-    k_basal: float = 0.0
-    basal: float = 0.006   # legacy fallback
+    k_basal: float = 0.006
 
     # activity-related metabolic costs
     move_cost: float = 0.035
@@ -349,7 +348,7 @@ class Body:
         # ---------------------------------------------------------
         sense_cost = float(self._sense_cost(pheno))
         M_eff = max(1e-9, float(self.M))
-        k_basal = float(getattr(self.P, "k_basal", getattr(self.P, "basal", 0.0)))
+        k_basal = float(self.P.k_basal)
         
         out_basal = dt * float(pheno.metabolism_scale) * (M_eff ** 0.75) * k_basal
         out_move = dt * float(pheno.metabolism_scale) * M_eff * float(self.P.move_cost) * float(speed)
