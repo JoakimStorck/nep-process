@@ -147,6 +147,11 @@ class Body:
     ledger_max_abs: float = 0.0
     ledger_max_rel: float = 0.0
     ledger_worst: dict | None = None
+    # --- Numerical guards (per-individual, internal only) ---
+    guard_steps: int = 0
+    guard_killed: int = 0
+    guard_clamp_steps: int = 0
+    guard_last: dict | None = None
     
     def E_total(self) -> float:
         return 0.6 * float(self.E_fast) + 0.4 * float(self.E_slow)
@@ -182,6 +187,21 @@ class Body:
         w = float(self.weakness())
         return float(self.P.rep_weak_min + (1.0 - float(self.P.rep_weak_min)) * w)
 
+    def _finite(self, x: float) -> bool:
+        return math.isfinite(float(x))
+
+    def _guard_snapshot(self, where: str) -> dict:
+        # minimal snapshot: state only (no huge dicts)
+        return {
+            "where": where,
+            "E_fast": float(self.E_fast),
+            "E_slow": float(self.E_slow),
+            "M": float(self.M),
+            "D": float(self.D),
+            "Fg": float(self.Fg),
+            "alive": bool(self.alive),
+        }
+        
     def take_energy(self, amount: float) -> float:
         """
         Remove 'amount' from the body energy stores (unbounded),
@@ -245,7 +265,42 @@ class Body:
             return
     
         dt = float(self.P.dt)
-    
+
+        # ---------------------------------------------------------
+        # (0A) Numerical guard (pre): kill on NaN/inf state
+        # ---------------------------------------------------------
+        if not (
+            self._finite(self.E_fast)
+            and self._finite(self.E_slow)
+            and self._finite(self.M)
+            and self._finite(self.D)
+            and self._finite(self.Fg)
+        ):
+            self.guard_steps += 1
+            self.guard_killed += 1
+            self.guard_last = self._guard_snapshot("pre")
+            self.alive = False
+            return
+
+        # Also guard the inputs to this step (cheap, prevents propagation)
+        if not (
+            self._finite(speed)
+            and self._finite(activity)
+            and self._finite(hazard)
+            and self._finite(food_got)
+        ):
+            self.guard_steps += 1
+            self.guard_killed += 1
+            self.guard_last = {
+                **self._guard_snapshot("pre_inputs"),
+                "speed": float(speed),
+                "activity": float(activity),
+                "hazard": float(hazard),
+                "food_got": float(food_got),
+            }
+            self.alive = False
+            return
+            
         # ---------------------------------------------------------
         # (0) Energy ledger (increment 1: transparency, no physics change)
         # ---------------------------------------------------------
@@ -410,7 +465,58 @@ class Body:
             0.0,
             1.0,
         )
-    
+
+        # ---------------------------------------------------------
+        # (4B) Numerical guard (post): clamp + finiteness
+        # ---------------------------------------------------------
+        clamped = False
+
+        # Energy stores must not go negative
+        if float(self.E_fast) < 0.0:
+            self.E_fast = 0.0
+            clamped = True
+        if float(self.E_slow) < 0.0:
+            self.E_slow = 0.0
+            clamped = True
+
+        # Mass must not go negative (if it does, clamp and let death rules handle it)
+        if float(self.M) < 0.0:
+            self.M = 0.0
+            clamped = True
+
+        # Damage bounded
+        if float(self.D) < 0.0:
+            self.D = 0.0
+            clamped = True
+        elif float(self.D) > float(self.P.D_max):
+            self.D = float(self.P.D_max)
+            clamped = True
+
+        # Fatigue bounded (already clamped, but enforce)
+        Fg0 = float(self.Fg)
+        self.Fg = clamp(Fg0, 0.0, 1.0)
+        if float(self.Fg) != Fg0:
+            clamped = True
+
+        if clamped:
+            self.guard_steps += 1
+            self.guard_clamp_steps += 1
+            self.guard_last = self._guard_snapshot("post_clamp")
+
+        # Final finiteness check after clamps
+        if not (
+            self._finite(self.E_fast)
+            and self._finite(self.E_slow)
+            and self._finite(self.M)
+            and self._finite(self.D)
+            and self._finite(self.Fg)
+        ):
+            self.guard_steps += 1
+            self.guard_killed += 1
+            self.guard_last = self._guard_snapshot("post")
+            self.alive = False
+            return
+            
         # ---------------------------------------------------------
         # (5) Death conditions
         # ---------------------------------------------------------
