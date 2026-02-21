@@ -1,4 +1,3 @@
-# viewer_pygame.py
 from __future__ import annotations
 
 import math
@@ -64,8 +63,8 @@ class ViewerConfig:
     show_hud: bool = True
 
     # Modes:
-    #   CBF  : RGB=(C,B,F)
-    #   B/F/C: grayscale single field
+    #   CB   : RGB=(C,B,0)
+    #   B/C  : grayscale single field
     #   TEMP : grayscale temperature
     #   VEG  : vegetation health (green<->brown based on stress)
     mode: str = "VEG"
@@ -99,17 +98,16 @@ class WorldViewer:
                 if ev.key == pygame.K_SPACE:
                     self._paused = not self._paused
 
+                # modes (hazard removed)
                 if ev.key == pygame.K_1:
-                    self.cfg.mode = "CBF"
+                    self.cfg.mode = "CB"
                 if ev.key == pygame.K_2:
                     self.cfg.mode = "B"
                 if ev.key == pygame.K_3:
-                    self.cfg.mode = "F"
-                if ev.key == pygame.K_4:
                     self.cfg.mode = "C"
-                if ev.key == pygame.K_5:
+                if ev.key == pygame.K_4:
                     self.cfg.mode = "TEMP"
-                if ev.key == pygame.K_6:
+                if ev.key == pygame.K_5:
                     self.cfg.mode = "VEG"
 
                 if ev.key == pygame.K_a:
@@ -133,10 +131,9 @@ class WorldViewer:
         if cap > 0:
             self._clock.tick(cap)
         else:
-            pass
             # ingen throttling (ingen sleep)
-            #self._clock.tick(0)
-            
+            pass
+
     # ---------- rendering ----------
     def _ensure_screen(self, size: int) -> None:
         if self._screen is not None:
@@ -189,18 +186,16 @@ class WorldViewer:
     def _make_rgb(self, world) -> np.ndarray:
         """Returns (H,W,3) uint8."""
         B = np.asarray(world.B, dtype=np.float32)
+        C = np.asarray(world.C, dtype=np.float32)
+
         P = getattr(world, "P", None)
         BK = float(getattr(P, "B_K", 1.0)) if P is not None else 1.0
         B01 = np.clip(B / max(BK, 1e-12), 0.0, 1.0).astype(np.float32, copy=False)
-        F = np.asarray(world.F, dtype=np.float32)
-        C = np.asarray(world.C, dtype=np.float32)
+
         mode = self.cfg.mode.upper().strip()
 
         if mode == "B":
             img = np.dstack([B01, B01, B01])
-
-        elif mode == "F":
-            img = np.dstack([F, F, F])
 
         elif mode == "C":
             img = np.dstack([C, C, C])
@@ -216,35 +211,36 @@ class WorldViewer:
             # vegetation "health": green<->brown based on stress = wither/(growth+wither)
             P = world.P if hasattr(world, "P") else getattr(world, "params", None)
             if P is None:
-                img = np.dstack([B, B, B])
+                img = np.dstack([B01, B01, B01])
             else:
                 BK = float(getattr(P, "B_K", 1.0))
                 invBK = 1.0 / max(BK, 1e-12)
                 B01 = np.clip(B * invBK, 0.0, 1.0).astype(np.float32, copy=False)
-        
+
                 T = self._temp_field(world, B)
                 G, m = self._veg_G_and_m(T, P)
-        
+
                 # mirror World.step() terms (no diffusion needed for "health" coloring)
                 growth = (float(P.B_regen) * G) * (1.0 - B * invBK) * B
                 wither = m * B
-        
+
                 eps = np.float32(1e-9)
                 stress = wither / (growth + wither + eps)  # 0..1
-        
+
                 # brightness scales with normalized biomass (kg -> 0..1)
                 green = B01 * (1.0 - stress)
                 brown = B01 * stress
-        
+
                 R = brown
                 Gc = green + 0.35 * brown
                 Bl = 0.10 * brown
-        
+
                 img = np.dstack([R, Gc, Bl]).astype(np.float32, copy=False)
 
         else:
-            # default "CBF": R=C, G=B, B=F
-            img = np.dstack([C, B01, F])
+            # default "CB": R=C, G=B, B=0
+            Z = np.zeros_like(B01, dtype=np.float32)
+            img = np.dstack([C, B01, Z])
 
         img = self._gamma(img)
         return _as_u8_rgb(img)
@@ -294,17 +290,17 @@ class WorldViewer:
     def _draw_hud(self, pop, births_total: int, deaths_total: int) -> None:
         if not self.cfg.show_hud:
             return
-    
+
         # time
         t = getattr(pop, "t", None)
         if t is None and hasattr(pop, "world"):
             t = getattr(pop.world, "t", 0.0)
-    
+
         # population (alive)
         n = 0
         if hasattr(pop, "agents"):
             n = sum(1 for a in pop.agents if _is_alive(a))
-    
+
         # temperature stats (global + hemispheres)
         tmean = tmin = tmax = float("nan")
         tmeanN = tmeanS = float("nan")
@@ -318,16 +314,15 @@ class WorldViewer:
                 if 0 < mid < Ty.size:
                     tmeanN = float(np.mean(Ty[:mid]))
                     tmeanS = float(np.mean(Ty[mid:]))
-    
+
         mode = self.cfg.mode.upper()
         paused = "PAUSED" if self._paused else ""
-    
-        # Compose 2 lines to avoid clipping off-screen
+
         line1 = (
             f"t={t:8.2f}  pop={n:4d}  born={int(births_total):6d}  dead={int(deaths_total):6d}  "
             f"mode={mode}  gamma={self.cfg.gamma:.2f}  {paused}"
         )
-    
+
         if math.isfinite(tmean):
             if math.isfinite(tmeanN) and math.isfinite(tmeanS):
                 line2 = (
@@ -338,11 +333,10 @@ class WorldViewer:
                 line2 = f"T(mean/min/max)={tmean:5.1f}/{tmin:5.1f}/{tmax:5.1f}"
         else:
             line2 = "T(mean/min/max)=NA"
-    
-        # Draw with shadow for readability
+
         x0, y0 = 5, 5
         dy = 18
-    
+
         for i, text in enumerate([line1, line2]):
             y = y0 + i * dy
             surf_shadow = self._font.render(text, True, (0, 0, 0))

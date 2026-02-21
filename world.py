@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 import random
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Iterable, Optional, Tuple
 
 import numpy as np
 
@@ -13,10 +13,9 @@ def clamp(x: float, lo: float, hi: float) -> float:
     return lo if x < lo else hi if x > hi else x
 
 
-def _clip01(x: np.ndarray) -> np.ndarray:
-    return np.clip(x, 0.0, 1.0)
-
-
+# -------------------------
+# Parameters
+# -------------------------
 @dataclass
 class WorldParams:
     size: int = 64
@@ -49,8 +48,8 @@ class WorldParams:
     # Plant biomass field B [kg per cell]
     # -------------------------
     B_K: float = 1e-3          # kg/cell at carrying capacity (tune later)
-    B_regen: float = 0.025    # 1/time (logistic rate)
-    B_diff: float = 0.006     # diffusion coefficient (same algebra; tune)
+    B_regen: float = 0.025     # 1/time (logistic rate)
+    B_diff: float = 0.006      # diffusion coefficient
     B_wither_base: float = 0.005  # 1/time
 
     # Seeding (patch driver)
@@ -74,32 +73,22 @@ class WorldParams:
     B_wither_hot: float = 0.020
 
     # --- Perception scaling (kg -> u in [0,1]) ---
-    B_sense_K: float = 5e-4   # kg where perception ≈ 0.5
+    B_sense_K: float = 5e-4  # kg where perception ≈ 0.5
 
     # -------------------------
     # Carcass field C [kg per cell]
     # -------------------------
-    C_K: float = 1e-3        # kg/cell "practical cap" for numerics (tune)
-    C_decay: float = 0.005   # 1/time (same semantics as B_wither etc)
+    C_K: float = 1e-3        # kg/cell "practical cap" for numerics (optional)
+    C_decay: float = 0.005   # 1/time
     C_diff: float = 0.00     # diffusion coefficient
-    
+
     # --- Perception scaling ---
     C_sense_K: float = 5e-4
 
-    # -------------------------
-    # Hazard field F [0..1]
-    # -------------------------
-    F_decay: float = 0.06
-    F_diff: float = 0.004
 
-    hazard_event_p: float = 0.0003
-    hazard_event_amp: float = 0.25
-    hazard_event_rad_min: int = 3
-    hazard_event_rad_max: int = 6
-
-    winter_hazard_scale: float = 0.0
-
-
+# -------------------------
+# World
+# -------------------------
 @dataclass
 class World:
     P: WorldParams
@@ -107,11 +96,14 @@ class World:
     def __post_init__(self) -> None:
         s = int(self.P.size)
 
-        self.A = np.zeros((s, s), dtype=np.int32)     # occupancy (0=tomt, annars agent_id)
-        self.B = np.zeros((s, s), dtype=np.float32)   # biomass [kg/cell]
-        self.F = np.zeros((s, s), dtype=np.float32)   # hazard [0..1]
-        self.C = np.zeros((s, s), dtype=np.float32)   # carcass [0..1] (tills vidare)
+        # occupancy (0=empty else agent_id)
+        self.A = np.zeros((s, s), dtype=np.int32)
 
+        # ecology fields (kg/cell)
+        self.B = np.zeros((s, s), dtype=np.float32)  # plant biomass
+        self.C = np.zeros((s, s), dtype=np.float32)  # carcass biomass
+
+        # time
         self.t = 0.0
 
         # Precompute latitudinal profiles (depend only on y)
@@ -119,26 +111,25 @@ class World:
         lat = np.float32(2.0) * (ys / np.float32(max(1, s - 1))) - np.float32(1.0)  # [-1, +1]
         abs_lat = np.abs(lat)
 
-        Tmean_y = np.float32(self.P.T_eq) - np.float32(self.P.dT_pole) * (abs_lat ** np.float32(self.P.lat_p))
-        Amp_y = np.float32(self.P.A_eq) + (np.float32(self.P.A_pole) - np.float32(self.P.A_eq)) * (
+        self._lat = lat
+        self._abs_lat = abs_lat
+        self._Tmean_y = np.float32(self.P.T_eq) - np.float32(self.P.dT_pole) * (abs_lat ** np.float32(self.P.lat_p))
+        self._Amp_y = np.float32(self.P.A_eq) + (np.float32(self.P.A_pole) - np.float32(self.P.A_eq)) * (
             abs_lat ** np.float32(self.P.amp_q)
         )
 
-        self._lat = lat
-        self._abs_lat = abs_lat
-        self._Tmean_y = Tmean_y
-        self._Amp_y = Amp_y
+        # last-computed profiles (debug/inspection)
+        self.Ty = np.zeros((s,), dtype=np.float32)  # degC per row
+        self.gy = np.ones((s,), dtype=np.float32)   # gate per row in [0,1]
 
-        # For debugging/inspection (last computed)
-        self.Ty = np.zeros((s,), dtype=np.float32)    # temperature per row
-        self.gy = np.ones((s,), dtype=np.float32)     # growth gate per row
+        # initialize temperature profiles at t=0
+        self._update_temperature()
 
-        # initial ecology (B in kg/cell)
+        # initial ecology
         BK = float(self.P.B_K)
-        self.B.fill(np.float32(0.08 * BK))  # t.ex 8% av kapacitet
+        self.B.fill(np.float32(0.08 * BK))
 
         for _ in range(30):
-            # amp i kg: peak ~ 0.9*BK vid centrum
             self._add_blob(
                 self.B,
                 random.randrange(s),
@@ -148,24 +139,8 @@ class World:
                 hi=BK,
             )
 
-        for _ in range(7):
-            self._add_blob(
-                self.F,
-                random.randrange(s),
-                random.randrange(s),
-                amp=0.8,
-                rad=10,
-                hi=1.0,
-            )
-
     # -------------------------
-    # Clips
-    # -------------------------
-    def _clip_B(self, B: np.ndarray) -> np.ndarray:
-        return np.clip(B, 0.0, float(self.P.B_K)).astype(np.float32, copy=False)
-
-    # -------------------------
-    # Temperature / season helpers
+    # Temperature / season
     # -------------------------
     def _update_temperature(self) -> None:
         P = self.P
@@ -175,10 +150,10 @@ class World:
         phase -= float(P.season_phase0)
 
         s = np.float32(math.sin(phase))
-        S_y = self._lat.astype(np.float32, copy=False) * s  # (size,)
+        S_y = self._lat * s  # (size,)
 
         Ty = self._Tmean_y + self._Amp_y * S_y
-        self.Ty = Ty
+        self.Ty = Ty.astype(np.float32, copy=False)
 
         T0 = float(P.T0)
         T1 = float(P.T1)
@@ -200,19 +175,18 @@ class World:
 
     def temperature_at(self, x: float, y: float) -> float:
         s = int(self.P.size)
-        if not hasattr(self, "Ty") or self.Ty.size == 0:
-            return 0.0
-
         yf = float(y) % s
         y0 = int(math.floor(yf)) % s
         y1 = (y0 + 1) % s
         fy = yf - math.floor(yf)
-
         t0 = float(self.Ty[y0])
         t1 = float(self.Ty[y1])
         return (1.0 - fy) * t0 + fy * t1
 
-    def rebuild_agent_layer(self, agents) -> None:
+    # -------------------------
+    # Agent occupancy
+    # -------------------------
+    def rebuild_agent_layer(self, agents: Iterable) -> None:
         A = self.A
         A.fill(0)
         s = int(self.P.size)
@@ -226,7 +200,18 @@ class World:
     # -------------------------
     # Ecology kernels
     # -------------------------
-    def _add_blob(self, A: np.ndarray, cx: int, cy: int, amp: float, rad: int, hi: float = 1.0) -> None:
+    @staticmethod
+    def _laplace(A: np.ndarray) -> np.ndarray:
+        return (
+            np.roll(A, 1, axis=0) + np.roll(A, -1, axis=0)
+            + np.roll(A, 1, axis=1) + np.roll(A, -1, axis=1)
+            - 4.0 * A
+        )
+
+    def _clip_B(self, B: np.ndarray) -> np.ndarray:
+        return np.clip(B, 0.0, float(self.P.B_K)).astype(np.float32, copy=False)
+
+    def _add_blob(self, A: np.ndarray, cx: int, cy: int, amp: float, rad: int, hi: float) -> None:
         """
         Add a gaussian-ish blob with peak amplitude `amp` (same units as A),
         clipped to [0, hi].
@@ -245,17 +230,9 @@ class World:
         mask = r2 <= rr
 
         sigma2 = max(rr / 4.0, 1e-6)
-        blob = float(amp) * np.exp(-r2 / (2.0 * sigma2))  # same units as A
+        blob = float(amp) * np.exp(-r2 / (2.0 * sigma2))
 
         A[mask] = np.clip(A[mask] + blob[mask], 0.0, float(hi)).astype(np.float32, copy=False)
-
-    @staticmethod
-    def _laplace(A: np.ndarray) -> np.ndarray:
-        return (
-            np.roll(A, 1, axis=0) + np.roll(A, -1, axis=0)
-            + np.roll(A, 1, axis=1) + np.roll(A, -1, axis=1)
-            - 4.0 * A
-        )
 
     def step(self) -> None:
         dt = float(self.P.dt)
@@ -265,8 +242,8 @@ class World:
         T = self.temperature_field()  # (s,s) degC
 
         # --- Growth window G(T) (triangular around an optimum)
-        G = np.zeros_like(T, dtype=np.float32)
         Tmin, Topt, Tmax = float(P.T_grow_min), float(P.T_grow_opt), float(P.T_grow_max)
+        G = np.zeros_like(T, dtype=np.float32)
 
         if Topt > Tmin + 1e-9:
             G = np.where((T >= Tmin) & (T < Topt), (T - Tmin) / (Topt - Tmin), G)
@@ -288,32 +265,13 @@ class World:
         # --- Plants: growth - wither + diffusion
         lapB = self._laplace(self.B)
 
-        # logistic growth (units: kg/time)
-        # NOTE: This keeps the old algebra; now B and B_K are kg/cell.
         growth = (float(P.B_regen) * G) * (1.0 - self.B / float(P.B_K)) * self.B
-
-        # active dieoff / respiration / frost/heat stress (kg/time)
         wither = m * self.B
 
         dB = growth - wither + float(P.B_diff) * lapB
         self.B = self._clip_B(self.B + np.float32(dt) * dB)
 
-        # --- Hazard field F: decay + diffusion + stochastic events (still 0..1)
-        lapF = self._laplace(self.F)
-        dF = (-float(P.F_decay) * self.F) + float(P.F_diff) * lapF
-        self.F = _clip01(self.F + np.float32(dt) * dF).astype(np.float32, copy=False)
-
-        hazard_p = float(P.hazard_event_p)
-        if float(P.winter_hazard_scale) > 0.0:
-            gbar = float(np.mean(self.gy))
-            hazard_p *= (1.0 + float(P.winter_hazard_scale) * (1.0 - gbar))
-
-        if hazard_p > 0.0 and random.random() < hazard_p:
-            cx, cy = random.randrange(P.size), random.randrange(P.size)
-            rad = random.randint(P.hazard_event_rad_min, P.hazard_event_rad_max)
-            self._add_blob(self.F, cx, cy, amp=float(P.hazard_event_amp), rad=rad, hi=1.0)
-
-        # --- Carcass field C [kg/cell]: decay + diffusion ---
+        # --- Carcass field C [kg/cell]: decay + diffusion
         lapC = self._laplace(self.C)
         dC = (-float(P.C_decay) * self.C) + float(P.C_diff) * lapC
         self.C = (self.C + np.float32(dt) * np.float32(dC)).astype(np.float32, copy=False)
@@ -323,7 +281,7 @@ class World:
         seed_p = float(P.seed_p)
         if seed_p > 0.0:
             cx, cy = random.randrange(P.size), random.randrange(P.size)
-            Gcy = float(G[cy, 0])  # local season factor at latitude
+            Gcy = float(G[cy, 0])  # season factor at latitude row
             seed_p_eff = seed_p * Gcy
 
             if seed_p_eff > 0.0 and random.random() < seed_p_eff:
@@ -334,140 +292,138 @@ class World:
         self.t += dt
 
     # -------------------------
-    # Sampling
+    # Sampling (renodlad)
     # -------------------------
-    def sample_bilinear_many(self, xs: np.ndarray, ys: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        return _sample_bilinear_many_layers(self.B, self.F, self.C, xs, ys, self.P.size)
+    def sample(self, x: float, y: float) -> Tuple[float, float]:
+        """Bilinear sampling at a single point. Returns (B_kg, C_kg)."""
+        return _bilinear_scalar_BC(self.B, self.C, x, y, int(self.P.size))
 
-    def sample_bilinear_many_BF(
+    def sample_many(
         self,
         xs: np.ndarray,
         ys: np.ndarray,
         outB: Optional[np.ndarray] = None,
-        outF: Optional[np.ndarray] = None,
+        outC: Optional[np.ndarray] = None,
+        tmp: Optional[np.ndarray] = None,
     ) -> Tuple[np.ndarray, np.ndarray]:
-        return _sample_bilinear_many_BF(self.B, self.F, xs, ys, self.P.size, outB=outB, outF=outF)
-
-    def sample_bilinear(self, x: float, y: float) -> Tuple[float, float, float]:
-        return sample_bilinear_scalar(self.B, self.F, self.C, x, y, self.P.size)
+        """
+        Vectorized bilinear sampling for many points.
+        Returns (B_array, C_array), both float32.
+        """
+        return _bilinear_many_BC(
+            self.B, self.C,
+            xs, ys,
+            int(self.P.size),
+            outB=outB, outC=outC, tmp=tmp,
+        )
 
     # -------------------------
     # Consumption + carcass
     # -------------------------
     def _consume_bilinear_from(self, A: np.ndarray, x: float, y: float, amount: float) -> float:
         """
-        Bilinear consume from field A (kg per cell).
+        Bilinear consume from field A (kg/cell).
         Removes up to `amount` kg from the bilinear-sampled pool around (x,y),
         updating the four corner cells. Returns `got` in kg.
-    
-        NOTE: No artificial `hi` cap. The only cap is what exists in the cells.
         """
         amt = float(amount)
         if not math.isfinite(amt) or amt <= 0.0:
             return 0.0
-    
+
         s = int(self.P.size)
-    
         xf = float(x)
         yf = float(y)
         if not (math.isfinite(xf) and math.isfinite(yf)):
             return 0.0
-    
-        x0 = int(math.floor(xf)) % s
-        y0 = int(math.floor(yf)) % s
+
+        xf %= s
+        yf %= s
+
+        x0 = int(math.floor(xf))
+        y0 = int(math.floor(yf))
         x1 = x0 + 1
         y1 = y0 + 1
         if x1 == s:
             x1 = 0
         if y1 == s:
             y1 = 0
-    
+
         fx = xf - math.floor(xf)
         fy = yf - math.floor(yf)
-    
+
         w00 = (1.0 - fx) * (1.0 - fy)
         w10 = fx * (1.0 - fy)
         w01 = (1.0 - fx) * fy
         w11 = fx * fy
-    
+
         a00 = float(A[y0, x0])
         a10 = float(A[y0, x1])
         a01 = float(A[y1, x0])
         a11 = float(A[y1, x1])
-    
-        # available pool in kg (bilinear mixture)
+
         pool = w00 * a00 + w10 * a10 + w01 * a01 + w11 * a11
         if not math.isfinite(pool) or pool <= 1e-12:
             return 0.0
-    
+
         got = amt if amt < pool else pool
-        frac = got / pool  # how much of the *sampled* pool to remove
-    
-        # proportional removal per corner contribution: remove = frac * (w * a)
-        # so each corner loses: d = min(a, frac*w*a) = frac*w*a (since frac,w in [0,1])
+        frac = got / pool
+
         d00 = frac * w00 * a00
         d10 = frac * w10 * a10
         d01 = frac * w01 * a01
         d11 = frac * w11 * a11
-    
-        # numeric safety (should be redundant but cheap)
+
         if d00 > a00: d00 = a00
         if d10 > a10: d10 = a10
         if d01 > a01: d01 = a01
         if d11 > a11: d11 = a11
-    
+
         A[y0, x0] = np.float32(a00 - d00)
         A[y0, x1] = np.float32(a10 - d10)
         A[y1, x0] = np.float32(a01 - d01)
         A[y1, x1] = np.float32(a11 - d11)
-    
+
         return float(got)
 
-    def consume_food(self, x: float, y: float, amount: float, prefer_carcass: bool = True) -> tuple[float, float]:
+    def consume_food(self, x: float, y: float, amount: float, prefer_carcass: bool = True) -> Tuple[float, float]:
+        """
+        Consume up to `amount` kg total. Returns (got_total_kg, got_carcass_kg).
+        """
         amt = float(amount)
         if not math.isfinite(amt) or amt <= 0.0:
             return 0.0, 0.0
-    
+
         got_c = 0.0
         if prefer_carcass:
             got_c = float(self._consume_bilinear_from(self.C, x, y, amt))
             amt = max(0.0, amt - got_c)
-    
+
         got_b = float(self._consume_bilinear_from(self.B, x, y, amt))
         return got_b + got_c, got_c
-    
+
     def add_carcass(self, x: float, y: float, amount_kg: float, rad: int = 3) -> None:
         """
-        Add carcass mass to the carcass field C, measured in kg per cell.
-    
-        Semantics:
-          - amount_kg is TOTAL kg to be deposited (not per-cell).
-          - Mass is distributed over a disk of radius `rad` using a Gaussian kernel.
-          - C is stored as kg/cell, so we add kg contributions to cells.
-          - No normalization/clamp to [0..1]. Any upper bound (if desired) should be a
-            physically motivated carrying/packing limit, not a unit hack.
+        Add carcass mass to C (kg/cell). amount_kg is TOTAL kg deposited.
         """
         s = int(self.P.size)
-    
         amt = float(amount_kg)
         if not math.isfinite(amt) or amt <= 0.0:
             return
-    
+
         r = int(rad)
         if r < 1:
             r = 1
-    
+
         cx = int(round(x)) % s
         cy = int(round(y)) % s
-    
-        # Gaussian spread; sigma tuned to radius
+
         sigma = max(0.75, 0.5 * r)
         inv2sig2 = 1.0 / (2.0 * sigma * sigma)
-    
+
         wsum = 0.0
         weights: list[tuple[int, int, float]] = []
         rr = float(r * r)
-    
+
         for dy in range(-r, r + 1):
             for dx in range(-r, r + 1):
                 d2 = float(dx * dx + dy * dy)
@@ -476,166 +432,22 @@ class World:
                 w = math.exp(-d2 * inv2sig2)
                 weights.append((dx, dy, w))
                 wsum += w
-    
-        # Fallback: dump all mass into the center cell as kg/cell
+
         if wsum <= 1e-12:
-            self.C[cy, cx] = float(self.C[cy, cx] + amt)
+            self.C[cy, cx] = np.float32(float(self.C[cy, cx]) + amt)
             return
-    
-        # Distribute TOTAL kg according to normalized weights
+
         scale = amt / wsum
         for dx, dy, w in weights:
             ix = (cx + dx) % s
             iy = (cy + dy) % s
-            self.C[iy, ix] = float(self.C[iy, ix] + scale * w)
+            self.C[iy, ix] = np.float32(float(self.C[iy, ix]) + scale * w)
 
 
 # -------------------------
-# Sampling kernels
+# Sampling kernels (private)
 # -------------------------
-def _sample_bilinear_many_BF(
-    B: np.ndarray,
-    F: np.ndarray,
-    xs: np.ndarray,
-    ys: np.ndarray,
-    size: int,
-    outB: Optional[np.ndarray] = None,
-    outF: Optional[np.ndarray] = None,
-    tmp: Optional[np.ndarray] = None,  # scratch buffer (float32, same shape as xs)
-) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Assumes xs,ys are float32 and already wrapped to [0,size).
-    B,F should be float32, C-contiguous.
-    """
-    s = int(size)
-
-    x0 = xs.astype(np.int32, copy=False)
-    y0 = ys.astype(np.int32, copy=False)
-
-    x0 %= s
-    y0 %= s
-
-    fx = xs - x0
-    fy = ys - y0
-    fx1 = np.float32(1.0) - fx
-    fy1 = np.float32(1.0) - fy
-
-    x1 = x0 + 1
-    y1 = y0 + 1
-    x1[x1 == s] = 0
-    y1[y1 == s] = 0
-
-    B00 = B[y0, x0]
-    B10 = B[y0, x1]
-    B01 = B[y1, x0]
-    B11 = B[y1, x1]
-
-    F00 = F[y0, x0]
-    F10 = F[y0, x1]
-    F01 = F[y1, x0]
-    F11 = F[y1, x1]
-
-    if outB is None:
-        outB = np.empty(xs.shape, dtype=np.float32)
-    if outF is None:
-        outF = np.empty(xs.shape, dtype=np.float32)
-    if tmp is None:
-        tmp = np.empty(xs.shape, dtype=np.float32)
-
-    # --- B out ---
-    np.multiply(B00, fx1, out=outB)
-    outB += B10 * fx
-    outB *= fy1
-
-    np.multiply(B01, fx1, out=tmp)
-    tmp += B11 * fx
-    tmp *= fy
-    outB += tmp
-
-    # --- F out ---
-    np.multiply(F00, fx1, out=outF)
-    outF += F10 * fx
-    outF *= fy1
-
-    np.multiply(F01, fx1, out=tmp)
-    tmp += F11 * fx
-    tmp *= fy
-    outF += tmp
-
-    return outB, outF
-
-
-def _sample_bilinear_many_layers(
-    B: np.ndarray,
-    F: np.ndarray,
-    C: np.ndarray,
-    xs: np.ndarray,
-    ys: np.ndarray,
-    size: int,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    s = int(size)
-    xs = np.asarray(xs, dtype=np.float32)
-    ys = np.asarray(ys, dtype=np.float32)
-    if xs.shape != ys.shape:
-        raise ValueError("xs and ys must have same shape")
-
-    x0 = xs.astype(np.int32, copy=False)
-    y0 = ys.astype(np.int32, copy=False)
-
-    fx = xs - x0
-    fy = ys - y0
-    fx1 = np.float32(1.0) - fx
-    fy1 = np.float32(1.0) - fy
-
-    x0 = x0 % s
-    y0 = y0 % s
-    x1 = x0 + 1
-    y1 = y0 + 1
-    x1 = np.where(x1 == s, 0, x1)
-    y1 = np.where(y1 == s, 0, y1)
-
-    B00 = B[y0, x0]
-    B10 = B[y0, x1]
-    B01 = B[y1, x0]
-    B11 = B[y1, x1]
-
-    F00 = F[y0, x0]
-    F10 = F[y0, x1]
-    F01 = F[y1, x0]
-    F11 = F[y1, x1]
-
-    C00 = C[y0, x0]
-    C10 = C[y0, x1]
-    C01 = C[y1, x0]
-    C11 = C[y1, x1]
-
-    B0 = B00 * fx1 + B10 * fx
-    B1 = B01 * fx1 + B11 * fx
-    Bout = B0 * fy1 + B1 * fy
-
-    F0 = F00 * fx1 + F10 * fx
-    F1 = F01 * fx1 + F11 * fx
-    Fout = F0 * fy1 + F1 * fy
-
-    C0 = C00 * fx1 + C10 * fx
-    C1 = C01 * fx1 + C11 * fx
-    Cout = C0 * fy1 + C1 * fy
-
-    return (
-        Bout.astype(np.float32, copy=False),
-        Fout.astype(np.float32, copy=False),
-        Cout.astype(np.float32, copy=False),
-    )
-
-
-def sample_bilinear_scalar(
-    B: np.ndarray,
-    F: np.ndarray,
-    C: np.ndarray,
-    x: float,
-    y: float,
-    s: int,
-) -> Tuple[float, float, float]:
+def _bilinear_scalar_BC(B: np.ndarray, C: np.ndarray, x: float, y: float, s: int) -> Tuple[float, float]:
     xf = float(x) % s
     yf = float(y) % s
 
@@ -653,31 +465,85 @@ def sample_bilinear_scalar(
     fx1 = 1.0 - fx
     fy1 = 1.0 - fy
 
-    b00 = float(B[y0, x0])
-    b10 = float(B[y0, x1])
-    b01 = float(B[y1, x0])
-    b11 = float(B[y1, x1])
-
-    f00 = float(F[y0, x0])
-    f10 = float(F[y0, x1])
-    f01 = float(F[y1, x0])
-    f11 = float(F[y1, x1])
-
-    c00 = float(C[y0, x0])
-    c10 = float(C[y0, x1])
-    c01 = float(C[y1, x0])
-    c11 = float(C[y1, x1])
+    b00 = float(B[y0, x0]); b10 = float(B[y0, x1]); b01 = float(B[y1, x0]); b11 = float(B[y1, x1])
+    c00 = float(C[y0, x0]); c10 = float(C[y0, x1]); c01 = float(C[y1, x0]); c11 = float(C[y1, x1])
 
     b0 = b00 * fx1 + b10 * fx
     b1 = b01 * fx1 + b11 * fx
     Bv = b0 * fy1 + b1 * fy
 
-    f0 = f00 * fx1 + f10 * fx
-    f1 = f01 * fx1 + f11 * fx
-    Fv = f0 * fy1 + f1 * fy
-
     c0 = c00 * fx1 + c10 * fx
     c1 = c01 * fx1 + c11 * fx
     Cv = c0 * fy1 + c1 * fy
 
-    return Bv, Fv, Cv
+    return Bv, Cv
+
+
+def _bilinear_many_BC(
+    B: np.ndarray,
+    C: np.ndarray,
+    xs: np.ndarray,
+    ys: np.ndarray,
+    s: int,
+    outB: Optional[np.ndarray] = None,
+    outC: Optional[np.ndarray] = None,
+    tmp: Optional[np.ndarray] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Vectorized bilinear sampling for two layers (B,C).
+    xs,ys can be any float dtype; will be treated as float32 internally.
+    """
+    xs = np.asarray(xs, dtype=np.float32)
+    ys = np.asarray(ys, dtype=np.float32)
+    if xs.shape != ys.shape:
+        raise ValueError("xs and ys must have same shape")
+
+    # wrap to [0,s)
+    xs = np.mod(xs, np.float32(s))
+    ys = np.mod(ys, np.float32(s))
+
+    x0 = xs.astype(np.int32, copy=False)
+    y0 = ys.astype(np.int32, copy=False)
+
+    fx = xs - x0
+    fy = ys - y0
+    fx1 = np.float32(1.0) - fx
+    fy1 = np.float32(1.0) - fy
+
+    x1 = x0 + 1
+    y1 = y0 + 1
+    x1[x1 == s] = 0
+    y1[y1 == s] = 0
+
+    if outB is None:
+        outB = np.empty(xs.shape, dtype=np.float32)
+    if outC is None:
+        outC = np.empty(xs.shape, dtype=np.float32)
+    if tmp is None:
+        tmp = np.empty(xs.shape, dtype=np.float32)
+
+    # ---- B ----
+    B00 = B[y0, x0]; B10 = B[y0, x1]; B01 = B[y1, x0]; B11 = B[y1, x1]
+
+    np.multiply(B00, fx1, out=outB)    # outB = B00*fx1
+    outB += B10 * fx                   # outB = B00*fx1 + B10*fx
+    outB *= fy1                        # outB *= fy1
+
+    np.multiply(B01, fx1, out=tmp)     # tmp = B01*fx1
+    tmp += B11 * fx                    # tmp = B01*fx1 + B11*fx
+    tmp *= fy                          # tmp *= fy
+    outB += tmp                        # outB += tmp
+
+    # ---- C ----
+    C00 = C[y0, x0]; C10 = C[y0, x1]; C01 = C[y1, x0]; C11 = C[y1, x1]
+
+    np.multiply(C00, fx1, out=outC)
+    outC += C10 * fx
+    outC *= fy1
+
+    np.multiply(C01, fx1, out=tmp)
+    tmp += C11 * fx
+    tmp *= fy
+    outC += tmp
+
+    return outB, outC
