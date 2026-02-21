@@ -490,84 +490,31 @@ class Body:
         # ---------------------------------------------------------
         E_from_M = 0.0
         dM_cat = 0.0
-
+        
         if deficit > 0.0:
             E_body = max(1e-12, float(self.P.E_body_J_per_kg))
+        
             want_cat = deficit / E_body
-
-            if DBG:
-                print(
-                    f"[MASSDBG][CAT_PRE] t={t_s} id={id_s} "
-                    f"deficit={deficit:.6g} E_body={E_body:.6g} want_cat={want_cat:.6g} M_avail={float(self.M):.6g}",
-                    flush=True
-                )
-
-            dM_cat = min(want_cat, max(0.0, float(self.M)))
-            M_pre = float(self.M)
-            self.M = float(self.M) - dM_cat
-
-            E_from_M = dM_cat * E_body
-
-            if DBG:
-                print(
-                    f"[MASSDBG][CAT] t={t_s} id={id_s} "
-                    f"dM_cat={dM_cat:.6g} M={M_pre:.6g}->{float(self.M):.6g} "
-                    f"E_from_M={E_from_M:.6g}",
-                    flush=True
-                )
-
-            if E_from_M > 0.0:
-                Efast_pre = float(self.E_fast)
-                self.E_fast = float(self.E_fast) + E_from_M
-                if DBG:
-                    print(
-                        f"[MASSDBG][CAT_BUF] t={t_s} id={id_s} "
-                        f"E_fast={Efast_pre:.6g}->{float(self.E_fast):.6g} (added {E_from_M:.6g})",
-                        flush=True
-                    )
-
-                paid2 = float(self.take_energy(deficit))
-                if DBG:
-                    print(
-                        f"[MASSDBG][CAT_PAY] t={t_s} id={id_s} "
-                        f"paid2={paid2:.6g} (requested={deficit:.6g}) "
-                        f"E_fast={float(self.E_fast):.6g} E_slow={float(self.E_slow):.6g} M={float(self.M):.6g}",
-                        flush=True
-                    )
-        else:
-            if DBG:
-                print(f"[MASSDBG][CAT] t={t_s} id={id_s} deficit=0 -> no catabolism", flush=True)
-
-        Et = float(self.E_total())
-        Ecap = float(self.E_cap())
-
-        if DBG:
-            print(
-                f"[MASSDBG][AFTER] t={t_s} id={id_s} "
-                f"Et={Et:.6g} Ecap={Ecap:.6g} "
-                f"E_fast={float(self.E_fast):.6g} E_slow={float(self.E_slow):.6g} "
-                f"M={float(self.M):.6g} dM_grow={float(dM_grow):.6g} dM_cat={float(dM_cat):.6g}",
-                flush=True
-            )
-
+            M_avail = max(0.0, float(self.M))
+            dM_cat = min(want_cat, M_avail)
+        
+            if dM_cat > 0.0:
+                self.M = float(self.M) - dM_cat
+                E_from_M = dM_cat * E_body
+        
+                pay_from_cat = min(deficit, E_from_M)
+                deficit -= pay_from_cat
+                E_from_M -= pay_from_cat
+        
+                if E_from_M > 0.0:
+                    self.E_fast = float(self.E_fast) + E_from_M
+        
+            if deficit > 0.0:
+                self.take_energy(deficit)
+        
         # refresh after energy dynamics
         Et = float(self.E_total())
         Ecap = float(self.E_cap())
-
-        if DBG:
-            t_now = locals().get("t_now", None)
-            a_id  = locals().get("agent_id", None)
-
-            t_s = f"{float(t_now):.2f}" if t_now is not None else "?"
-            id_s = f"{a_id}" if a_id is not None else "?"
-
-            print(
-                f"[MASSDBG][AFTER] t={t_s} id={id_s} "
-                f"Et={Et:.6g} Ecap={Ecap:.6g} "
-                f"E_fast={float(self.E_fast):.6g} E_slow={float(self.E_slow):.6g} "
-                f"M={float(self.M):.6g} dM_grow={float(dM_grow):.6g} dM_cat={float(dM_cat):.6g}",
-                flush=True
-            )
 
         # ---------------------------------------------------------
         # (4) Damage + repair + fatigue

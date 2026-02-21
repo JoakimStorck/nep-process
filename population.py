@@ -137,19 +137,17 @@ class Population:
         self,
         t: float,
         agent: Agent,
-        carcass_amount: float,
+        carcass_amount: float,  # kg
         carcass_rad: int,
-        carcass_amount_field: float | None = None,
     ) -> None:
         self._emit(
             "death",
             t,
             records.death_record(
-                t,
-                agent,
-                carcass_amount=carcass_amount,
-                carcass_rad=carcass_rad,
-                carcass_amount_field=carcass_amount_field,
+                t=t,
+                agent=agent,
+                carcass_amount=float(carcass_amount),  # kg
+                carcass_rad=int(carcass_rad),
             ),
         )
             
@@ -298,19 +296,25 @@ class Population:
         child_M = float(self._child_M_target(parent))
     
         # STOPPA 0/negativ massa direkt
-        if child_M <= 0.0:
+        if not math.isfinite(child_M) or child_M <= 0.0:
             return None
     
         if not self._can_fund_child_mass(parent, child_M):
             return None
     
-        _ = parent.pay_repro_cost(float(parent.pheno.repro_cost))
+        # --- Reproduction cost model (mass-only) ---
+        # The child is funded by transferring structural mass from the parent.
+        # Do NOT also charge a generic energy cost here, otherwise reproduction
+        # is typically double-penalized (energy + mass).
         parent.body.M = float(parent.body.M) - child_M
+        if parent.body.M < 0.0:
+            # numerical safety; should not happen if _can_fund_child_mass is correct
+            parent.body.M = 0.0
     
         child = self._spawn_child(parent)
         child.init_newborn_state(parent.pheno, child_M_from_parent=child_M)
         return child
-
+        
     def _try_spawn_child_diag(self, parent: Agent) -> tuple[Agent | None, str]:
         # 0) compute target
         try:
@@ -380,14 +384,13 @@ class Population:
         """
         dt = float(self.WP.dt)
 
-         # (A) uppdatera världens fält
+        # (A) world fields
         self.world.step()
-    
-        # (B) bygg agent-occupancy från aktuella agentpositioner
+
+        # (B) occupancy from current positions
         self.world.rebuild_agent_layer(self.agents)
-    
-        # (C) agentsteg (sensing + policy + move + eat + body)
-        # 1) alive list (prealloc + no stack)
+
+        # (C) agent step (sense + policy + act)
         alive: List[Agent] = [a for a in self.agents if a.body.alive]
         if alive:
             n = len(alive)
@@ -396,12 +399,8 @@ class Population:
 
             for i, a in enumerate(alive):
                 x_in, B0, F0, C0 = a.build_inputs(self.world, rng=self.rng)
-
-                # Expect x_in to already be float32 and shape (23,).
-                # If not, this assignment will still coerce/copy only when needed.
                 X[i] = x_in
                 BFC_list[i] = (B0, F0, C0)
-
                 self._emit_step_if_tracked(self.t, a, B0, F0, C0)
 
             # group by bank key
@@ -431,79 +430,67 @@ class Population:
                 B0, F0, C0 = BFC_list[i]
                 a.apply_outputs(self.world, Y[i], B0, F0, C0, rng=self.rng)
 
-        # 2) deaths
+        # (2) deaths -> carcass in kg
         deaths = 0
         survivors: List[Agent] = []
         for a in self.agents:
             if not a.body.alive:
+                # release policy slot immediately
                 self._banks[a._policy_key].release(a._policy_slot)
-        
-                M = float(getattr(a.body, "M", -1.0))
-                Et = float(a.body.E_total())
-                D  = float(a.body.D)
-        
-                # "mass carcass yield" (true mass units)
-                amp_mass = float(self.PP.carcass_yield) * max(0.0, M)
-        
-                # map mass -> C field amplitude (0..1-ish)
-                C_unit = float(getattr(self.world.P, "C_unit_mass", 1.0))  # WorldParams
-                amp_field = amp_mass / max(1e-9, C_unit)
-        
-                # Optional visibility floor in *field units* (not mass units)
-                AMP_FIELD_MIN = 0.02
-                if amp_field > 0.0 and amp_field < AMP_FIELD_MIN:
-                    amp_field = AMP_FIELD_MIN
-        
-                self.world.add_carcass(a.x, a.y, amount=amp_field, rad=self.PP.carcass_rad)        
+
+                # carcass mass = remaining body mass (kg)
+                carcass_kg = max(0.0, float(getattr(a.body, "M", 0.0)))
+
+                # deposit carcass into world (kg, not normalized units)
+                if carcass_kg > 0.0:
+                    self.world.add_carcass(a.x, a.y, amount_kg=carcass_kg, rad=self.PP.carcass_rad)
+
                 deaths += 1
-        
-                # IMPORTANT: log mass (true) and field amp (for debugging)
+
+                # log carcass in kg only
                 self._emit_death(
                     self.t,
                     a,
-                    carcass_amount=amp_mass,
-                    carcass_amount_field=amp_field,
+                    carcass_amount=carcass_kg,
                     carcass_rad=self.PP.carcass_rad,
                 )
             else:
                 survivors.append(a)
-        self.agents = survivors
 
+        self.agents = survivors
+    
         # 3) births (agent-decided; population executes + enforces max_pop)
         births = 0
         self._last_birth_diag = {}  # reset varje tick
-
+    
         # --- DIAG knobs ---
         DIAG_EVERY_TICK = True      # skriv en rad per tick
         DIAG_FIRST_FAILS = True     # skriv första exempel per gate per tick
         DIAG_PRINT_ATTEMPTS = True  # skriv vid rng-hit (attempt)
         DIAG_PRINT_SPAWN = True     # skriv spawn-resultat (reason)
         DIAG_MAX_FAIL_EXAMPLES = 1  # antal exempel per gate per tick
-
+    
+        # För diagnos: initiera counters även om max_pop är fullt,
+        # så vi kan lämna konsekvent diag (du kan ta bort om du vill).
+        n_alive = 0
+        n_eligible = 0
+        n_block_cd = 0
+        n_block_age = 0
+        n_block_mass = 0
+        n_block_energy = 0
+        n_attempts = 0
+        n_spawned = 0
+        n_fail_spawn = 0
+        p_sum = 0.0
+        p_n = 0
+        fail_reasons: dict[str, int] = {}
+    
         if len(self.agents) < self.PP.max_pop:
             children: List[Agent] = []
-
+    
             # dt: ta från world.P om den finns, annars fallback
             dt = float(getattr(getattr(self.world, "P", None), "dt", self.WP.dt))
-
-            # Counters
-            n_alive = 0
-            n_eligible = 0
-
-            n_block_cd = 0
-            n_block_age = 0
-            n_block_mass = 0
-            n_block_energy = 0
-
-            n_attempts = 0          # rng-träffar (≈ "wants")
-            n_spawned = 0
-            n_fail_spawn = 0
-
-            p_sum = 0.0
-            p_n = 0
-
-            fail_reasons: dict[str, int] = {}
-
+    
             # First-example buckets per gate
             ex = {
                 "cd": [],
@@ -515,21 +502,21 @@ class Population:
                 "spawn_fail": [],
                 "spawn_ok": [],
             }
-
+    
             # Optional: snapshot pop-size at loop start (for stable debug prints)
             pop0 = len(self.agents)
             cap = int(self.PP.max_pop)
-
+    
             # ---- births scan ----
             for a in self.agents:
                 # hard cap check (children not yet merged)
                 if pop0 + len(children) >= cap:
                     break
-
+    
                 if not a.body.alive:
                     continue
                 n_alive += 1
-
+    
                 # ---------------------------
                 # Gate 0: cooldown
                 # ---------------------------
@@ -541,7 +528,7 @@ class Population:
                             f"id={a.id} cd={cd:.3f} age={a.age_s:.2f} A_mature={float(a.pheno.A_mature):.2f}"
                         )
                     continue
-
+    
                 # ---------------------------
                 # Gate 1: maturity
                 # ---------------------------
@@ -554,7 +541,7 @@ class Population:
                             f"id={a.id} age={age:.2f} < A_mature={A_mature:.2f} (cd={cd:.3f})"
                         )
                     continue
-
+    
                 # ---------------------------
                 # Gate 2: mass
                 # ---------------------------
@@ -569,7 +556,7 @@ class Population:
                             f"id={a.id} M={M:.4f} < M_req={M_req:.4f} (M_min={M_min:.4f}, M_repro_min={M_repro_min:.4f})"
                         )
                     continue
-
+    
                 # ---------------------------
                 # Gate 3: energy
                 # ---------------------------
@@ -577,62 +564,70 @@ class Population:
                 Ecap = float(a.body.E_cap())
                 E_repro_min = float(getattr(a.pheno, "E_repro_min", 0.0))
                 thr = E_repro_min * Ecap  # IMPORTANT: assumes E_repro_min is fraction
-                
+    
                 if Et < thr:
                     n_block_energy += 1
+                    if DIAG_FIRST_FAILS and len(ex["energy"]) < DIAG_MAX_FAIL_EXAMPLES:
+                        ex["energy"].append(
+                            f"id={a.id} Et={Et:.2f} < thr={thr:.2f} (E_repro_min={E_repro_min:.3f}, Ecap={Ecap:.2f})"
+                        )
                     continue
-                
+    
                 # ---- eligible ----
                 n_eligible += 1
                 lam = float(getattr(a.pheno, "repro_rate", 0.0))
                 p = 1.0 - math.exp(-lam * dt)
                 p_sum += p
                 p_n += 1
-                
+    
                 # ---------------------------
                 # RNG decision
                 # ---------------------------
                 r = float(self.rng.random())
                 if r >= p:
                     continue
-                
+    
                 n_attempts += 1
-                
+    
                 # ---------------------------
                 # Spawn child
                 # ---------------------------
                 child, reason = self._try_spawn_child_diag(a)
-                
+    
                 if child is None:
                     n_fail_spawn += 1
                     fail_reasons[reason] = fail_reasons.get(reason, 0) + 1
+                    if DIAG_FIRST_FAILS and len(ex["spawn_fail"]) < DIAG_MAX_FAIL_EXAMPLES:
+                        ex["spawn_fail"].append(f"id={a.id} reason={reason}")
                     continue
-                
+    
                 children.append(child)
                 n_spawned += 1
-                
-                # Merge children
-                if children:
-                    self.agents.extend(children)
-                births = len(children)
-                
-                # Save diag into population event summary
-                self._last_birth_diag = {
-                    "alive": n_alive,
-                    "eligible": n_eligible,
-                    "block_cd": n_block_cd,
-                    "block_age": n_block_age,
-                    "block_mass": n_block_mass,
-                    "block_energy": n_block_energy,
-                    "attempts": n_attempts,
-                    "wants": n_attempts,
-                    "spawned": n_spawned,
-                    "fail_spawn": n_fail_spawn,
-                    "p_mean": (p_sum / p_n) if p_n else float("nan"),
-                    "p_sum": p_sum,
-                    "fail_reasons": dict(fail_reasons),
-                }
-
+                if DIAG_FIRST_FAILS and len(ex["spawn_ok"]) < DIAG_MAX_FAIL_EXAMPLES:
+                    ex["spawn_ok"].append(f"id={a.id} ok")
+    
+            # === FIX #1: merge children AFTER loop (prevents duplication) ===
+            if children:
+                self.agents.extend(children)
+            births = len(children)
+    
+        # === FIX #2: always set diag AFTER loop (also when births==0) ===
+        self._last_birth_diag = {
+            "alive": int(n_alive),
+            "eligible": int(n_eligible),
+            "block_cd": int(n_block_cd),
+            "block_age": int(n_block_age),
+            "block_mass": int(n_block_mass),
+            "block_energy": int(n_block_energy),
+            "attempts": int(n_attempts),
+            "wants": int(n_attempts),
+            "spawned": int(n_spawned),
+            "fail_spawn": int(n_fail_spawn),
+            "p_mean": (p_sum / p_n) if p_n else float("nan"),
+            "p_sum": float(p_sum),
+            "fail_reasons": dict(fail_reasons),
+        }
+    
         # 3.5) random cross-section sampling (one agent per sample_dt)
         sd = float(self.PP.sample_dt)
         if sd > 0.0 and self.t + 1e-12 >= self._next_sample_t:
@@ -644,20 +639,20 @@ class Population:
                     pool = [a for a in alive_now if int(a.id) not in recent]
                     if pool:
                         alive_now = pool
-
+    
                 a_pick = alive_now[int(self.rng.integers(0, len(alive_now)))]
                 self._emit_sample(self.t, a_pick)
-
+    
                 if int(self.PP.sample_avoid_repeat_k) > 0:
                     self._recent_sample_ids.append(int(a_pick.id))
-
+    
             while self._next_sample_t <= self.t + 1e-12:
                 self._next_sample_t += sd
-
+    
         # 4) advance time
         self._emit_world(self.t)
         self._emit_population(self.t, births=births, deaths=deaths)
-
+    
         self.t += dt
         return births, deaths
 
@@ -672,10 +667,12 @@ class Population:
         Rs = []
     
         for a in self.agents:
-            Et = float(a.body.E_total())
-            Ecap = float(a.body.E_cap())
-            M = float(a.body.M)
-            D = float(a.body.D)
+            body = a.body
+    
+            Et = float(body.E_total())
+            Ecap = float(body.E_cap())
+            M = float(body.M)
+            D = float(body.D)
     
             Es.append(Et)
             Ds.append(D)
@@ -683,7 +680,7 @@ class Population:
             Ecs.append(Ecap)
             Rs.append(Et / max(Ecap, 1e-12))
     
-        n = float(len(self.agents))
+        n = float(len(Es))
         return (
             float(sum(Es) / n),
             float(sum(Ds) / n),
@@ -691,6 +688,7 @@ class Population:
             float(sum(Ecs) / n),
             float(sum(Rs) / n),
         )
+
 
 @dataclass
 class ParamBank:

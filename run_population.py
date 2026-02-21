@@ -186,11 +186,20 @@ if __name__ == "__main__":
         
         viewer.close()
 
-        mean_E, mean_D = pop.mean_stats()
+        mean_E, mean_D, mean_M, mean_Ecap, mean_R = pop.mean_stats()
+        
         print(
             "\n"
-            f"END: t={pop.t:.2f} pop={len(pop.agents)} births_total={births_total} deaths_total={deaths_total} "
-            f"mean_E={mean_E:.3f} mean_D={mean_D:.3f}",
+            f"END: "
+            f"t={pop.t:.2f} "
+            f"pop={len(pop.agents)} "
+            f"births_total={births_total} "
+            f"deaths_total={deaths_total} "
+            f"mean_E={mean_E:.3f} "
+            f"mean_Ecap={mean_Ecap:.3f} "
+            f"mean_R={mean_R:.3f} "
+            f"mean_M={mean_M:.4f} "
+            f"mean_D={mean_D:.3f}",
             flush=True,
         )
 

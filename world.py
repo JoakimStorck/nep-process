@@ -79,12 +79,12 @@ class WorldParams:
     # -------------------------
     # Carcass field C [kg per cell]
     # -------------------------
-    C_decay: float = 0.005
-    C_diff: float = 0.00
-    C_unit_mass: float = 2.0   # legacy
+    C_K: float = 1e-3        # kg/cell "practical cap" for numerics (tune)
+    C_decay: float = 0.005   # 1/time (same semantics as B_wither etc)
+    C_diff: float = 0.00     # diffusion coefficient
     
     # --- Perception scaling ---
-    C_sense_K: float = 5e-4   # kg where perception ≈ 0.5
+    C_sense_K: float = 5e-4
 
     # -------------------------
     # Hazard field F [0..1]
@@ -353,44 +353,74 @@ class World:
     # -------------------------
     # Consumption + carcass
     # -------------------------
-    def _consume_bilinear_from(self, A: np.ndarray, x: float, y: float, amount: float, hi: float) -> float:
+    def _consume_bilinear_from(self, A: np.ndarray, x: float, y: float, amount: float) -> float:
+        """
+        Bilinear consume from field A (kg per cell).
+        Removes up to `amount` kg from the bilinear-sampled pool around (x,y),
+        updating the four corner cells. Returns `got` in kg.
+    
+        NOTE: No artificial `hi` cap. The only cap is what exists in the cells.
+        """
+        amt = float(amount)
+        if not math.isfinite(amt) or amt <= 0.0:
+            return 0.0
+    
         s = int(self.P.size)
     
-        x0 = int(math.floor(x)) % s
-        y0 = int(math.floor(y)) % s
+        xf = float(x)
+        yf = float(y)
+        if not (math.isfinite(xf) and math.isfinite(yf)):
+            return 0.0
+    
+        x0 = int(math.floor(xf)) % s
+        y0 = int(math.floor(yf)) % s
         x1 = x0 + 1
         y1 = y0 + 1
-        if x1 == s: x1 = 0
-        if y1 == s: y1 = 0
+        if x1 == s:
+            x1 = 0
+        if y1 == s:
+            y1 = 0
     
-        fx = float(x - math.floor(x))
-        fy = float(y - math.floor(y))
+        fx = xf - math.floor(xf)
+        fy = yf - math.floor(yf)
     
         w00 = (1.0 - fx) * (1.0 - fy)
         w10 = fx * (1.0 - fy)
         w01 = (1.0 - fx) * fy
         w11 = fx * fy
     
-        A00 = float(A[y0, x0])
-        A10 = float(A[y0, x1])
-        A01 = float(A[y1, x0])
-        A11 = float(A[y1, x1])
+        a00 = float(A[y0, x0])
+        a10 = float(A[y0, x1])
+        a01 = float(A[y1, x0])
+        a11 = float(A[y1, x1])
     
-        pool = w00 * A00 + w10 * A10 + w01 * A01 + w11 * A11
-        if pool <= 1e-12 or amount <= 0.0:
+        # available pool in kg (bilinear mixture)
+        pool = w00 * a00 + w10 * a10 + w01 * a01 + w11 * a11
+        if not math.isfinite(pool) or pool <= 1e-12:
             return 0.0
     
-        got = amount if amount < pool else pool
-        frac = got / pool  # fraction of the *sampled* pool to remove
+        got = amt if amt < pool else pool
+        frac = got / pool  # how much of the *sampled* pool to remove
     
-        # remove proportionally from each corner contribution => Aij *= (1-frac)
-        keep = 1.0 - frac
-        A[y0, x0] = np.float32(max(0.0, min(hi, A00 * keep)))
-        A[y0, x1] = np.float32(max(0.0, min(hi, A10 * keep)))
-        A[y1, x0] = np.float32(max(0.0, min(hi, A01 * keep)))
-        A[y1, x1] = np.float32(max(0.0, min(hi, A11 * keep)))
+        # proportional removal per corner contribution: remove = frac * (w * a)
+        # so each corner loses: d = min(a, frac*w*a) = frac*w*a (since frac,w in [0,1])
+        d00 = frac * w00 * a00
+        d10 = frac * w10 * a10
+        d01 = frac * w01 * a01
+        d11 = frac * w11 * a11
     
-        return got
+        # numeric safety (should be redundant but cheap)
+        if d00 > a00: d00 = a00
+        if d10 > a10: d10 = a10
+        if d01 > a01: d01 = a01
+        if d11 > a11: d11 = a11
+    
+        A[y0, x0] = np.float32(a00 - d00)
+        A[y0, x1] = np.float32(a10 - d10)
+        A[y1, x0] = np.float32(a01 - d01)
+        A[y1, x1] = np.float32(a11 - d11)
+    
+        return float(got)
 
     def consume_food(self, x: float, y: float, amount: float, prefer_carcass: bool = True) -> Tuple[float, float]:
         """
@@ -403,37 +433,44 @@ class World:
         """
         got_c = 0.0
         if prefer_carcass:
-            got_c = self._consume_bilinear_from(self.C, x, y, amount, hi=1.0)
+            got_c = self._consume_bilinear_from(self.C, x, y, amount)
             amount = max(0.0, amount - got_c)
 
-        got_b = self._consume_bilinear_from(self.B, x, y, amount, hi=float(self.P.B_K))
+        got_b = self._consume_bilinear_from(self.B, x, y, amount)
         return (got_c + got_b), got_c
-
-    def add_carcass(self, x: float, y: float, amount: float, rad: int = 3) -> None:
+        
+    def add_carcass(self, x: float, y: float, amount_kg: float, rad: int = 3) -> None:
         """
-        Still writes into normalized C in [0..1].
-        (När du gör C till kg: byt clamp/hi, och gör amount i kg.)
+        Add carcass mass to the carcass field C, measured in kg per cell.
+    
+        Semantics:
+          - amount_kg is TOTAL kg to be deposited (not per-cell).
+          - Mass is distributed over a disk of radius `rad` using a Gaussian kernel.
+          - C is stored as kg/cell, so we add kg contributions to cells.
+          - No normalization/clamp to [0..1]. Any upper bound (if desired) should be a
+            physically motivated carrying/packing limit, not a unit hack.
         """
         s = int(self.P.size)
-
-        amt = float(amount)
+    
+        amt = float(amount_kg)
         if not math.isfinite(amt) or amt <= 0.0:
             return
-        amt = max(0.0, min(1.0, amt))
-
+    
         r = int(rad)
         if r < 1:
             r = 1
-
+    
         cx = int(round(x)) % s
         cy = int(round(y)) % s
-
+    
+        # Gaussian spread; sigma tuned to radius
         sigma = max(0.75, 0.5 * r)
         inv2sig2 = 1.0 / (2.0 * sigma * sigma)
-
+    
         wsum = 0.0
-        weights = []
+        weights: list[tuple[int, int, float]] = []
         rr = float(r * r)
+    
         for dy in range(-r, r + 1):
             for dx in range(-r, r + 1):
                 d2 = float(dx * dx + dy * dy)
@@ -442,16 +479,18 @@ class World:
                 w = math.exp(-d2 * inv2sig2)
                 weights.append((dx, dy, w))
                 wsum += w
-
+    
+        # Fallback: dump all mass into the center cell as kg/cell
         if wsum <= 1e-12:
-            self.C[cy, cx] = float(min(1.0, self.C[cy, cx] + amt))
+            self.C[cy, cx] = float(self.C[cy, cx] + amt)
             return
-
+    
+        # Distribute TOTAL kg according to normalized weights
         scale = amt / wsum
         for dx, dy, w in weights:
             ix = (cx + dx) % s
             iy = (cy + dy) % s
-            self.C[iy, ix] = float(min(1.0, self.C[iy, ix] + scale * w))
+            self.C[iy, ix] = float(self.C[iy, ix] + scale * w)
 
 
 # -------------------------
