@@ -313,10 +313,11 @@ class World:
             rad = random.randint(P.hazard_event_rad_min, P.hazard_event_rad_max)
             self._add_blob(self.F, cx, cy, amp=float(P.hazard_event_amp), rad=rad, hi=1.0)
 
-        # --- Carcass field C: decay + diffusion (still 0..1)
+        # --- Carcass field C [kg/cell]: decay + diffusion ---
         lapC = self._laplace(self.C)
         dC = (-float(P.C_decay) * self.C) + float(P.C_diff) * lapC
-        self.C = _clip01(self.C + np.float32(dt) * dC).astype(np.float32, copy=False)
+        self.C = (self.C + np.float32(dt) * np.float32(dC)).astype(np.float32, copy=False)
+        self.C = np.maximum(self.C, 0.0).astype(np.float32, copy=False)
 
         # --- Germination / seeding
         seed_p = float(P.seed_p)
@@ -422,23 +423,19 @@ class World:
     
         return float(got)
 
-    def consume_food(self, x: float, y: float, amount: float, prefer_carcass: bool = True) -> Tuple[float, float]:
-        """
-        amount: requested intake (kg if you pass it as kg).
-        For now:
-          - C is still [0..1] normalized, so "got_c" is in that normalized unit.
-          - B is kg/cell, so "got_b" is kg.
-        This mismatch is intentional until C is migrated to kg.
-        Return: (total_got, got_c)
-        """
+    def consume_food(self, x: float, y: float, amount: float, prefer_carcass: bool = True) -> tuple[float, float]:
+        amt = float(amount)
+        if not math.isfinite(amt) or amt <= 0.0:
+            return 0.0, 0.0
+    
         got_c = 0.0
         if prefer_carcass:
-            got_c = self._consume_bilinear_from(self.C, x, y, amount)
-            amount = max(0.0, amount - got_c)
-
-        got_b = self._consume_bilinear_from(self.B, x, y, amount)
-        return (got_c + got_b), got_c
-        
+            got_c = float(self._consume_bilinear_from(self.C, x, y, amt))
+            amt = max(0.0, amt - got_c)
+    
+        got_b = float(self._consume_bilinear_from(self.B, x, y, amt))
+        return got_b + got_c, got_c
+    
     def add_carcass(self, x: float, y: float, amount_kg: float, rad: int = 3) -> None:
         """
         Add carcass mass to the carcass field C, measured in kg per cell.

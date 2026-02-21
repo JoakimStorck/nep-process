@@ -308,6 +308,10 @@ class Body:
         food_carcass_kg: float,
         pheno: Phenotype,
         extra_drain: float = 0.0,
+        rng=None,
+        age_s: float = 0.0,          # <-- PASS IN FROM AGENT (single source of truth)
+        t_now: float | None = None,  # optional, for debug prints
+        agent_id: int | None = None, # optional, for debug prints
     ) -> None:
         """
         Energy + mass (SI):
@@ -317,11 +321,14 @@ class Body:
           - death: D>=D_max or M<=M_min
     
         Damage/fatigue (bounded):
-          - damage inflow from hazard, effort, and normalized metabolic drain
+          - damage inflow from hazard, effort, normalized metabolic drain, and aging (always on)
           - repair outflow gated by rest/energy/intake/freshness; paid in energy
+          - stochastic death after updates (calibrated to median age ~ 50 s at baseline)
         """
         if not self.alive:
             return
+    
+        import math
     
         dt = float(self.P.dt)
     
@@ -348,6 +355,7 @@ class Body:
             and self._finite(food_bio_kg)
             and self._finite(food_carcass_kg)
             and self._finite(extra_drain)
+            and self._finite(age_s)
         ):
             self.guard_steps += 1
             self.guard_killed += 1
@@ -359,6 +367,7 @@ class Body:
                 "food_bio_kg": float(food_bio_kg),
                 "food_carcass_kg": float(food_carcass_kg),
                 "extra_drain": float(extra_drain),
+                "age_s": float(age_s),
             }
             self.alive = False
             return
@@ -372,96 +381,91 @@ class Body:
         # ---------------------------------------------------------
         # (1) Intake -> E buffers (up to cap), surplus -> mass
         # ---------------------------------------------------------
-        DBG = False  # sätt False när du är klar
-
-        # försök plocka upp "t" och "agent_id" om du skickar in dem i Body.step(...)
-        t_now = locals().get("t", locals().get("t_now", None))
-        a_id = locals().get("agent_id", locals().get("a_id", None))
+        DBG = False  # set False when done
+    
         t_s = f"{float(t_now):.2f}" if t_now is not None else "?"
-        id_s = f"{a_id}" if a_id is not None else "?"
-
+        id_s = f"{agent_id}" if agent_id is not None else "?"
+    
         m_bio = max(0.0, float(food_bio_kg))
         m_car = max(0.0, float(food_carcass_kg))
-
+    
         E_in = (
             m_bio * float(self.P.E_bio_J_per_kg)
             + m_car * float(self.P.E_carcass_J_per_kg)
         )
-
+    
         Et0 = float(self.E_total())
         Ecap0 = float(self.E_cap())
         room = max(0.0, Ecap0 - Et0)
-
+    
         if DBG:
             print(
                 f"[MASSDBG][IN] t={t_s} id={id_s} "
                 f"m_bio={m_bio:.6g} m_car={m_car:.6g} E_in={E_in:.6g} "
                 f"Et0={Et0:.6g} Ecap0={Ecap0:.6g} room={room:.6g} "
                 f"E_fast0={float(self.E_fast):.6g} E_slow0={float(self.E_slow):.6g} M0={float(self.M):.6g}",
-                flush=True
+                flush=True,
             )
-
+    
         dE_store = min(E_in, room)
         if dE_store > 0.0:
             dE_fast = 0.85 * dE_store
             dE_slow = 0.15 * dE_store
             self.E_fast += dE_fast
             self.E_slow += dE_slow
-
             if DBG:
                 print(
                     f"[MASSDBG][STORE] t={t_s} id={id_s} "
                     f"dE_store={dE_store:.6g} -> dE_fast={dE_fast:.6g} dE_slow={dE_slow:.6g} "
                     f"E_fast={float(self.E_fast):.6g} E_slow={float(self.E_slow):.6g}",
-                    flush=True
+                    flush=True,
                 )
         else:
+            dE_fast = 0.0
+            dE_slow = 0.0
             if DBG:
                 print(
                     f"[MASSDBG][STORE] t={t_s} id={id_s} dE_store=0 (E_in={E_in:.6g}, room={room:.6g})",
-                    flush=True
+                    flush=True,
                 )
-
+    
         E_to_M = max(0.0, E_in - dE_store)
         if E_to_M > 0.0:
             E_body = max(1e-12, float(self.P.E_body_J_per_kg))
             dM_grow = E_to_M / E_body
             M_pre = float(self.M)
             self.M = float(self.M) + dM_grow
-
             if DBG:
                 print(
                     f"[MASSDBG][GROW] t={t_s} id={id_s} "
                     f"E_to_M={E_to_M:.6g} E_body={E_body:.6g} dM_grow={dM_grow:.6g} "
                     f"M={M_pre:.6g}->{float(self.M):.6g}",
-                    flush=True
+                    flush=True,
                 )
         else:
             dM_grow = 0.0
             if DBG:
                 print(
                     f"[MASSDBG][GROW] t={t_s} id={id_s} E_to_M=0 (E_in={E_in:.6g}, dE_store={dE_store:.6g})",
-                    flush=True
+                    flush=True,
                 )
-
+    
         # ---------------------------------------------------------
         # (2) Drains (basal + compute + sense + locomotion(extra))
         # ---------------------------------------------------------
         M_eff = max(1e-9, float(self.M))
         metab = float(getattr(pheno, "metabolism_scale", 1.0))
-
+    
         k_basal = float(self.P.k_basal)
         out_basal = dt * metab * (M_eff ** 0.75) * k_basal
-
         out_compute = dt * metab * M_eff * float(self.P.compute_cost) * float(activity)
-
+    
         sense_cost = float(self._sense_cost(pheno))
         out_sense = dt * metab * M_eff * sense_cost
-
         out_loco = max(0.0, float(extra_drain))
-
+    
         E_out_drain = out_basal + out_compute + out_sense + out_loco
-
+    
         if DBG:
             print(
                 f"[MASSDBG][DRAIN] t={t_s} id={id_s} "
@@ -469,12 +473,12 @@ class Body:
                 f"out_basal={out_basal:.6g} out_compute={out_compute:.6g} "
                 f"out_sense={out_sense:.6g} out_loco={out_loco:.6g} "
                 f"E_out_drain={E_out_drain:.6g}",
-                flush=True
+                flush=True,
             )
-
+    
         paid = float(self.take_energy(E_out_drain))
         deficit = max(0.0, E_out_drain - paid)
-
+    
         if DBG:
             Et_after_pay = float(self.E_total())
             print(
@@ -482,46 +486,42 @@ class Body:
                 f"paid={paid:.6g} deficit={deficit:.6g} "
                 f"Et={Et0:.6g}->{Et_after_pay:.6g} "
                 f"E_fast={float(self.E_fast):.6g} E_slow={float(self.E_slow):.6g} M={float(self.M):.6g}",
-                flush=True
+                flush=True,
             )
-
+    
         # ---------------------------------------------------------
         # (3) Catabolism: convert body mass -> energy to cover deficit
         # ---------------------------------------------------------
         E_from_M = 0.0
         dM_cat = 0.0
-        
+    
         if deficit > 0.0:
             E_body = max(1e-12, float(self.P.E_body_J_per_kg))
-        
             want_cat = deficit / E_body
             M_avail = max(0.0, float(self.M))
             dM_cat = min(want_cat, M_avail)
-        
+    
             if dM_cat > 0.0:
-                self.M = float(self.M) - dM_cat
+                self.M -= dM_cat
                 E_from_M = dM_cat * E_body
-        
-                pay_from_cat = min(deficit, E_from_M)
-                deficit -= pay_from_cat
-                E_from_M -= pay_from_cat
-        
-                if E_from_M > 0.0:
-                    self.E_fast = float(self.E_fast) + E_from_M
-        
-            if deficit > 0.0:
-                self.take_energy(deficit)
-        
+                self.E_fast += E_from_M  # catabolic energy enters storage
+    
+            # pay the remaining deficit once
+            _ = float(self.take_energy(deficit))
+    
         # refresh after energy dynamics
         Et = float(self.E_total())
         Ecap = float(self.E_cap())
-
+    
         # ---------------------------------------------------------
-        # (4) Damage + repair + fatigue
+        # (4) Damage + repair + fatigue  (ONE writer for D)
         # ---------------------------------------------------------
+        D_before = float(self.D)
+        D_max = float(self.P.D_max)
+    
         e_lack = clamp((Ecap - Et) / max(Ecap, 1e-9), 0.0, 1.0)
-        d_norm = clamp(float(self.D) / max(float(self.P.D_max), 1e-9), 0.0, 1.0)
-
+        d_norm = clamp(D_before / max(D_max, 1e-9), 0.0, 1.0)
+    
         speed_n = clamp(float(speed) / max(float(self.P.v_max), 1e-9), 0.0, 1.0)
         effort = speed_n + 0.6 * float(activity)
         rest = (
@@ -529,23 +529,28 @@ class Body:
             * max(0.0, 1.0 - float(activity))
             * (0.25 + 0.75 * max(0.0, 1.0 - float(hazard)))
         )
-
+    
         # intake normalization (uses E_in); reference intake per tick, in J
         I_ref = max(1e-12, float(self.P.eat_rate) * dt * float(self.P.E_bio_J_per_kg))
         intake_n = clamp(E_in / I_ref, 0.0, 1.0)
-
+    
         # weakness coupling
         w = float(self.weakness())
         starve_stress = 1.0 + float(self.P.starve_stress_gain) * (1.0 - w)
-
+    
         susc = float(pheno.susceptibility)
-        frail = 1.0 + float(pheno.frailty_gain) * d_norm
+        # IMPORTANT: bound frailty_gain contribution (prevents random init explosions)
+        frailty_gain = float(getattr(pheno, "frailty_gain", 0.0))
+        frailty_cap = float(getattr(self.P, "frailty_cap", 1.0))
+        frailty_gain = clamp(frailty_gain, 0.0, max(0.0, frailty_cap))
+    
+        frail = 1.0 + frailty_gain * d_norm
         k_E = 1.2
-
-        # metabolic drain term MUST be normalized in J-world (else instant D blow-up)
+    
+        # metabolic drain term normalized in J-world
         drain_rate = (out_basal + out_compute + out_sense + out_loco) / max(dt, 1e-12)  # J/s
         drain_rate_n = drain_rate / max(Ecap, 1e-9)                                     # 1/s
-
+    
         dD_haz = dt * (
             float(self.P.hazard_to_damage)
             * susc
@@ -554,30 +559,38 @@ class Body:
             * float(hazard)
             * starve_stress
         )
-
+    
         k_eff = 0.02
         dD_eff = dt * (k_eff * susc * (1.0 + k_E * e_lack) * frail * effort * starve_stress)
-
         dD_met = dt * (float(pheno.stress_per_drain) * drain_rate_n * starve_stress)
-
-        dD_in = dD_haz + dD_eff + dD_met
-
+    
+        # ---- aging damage (always on), STABLE and bounded ----
+        # target median lifespan via stochastic death below; here aging damage is slow background + frailty modulation
+        k_age0 = float(getattr(self.P, "k_age0", 0.0))   # default 0 unless you want drift-to-D_max
+        k_age1 = float(getattr(self.P, "k_age1", 0.0))   # optional age acceleration
+        k_ageD = float(getattr(self.P, "k_ageD", 0.4))   # coupling to damage (via d_norm, bounded)
+    
+        age_rate = max(0.0, k_age0 + k_age1 * float(age_s))
+        dD_age = dt * age_rate * (1.0 + k_ageD * d_norm) * (1.0 + frailty_gain)
+    
+        dD_in = dD_haz + dD_eff + dD_met + dD_age
+    
         # --- repair outflow ---
         E_rep_min = float(pheno.E_rep_min)
         E_thr = E_rep_min * Ecap
         G_E = clamp((Et - E_thr) / max(Ecap - E_thr, 1e-9), 0.0, 1.0)
-
+    
         G_rest = 0.2 + 0.8 * rest
         G_int = 0.3 + 0.7 * intake_n
         fresh = 1.0 - float(self.Fg)
         G_fresh = 0.75 + 0.25 * fresh
-
-        frailty_damp = 1.0 / (1.0 + float(pheno.frailty_gain) * d_norm)
+    
+        frailty_damp = 1.0 / (1.0 + frailty_gain * d_norm)
         rep_fac = float(self.repair_factor())
-
+    
         dD_rep = dt * float(pheno.repair_capacity) * rep_fac * G_rest * G_E * G_int * G_fresh * frailty_damp
-
-        # energy cost for repair (k_rep is J per unit damage repaired; keep as-is)
+    
+        # energy cost for repair (k_rep is J per unit damage repaired)
         E_out_repair = 0.0
         k_rep = float(getattr(self.P, "k_rep", 0.45))
         E_need = max(0.0, k_rep * dD_rep)
@@ -586,13 +599,26 @@ class Body:
             E_out_repair = E_paid
             if E_paid < E_need:
                 dD_rep *= (E_paid / max(E_need, 1e-12))
-
-        self.D = clamp(float(self.D) + dD_in - dD_rep, 0.0, float(self.P.D_max))
-
+    
+        # Optional debug
+        if (D_before > 0.8) or (dt > 0 and dD_in > 0.05):
+            print(
+                f"[DDBG] id={id_s} dt={dt:.3f} age_s={float(age_s):.2f} "
+                f"Et={Et:.1f} Ecap={Ecap:.1f} e_lack={e_lack:.3f} "
+                f"haz={float(hazard):.3f} effort={effort:.3f} rest={rest:.3f} intake_n={intake_n:.3f} "
+                f"dD_haz={dD_haz:.5f} dD_eff={dD_eff:.5f} dD_met={dD_met:.5f} dD_age={dD_age:.5f} "
+                f"dD_rep={dD_rep:.5f} D={D_before:.3f}->{(D_before + dD_in - dD_rep):.3f}",
+                flush=True,
+            )
+    
+        # ---- ONE D update ----
+        self.D = clamp(D_before + dD_in - dD_rep, 0.0, D_max)
+    
         # fatigue
-        fatigue_effort_eff = float(self.P.fatigue_effort) * (1.0 + 0.4 * d_norm)
-        fatigue_recover_eff = float(self.P.fatigue_recover) * max(0.0, (1.0 - 0.05 * d_norm))
-
+        d_norm2 = clamp(float(self.D) / max(D_max, 1e-9), 0.0, 1.0)
+        fatigue_effort_eff = float(self.P.fatigue_effort) * (1.0 + 0.4 * d_norm2)
+        fatigue_recover_eff = float(self.P.fatigue_recover) * max(0.0, (1.0 - 0.05 * d_norm2))
+    
         self.Fg = clamp(
             float(self.Fg)
             + dt
@@ -604,12 +630,58 @@ class Body:
             0.0,
             1.0,
         )
-
+    
+        # --- enforce storage capacity ---
+        Et = float(self.E_total())
+        Ecap = float(self.E_cap())
+        if Et > Ecap:
+            overflow = Et - Ecap
+            take_fast = min(float(self.E_fast), overflow)
+            self.E_fast = float(self.E_fast) - take_fast
+            overflow -= take_fast
+            if overflow > 0.0:
+                take_slow = min(float(self.E_slow), overflow)
+                self.E_slow = float(self.E_slow) - take_slow
+    
         # ---------------------------------------------------------
-        # (4B) Numerical guard (post): clamps + finiteness
+        # (5) Deterministic death conditions (after D/M updates)
+        # ---------------------------------------------------------
+        if float(self.D) >= D_max or float(self.M) <= float(self.P.M_min):
+            self.alive = False
+            return
+    
+        # ---------------------------------------------------------
+        # (6) Stochastic death (calibrated: median age ~ 50 s baseline)
+        # ---------------------------------------------------------
+        if rng is not None:
+            # Baseline hazard chosen so that median lifetime = target_median_age_s (exponential)
+            target_med = float(getattr(self.P, "median_age_s", 50.0))
+            target_med = max(1e-6, target_med)
+            h_base = float(getattr(self.P, "death_h_base", math.log(2.0) / target_med))
+    
+            # Modulators (all optional; defaults 0)
+            h_age = float(getattr(self.P, "death_h_age", 0.0))    # 1/s^2 scale on age_s
+            h_D   = float(getattr(self.P, "death_h_D", 0.0))      # 1/s scale on d_norm
+            h_haz = float(getattr(self.P, "death_h_haz", 0.0))    # 1/s scale on hazard exposure
+    
+            hazard_rate = max(
+                0.0,
+                h_base
+                + h_age * float(age_s)
+                + h_D * d_norm2
+                + h_haz * float(hazard),
+            )
+    
+            p = 1.0 - math.exp(-hazard_rate * dt)
+            if rng.random() < p:
+                self.alive = False
+                return
+    
+        # ---------------------------------------------------------
+        # (7) Numerical guard (post): clamps + finiteness
         # ---------------------------------------------------------
         clamped = False
-
+    
         if float(self.E_fast) < 0.0:
             self.E_fast = 0.0
             clamped = True
@@ -619,24 +691,22 @@ class Body:
         if float(self.M) < 0.0:
             self.M = 0.0
             clamped = True
-
-        # D bounded
+    
         D0 = float(self.D)
-        self.D = clamp(D0, 0.0, float(self.P.D_max))
+        self.D = clamp(D0, 0.0, D_max)
         if float(self.D) != D0:
             clamped = True
-
-        # Fg bounded
+    
         Fg0 = float(self.Fg)
         self.Fg = clamp(Fg0, 0.0, 1.0)
         if float(self.Fg) != Fg0:
             clamped = True
-
+    
         if clamped:
             self.guard_steps += 1
             self.guard_clamp_steps += 1
             self.guard_last = self._guard_snapshot("post_clamp")
-
+    
         if not (
             self._finite(self.E_fast)
             and self._finite(self.E_slow)
@@ -651,17 +721,7 @@ class Body:
             return
     
         # ---------------------------------------------------------
-        # (5) Death conditions
-        # ---------------------------------------------------------
-        if float(self.D) >= float(self.P.D_max):
-            self.alive = False
-            return
-        if float(self.M) <= float(self.P.M_min):
-            self.alive = False
-            return
-    
-        # ---------------------------------------------------------
-        # (6) Ledger finalize (drift accounting)
+        # (8) Ledger finalize (drift accounting)
         # ---------------------------------------------------------
         E_after = float(self.E_total())
         M_after = float(self.M)
@@ -1084,7 +1144,6 @@ class Agent:
         # apply sensing phenotype -> AP knobs, then rebuild sensors
         self.sense_level = _sense_level(float(self.pheno.sense_strength))
         _apply_sense_to_AP(self.AP, self.sense_level)
-        self.sensors = RaySensors(self.AP, world_size=64)
 
         # init mass + energy (unbounded)
         self._init_body_state_from_AP()
@@ -1102,7 +1161,16 @@ class Agent:
         self.body.alive = True
 
     def bind_world(self, world: World) -> None:
-        self.sensors = RaySensors(self.AP, world_size=world.P.size)
+        self.world = world  # om du använder det någon annanstans
+    
+        size = int(world.P.size)
+    
+        # Skapa bara om sensorer saknas eller om world_size ändrats
+        if getattr(self, "sensors", None) is None or getattr(self.sensors, "world_size", None) != size:
+            self.sensors = RaySensors(self.AP, world_size=size)
+        else:
+            # Om RaySensors har intern cache som beror på AP, kan du ev. uppdatera här
+            pass
 
     @staticmethod
     def _signed_angle(a: float) -> float:
@@ -1314,6 +1382,8 @@ class Agent:
             food_carcass_kg=food_carcass_kg,
             pheno=self.pheno,
             extra_drain=E_move,
+            rng=rng,
+            age_s=self.age_s,
         )
     
         # ------------------------------------------------------------
@@ -1324,12 +1394,6 @@ class Agent:
         self.last_C0 = float(C0)
     
         return float(B0), float(F0), float(C0)
-
-    # optional legacy step() if used somewhere else
-    def step(self, world: World, rng: np.random.Generator) -> Tuple[float, float, float]:
-        x_in, B0, F0, C0 = self.build_inputs(world, rng=rng)
-        y = self.genome.forward(x_in)
-        return self.apply_outputs(world, y, B0, F0, C0, rng=rng)
 
     # --- reproduction hooks (Population uses these) ---
     def ready_to_reproduce(self) -> bool:

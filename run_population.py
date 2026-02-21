@@ -16,7 +16,6 @@ from simlog.jsonl import JsonlWriter
 from simlog.sinks import EventHub
 from simlog.observers import StepLogger, PopLogger, LifeLogger, WorldLogger, SampleLogger
 
-
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
     ap.add_argument("--T", type=float, default=2000.0)
@@ -140,66 +139,106 @@ if __name__ == "__main__":
         next_wall = last_wall + max(0.05, float(a.wall_tick))
 
         # -------------------------
-        # SIM LOOP (runs until T or extinction or user quits)
+        # SIM LOOP (runs until T, extinction, stall, or user quits)
         # -------------------------
+        
+        SIM_T_LIMIT = float(a.T)
+        TICK_S = float(a.tick)
+        WALL_TICK_S = float(a.wall_tick)
+        
+        stall_limit_s = 2.0          # wall-time stall trigger
+        slow_step_limit_s = 0.2      # wall-time threshold for "slow" pop.step
+        
         user_quit = False
+        stop_reason: str | None = None
+        
+        # Stall detection: detect if pop.t stops advancing
+        stall_wall0 = time.perf_counter()
+        last_t = float(pop.t)
         
         while True:
-            if not viewer.update(pop, births_total=births_total, deaths_total=deaths_total):
-                user_quit = True
+            # --- stop conditions (checked before step) ---
+            if pop.t >= SIM_T_LIMIT:
+                stop_reason = f"TIME_LIMIT (t={pop.t:.3f} >= T={SIM_T_LIMIT:.3f})"
                 break
         
-            if viewer.paused:
-                continue
-        
-            if pop.t >= float(a.T) or len(pop.agents) == 0:
+            if len(pop.agents) == 0:
+                stop_reason = f"EXTINCTION (t={pop.t:.3f})"
                 break
         
+            # --- simulate one step (wall-timed) ---
+            t0 = time.perf_counter()
             b, d = pop.step()
+            dtw = time.perf_counter() - t0
+        
+            if dtw > slow_step_limit_s:
+                print(
+                    f"\nSLOW pop.step: dt_wall={dtw:.3f}s  t={pop.t:.3f} pop={len(pop.agents)} b={b} d={d}",
+                    flush=True,
+                )
+        
+            # --- stall detection: sim-time not advancing ---
+            t_now = float(pop.t)
+            if t_now <= last_t + 1e-12:
+                if time.perf_counter() - stall_wall0 > stall_limit_s:
+                    stop_reason = f"STALL (t not advancing: t={t_now:.6f}, last_t={last_t:.6f})"
+                    break
+            else:
+                last_t = t_now
+                stall_wall0 = time.perf_counter()
+        
             births_total += int(b)
             deaths_total += int(d)
+
+            # --- viewer update (pumps events + render) ---
+            if not viewer.update(pop, births_total=births_total, deaths_total=deaths_total):
+                stop_reason = f"USER_QUIT (t={pop.t:.3f})"
+                user_quit = True
+                break            
         
-            if float(a.tick) > 0.0 and pop.t >= next_tick_t:
-                next_tick_t = pop.t + float(a.tick)
+            # --- periodic status line (sim-time cadence) ---
+            if TICK_S > 0.0 and pop.t >= next_tick_t:
+                next_tick_t = pop.t + TICK_S
                 mean_E, mean_D, mean_M, mean_Ecap, mean_R = pop.mean_stats()
                 print(
                     f"t={pop.t:8.2f}  pop={len(pop.agents):4d}  b+={b:3d} d+={d:3d}  "
                     f"b={births_total:6d} d={deaths_total:6d}  "
-                    f"mean_E={mean_E:.1f} mean_Ecap={mean_Ecap:.1f} mean_R={mean_R:.3f} mean_M={mean_M:.4f} mean_D={mean_D:.3f}",
+                    f"mean_E={mean_E:.1f} mean_Ecap={mean_Ecap:.1f} mean_R={mean_R:.3f} "
+                    f"mean_M={mean_M:.4f} mean_D={mean_D:.3f}",
                     flush=True,
                 )
         
+            # --- wall-time keepalive dot ---
             now = time.perf_counter()
             if now >= next_wall:
-                next_wall = now + max(0.05, float(a.wall_tick))
+                next_wall = now + max(0.05, WALL_TICK_S)
                 sys.stdout.write(".")
                 sys.stdout.flush()
         
-        # -------------------------
-        # VIEWER LOOP (only if sim ended naturally)
-        # -------------------------
-        if not user_quit:
-            while True:
-                if not viewer.update(pop, births_total=births_total, deaths_total=deaths_total):
-                    break
-                time.sleep(0.01)
+        if stop_reason is None:
+            stop_reason = "UNKNOWN_STOP"
         
-        viewer.close()
-
+        # -------------------------
+        # STOP MESSAGE (always)
+        # -------------------------
         mean_E, mean_D, mean_M, mean_Ecap, mean_R = pop.mean_stats()
-        
         print(
             "\n"
-            f"END: "
-            f"t={pop.t:.2f} "
-            f"pop={len(pop.agents)} "
-            f"births_total={births_total} "
-            f"deaths_total={deaths_total} "
-            f"mean_E={mean_E:.3f} "
-            f"mean_Ecap={mean_Ecap:.3f} "
-            f"mean_R={mean_R:.3f} "
-            f"mean_M={mean_M:.4f} "
-            f"mean_D={mean_D:.3f}",
+            f"STOP: {stop_reason}\n"
+            f"  t={pop.t:.3f} pop={len(pop.agents)} births_total={births_total} deaths_total={deaths_total}\n"
+            f"  mean_E={mean_E:.3f} mean_Ecap={mean_Ecap:.3f} mean_R={mean_R:.3f} "
+            f"mean_M={mean_M:.4f} mean_D={mean_D:.3f}",
             flush=True,
         )
+        
+        # -------------------------
+        # VIEWER LOOP (keep window alive after stop)
+        # -------------------------
+        while True:
+            if not viewer.update(pop, births_total=births_total, deaths_total=deaths_total):
+                user_quit = True
+                break
+            time.sleep(0.01)
+        
+        viewer.close()
 
