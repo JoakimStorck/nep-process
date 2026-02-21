@@ -102,7 +102,7 @@ class Population:
 
             # birth time for age
             a.birth_t = float(self.t)
-            a.init_newborn_state(a.pheno)            
+            #a.init_newborn_state(a.pheno)            
             
             # allocate slot in bank and write genome params once
             key = (tuple(g.layer_sizes), str(g.act))
@@ -154,27 +154,35 @@ class Population:
         )
             
     def _emit_population(self, t: float, births: int, deaths: int) -> None:
-        mean_E, mean_D = self.mean_stats()
+        mean_E, mean_D, mean_M, mean_Ecap, mean_R = self.mean_stats()
     
         payload = records.population_record(
             t=t,
             pop_n=len(self.agents),
-            births=births,
-            deaths=deaths,
-            mean_E=mean_E,
-            mean_D=mean_D,
+            births=int(births),
+            deaths=int(deaths),
+            mean_E=float(mean_E),
+            mean_D=float(mean_D),
+            mean_M=float(mean_M),
         )
     
-        # Optional: birth-loop diagnostics (set in step(); absent => defaults)
         diag = getattr(self, "_last_birth_diag", None) or {}
-        payload.update(
-            {
-                "repro_alive": int(diag.get("alive", 0)),
-                "repro_wants": int(diag.get("wants", 0)),
-                "repro_fail_mass": int(diag.get("fail_mass", 0)),
-                "repro_spawned": int(diag.get("spawned", births)),
+    
+        s = payload.get("summary", {})
+        if isinstance(s, dict):
+            s["repro"] = {
+                "alive": int(diag.get("alive", 0)),
+                "eligible": int(diag.get("eligible", 0)),
+                "block_cd": int(diag.get("block_cd", 0)),
+                "block_age": int(diag.get("block_age", 0)),
+                "block_mass": int(diag.get("block_mass", 0)),
+                "block_energy": int(diag.get("block_energy", 0)),
+                "attempts": int(diag.get("attempts", 0)),
+                "spawned": int(diag.get("spawned", births)),
+                "fail_spawn": int(diag.get("fail_spawn", 0)),
+                "p_mean": float(diag.get("p_mean", float("nan"))),
+                "p_sum": float(diag.get("p_sum", float("nan"))),
             }
-        )
     
         self._emit("population", t, payload)
         
@@ -268,38 +276,96 @@ class Population:
         self._emit_birth(self.t, child, parent)
         return child
 
-    def _child_M_target(self, a: Agent) -> float:
-        m = float(getattr(a.pheno, "child_M", 0.0))
-        return max(float(a.AP.M_min), m)
-    
     def _can_fund_child_mass(self, a: Agent, child_M: float) -> bool:
-        # Parent must not go below M_min after funding child's mass
-        return (float(a.body.M) - float(child_M)) >= float(a.AP.M_min)
+        eps = 1e-9
+        return (float(a.body.M) - float(child_M)) >= (float(a.AP.M_min) - eps)
+    
+    def _child_M_target(self, parent: Agent) -> float:
+        target = float(parent.pheno.child_M)
+    
+        M = float(parent.body.M)
+        Mmin = float(parent.AP.M_min)
+        free = M - Mmin
+    
+        # välj en hård min-gräns (helst från pheno/ranges, annars konstant)
+        child_min = 1e-3  # börja här; byt till pheno.child_M_min om du har
+        if free <= child_min:
+            return 0.0
+    
+        return min(target, free)
     
     def _try_spawn_child(self, parent: Agent) -> Optional[Agent]:
-        """
-        Execute reproduction side-effects in a single place:
-          - pay energy cost (sets cooldown)
-          - transfer mass budget
-          - spawn child + initialize newborn state
-        Returns child if successful, else None.
-        """
-        child_M = self._child_M_target(parent)
+        child_M = float(self._child_M_target(parent))
+    
+        # STOPPA 0/negativ massa direkt
+        if child_M <= 0.0:
+            return None
     
         if not self._can_fund_child_mass(parent, child_M):
             return None
     
-        # Pay reproduction energy cost (sets cooldown)
         _ = parent.pay_repro_cost(float(parent.pheno.repro_cost))
-    
-        # Transfer mass to child (hard budget)
         parent.body.M = float(parent.body.M) - child_M
     
-        # Spawn child and initialize with funded mass
         child = self._spawn_child(parent)
         child.init_newborn_state(parent.pheno, child_M_from_parent=child_M)
         return child
+
+    def _try_spawn_child_diag(self, parent: Agent) -> tuple[Agent | None, str]:
+        # 0) compute target
+        try:
+            child_M = float(self._child_M_target(parent))
+        except Exception as e:
+            return None, f"child_M_target_exc:{type(e).__name__}"
     
+        # sanity
+        if not math.isfinite(child_M) or child_M <= 0.0:
+            return None, "child_M_target_invalid"
+    
+        # 1) mass funding gate (primary None path)
+        try:
+            ok_mass = bool(self._can_fund_child_mass(parent, child_M))
+        except Exception as e:
+            return None, f"can_fund_child_mass_exc:{type(e).__name__}"
+    
+        if not ok_mass:
+            # Grov men informativ klassning (du kan förbättra om du visar _can_fund_child_mass)
+            M = float(getattr(parent.body, "M", float("nan")))
+            Mmin = float(getattr(parent.AP, "M_min", float("nan")))
+            # Ex: om du har en reserv / max-fraktion, lägg in här senare
+            if math.isfinite(M) and math.isfinite(Mmin) and M - child_M < Mmin:
+                return None, "fund_mass_hits_M_min"
+            return None, "fund_mass_denied"
+    
+        # 2) pay repro cost (may set cooldown; may fail)
+        try:
+            _ = parent.pay_repro_cost(float(parent.pheno.repro_cost))
+        except Exception as e:
+            return None, f"pay_repro_cost_exc:{type(e).__name__}"
+    
+        # 3) transfer mass
+        try:
+            parent.body.M = float(parent.body.M) - child_M
+        except Exception as e:
+            return None, f"parent_mass_transfer_exc:{type(e).__name__}"
+    
+        # 4) spawn child
+        try:
+            child = self._spawn_child(parent)
+        except Exception as e:
+            return None, f"spawn_child_exc:{type(e).__name__}"
+    
+        if child is None:
+            return None, "spawn_child_returned_none"
+    
+        # 5) init newborn state
+        try:
+            child.init_newborn_state(parent.pheno, child_M_from_parent=child_M)
+        except Exception as e:
+            return None, f"init_newborn_exc:{type(e).__name__}"
+    
+        return child, "ok"
+            
     # -----------------------
     # main loop
     # -----------------------
@@ -405,48 +471,168 @@ class Population:
 
         # 3) births (agent-decided; population executes + enforces max_pop)
         births = 0
+        self._last_birth_diag = {}  # reset varje tick
+
+        # --- DIAG knobs ---
+        DIAG_EVERY_TICK = True      # skriv en rad per tick
+        DIAG_FIRST_FAILS = True     # skriv första exempel per gate per tick
+        DIAG_PRINT_ATTEMPTS = True  # skriv vid rng-hit (attempt)
+        DIAG_PRINT_SPAWN = True     # skriv spawn-resultat (reason)
+        DIAG_MAX_FAIL_EXAMPLES = 1  # antal exempel per gate per tick
+
         if len(self.agents) < self.PP.max_pop:
             children: List[Agent] = []
 
+            # dt: ta från world.P om den finns, annars fallback
+            dt = float(getattr(getattr(self.world, "P", None), "dt", self.WP.dt))
+
+            # Counters
             n_alive = 0
-            n_wants = 0
-            n_fail_mass = 0
+            n_eligible = 0
+
+            n_block_cd = 0
+            n_block_age = 0
+            n_block_mass = 0
+            n_block_energy = 0
+
+            n_attempts = 0          # rng-träffar (≈ "wants")
             n_spawned = 0
+            n_fail_spawn = 0
 
-            for a in self.agents:
-                if len(self.agents) + len(children) >= self.PP.max_pop:
-                    break
-                if not a.body.alive:
-                    continue
+            p_sum = 0.0
+            p_n = 0
 
-                n_alive += 1
+            fail_reasons: dict[str, int] = {}
 
-                if not a.wants_to_reproduce(rng=self.rng):
-                    continue
-                n_wants += 1
-
-                child = self._try_spawn_child(a)
-                if child is None:
-                    n_fail_mass += 1
-                    continue
-
-                children.append(child)
-                n_spawned += 1
-
-            if children:
-                self.agents.extend(children)
-            births = len(children)
-
-            self._last_birth_diag = {
-                "alive": n_alive,
-                "wants": n_wants,
-                "fail_mass": n_fail_mass,
-                "spawned": n_spawned,
+            # First-example buckets per gate
+            ex = {
+                "cd": [],
+                "age": [],
+                "mass": [],
+                "energy": [],
+                "eligible": [],
+                "attempt": [],
+                "spawn_fail": [],
+                "spawn_ok": [],
             }
 
-        if len(self.agents) >= self.PP.max_pop:
-            self._last_birth_diag = {"alive": 0, "wants": 0, "fail_mass": 0, "spawned": 0}
-    
+            # Optional: snapshot pop-size at loop start (for stable debug prints)
+            pop0 = len(self.agents)
+            cap = int(self.PP.max_pop)
+
+            # ---- births scan ----
+            for a in self.agents:
+                # hard cap check (children not yet merged)
+                if pop0 + len(children) >= cap:
+                    break
+
+                if not a.body.alive:
+                    continue
+                n_alive += 1
+
+                # ---------------------------
+                # Gate 0: cooldown
+                # ---------------------------
+                cd = float(getattr(a, "repro_cd_s", 0.0))
+                if cd > 0.0:
+                    n_block_cd += 1
+                    if DIAG_FIRST_FAILS and len(ex["cd"]) < DIAG_MAX_FAIL_EXAMPLES:
+                        ex["cd"].append(
+                            f"id={a.id} cd={cd:.3f} age={a.age_s:.2f} A_mature={float(a.pheno.A_mature):.2f}"
+                        )
+                    continue
+
+                # ---------------------------
+                # Gate 1: maturity
+                # ---------------------------
+                age = float(getattr(a, "age_s", 0.0))
+                A_mature = float(getattr(a.pheno, "A_mature", 0.0))
+                if age < A_mature:
+                    n_block_age += 1
+                    if DIAG_FIRST_FAILS and len(ex["age"]) < DIAG_MAX_FAIL_EXAMPLES:
+                        ex["age"].append(
+                            f"id={a.id} age={age:.2f} < A_mature={A_mature:.2f} (cd={cd:.3f})"
+                        )
+                    continue
+
+                # ---------------------------
+                # Gate 2: mass
+                # ---------------------------
+                M = float(getattr(a.body, "M", 0.0))
+                M_min = float(getattr(a.AP, "M_min", 0.0))
+                M_repro_min = float(getattr(a.pheno, "M_repro_min", 0.0))
+                M_req = max(M_min, M_repro_min)
+                if M < M_req:
+                    n_block_mass += 1
+                    if DIAG_FIRST_FAILS and len(ex["mass"]) < DIAG_MAX_FAIL_EXAMPLES:
+                        ex["mass"].append(
+                            f"id={a.id} M={M:.4f} < M_req={M_req:.4f} (M_min={M_min:.4f}, M_repro_min={M_repro_min:.4f})"
+                        )
+                    continue
+
+                # ---------------------------
+                # Gate 3: energy
+                # ---------------------------
+                Et = float(a.body.E_total())
+                Ecap = float(a.body.E_cap())
+                E_repro_min = float(getattr(a.pheno, "E_repro_min", 0.0))
+                thr = E_repro_min * Ecap  # IMPORTANT: assumes E_repro_min is fraction
+                
+                if Et < thr:
+                    n_block_energy += 1
+                    continue
+                
+                # ---- eligible ----
+                n_eligible += 1
+                lam = float(getattr(a.pheno, "repro_rate", 0.0))
+                p = 1.0 - math.exp(-lam * dt)
+                p_sum += p
+                p_n += 1
+                
+                # ---------------------------
+                # RNG decision
+                # ---------------------------
+                r = float(self.rng.random())
+                if r >= p:
+                    continue
+                
+                n_attempts += 1
+                
+                # ---------------------------
+                # Spawn child
+                # ---------------------------
+                child, reason = self._try_spawn_child_diag(a)
+                
+                if child is None:
+                    n_fail_spawn += 1
+                    fail_reasons[reason] = fail_reasons.get(reason, 0) + 1
+                    continue
+                
+                children.append(child)
+                n_spawned += 1
+                
+                # Merge children
+                if children:
+                    self.agents.extend(children)
+                births = len(children)
+                
+                # Save diag into population event summary
+                self._last_birth_diag = {
+                    "alive": n_alive,
+                    "eligible": n_eligible,
+                    "block_cd": n_block_cd,
+                    "block_age": n_block_age,
+                    "block_mass": n_block_mass,
+                    "block_energy": n_block_energy,
+                    "attempts": n_attempts,
+                    "wants": n_attempts,
+                    "spawned": n_spawned,
+                    "fail_spawn": n_fail_spawn,
+                    "p_mean": (p_sum / p_n) if p_n else float("nan"),
+                    "p_sum": p_sum,
+                    "fail_reasons": dict(fail_reasons),
+                }
+
         # 3.5) random cross-section sampling (one agent per sample_dt)
         sd = float(self.PP.sample_dt)
         if sd > 0.0 and self.t + 1e-12 >= self._next_sample_t:
@@ -475,14 +661,36 @@ class Population:
         self.t += dt
         return births, deaths
 
-    def mean_stats(self) -> Tuple[float, float]:
+    def mean_stats(self) -> tuple[float, float, float, float, float]:
         if not self.agents:
-            return 0.0, 0.0
-        Es = [a.body.E_total() for a in self.agents]
-        Ds = [a.body.D for a in self.agents]
+            return 0.0, 0.0, 0.0, 0.0, 0.0
+    
+        Es = []
+        Ds = []
+        Ms = []
+        Ecs = []
+        Rs = []
+    
+        for a in self.agents:
+            Et = float(a.body.E_total())
+            Ecap = float(a.body.E_cap())
+            M = float(a.body.M)
+            D = float(a.body.D)
+    
+            Es.append(Et)
+            Ds.append(D)
+            Ms.append(M)
+            Ecs.append(Ecap)
+            Rs.append(Et / max(Ecap, 1e-12))
+    
         n = float(len(self.agents))
-        return float(sum(Es) / n), float(sum(Ds) / n)
-
+        return (
+            float(sum(Es) / n),
+            float(sum(Ds) / n),
+            float(sum(Ms) / n),
+            float(sum(Ecs) / n),
+            float(sum(Rs) / n),
+        )
 
 @dataclass
 class ParamBank:

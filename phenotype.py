@@ -87,8 +87,8 @@ class PhenoRanges:
     A_mature_max: float = 40.0
 
     # reproduction
-    repro_rate_min: float = 0.20
-    repro_rate_max: float = 0.50
+    repro_rate_min: float = 1.00
+    repro_rate_max: float = 2.50
 
     # reproduction
     E_repro_min_min: float = 0.05
@@ -126,15 +126,15 @@ class PhenoRanges:
 
     # NEW: child mass at birth
     # OBS: välj intervall efter din mass-enhet. Här startar vi konservativt.
-    child_M_min: float = 0.15
-    child_M_max: float = 0.60
+    child_M_min: float = 0.02
+    child_M_max: float = 0.20
 
     cold_aversion_min: float = 0.0
     cold_aversion_max: float = 1.0
 
     # reproduction mass gate (absolute M units)
-    M_repro_min_min: float = 0.18
-    M_repro_min_max: float = 0.45
+    M_repro_min_min: float = 0.15
+    M_repro_min_max: float = 0.35
 
 def derive_pheno(traits: np.ndarray | None, R: PhenoRanges = PhenoRanges()) -> Phenotype:
     u_mature   = _sigmoid(_get_trait(traits, _T_A_MATURE))

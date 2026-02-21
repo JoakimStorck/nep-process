@@ -189,12 +189,15 @@ class WorldViewer:
     def _make_rgb(self, world) -> np.ndarray:
         """Returns (H,W,3) uint8."""
         B = np.asarray(world.B, dtype=np.float32)
+        P = getattr(world, "P", None)
+        BK = float(getattr(P, "B_K", 1.0)) if P is not None else 1.0
+        B01 = np.clip(B / max(BK, 1e-12), 0.0, 1.0).astype(np.float32, copy=False)
         F = np.asarray(world.F, dtype=np.float32)
         C = np.asarray(world.C, dtype=np.float32)
         mode = self.cfg.mode.upper().strip()
 
         if mode == "B":
-            img = np.dstack([B, B, B])
+            img = np.dstack([B01, B01, B01])
 
         elif mode == "F":
             img = np.dstack([F, F, F])
@@ -213,35 +216,35 @@ class WorldViewer:
             # vegetation "health": green<->brown based on stress = wither/(growth+wither)
             P = world.P if hasattr(world, "P") else getattr(world, "params", None)
             if P is None:
-                # fallback: just show biomass
                 img = np.dstack([B, B, B])
             else:
+                BK = float(getattr(P, "B_K", 1.0))
+                invBK = 1.0 / max(BK, 1e-12)
+                B01 = np.clip(B * invBK, 0.0, 1.0).astype(np.float32, copy=False)
+        
                 T = self._temp_field(world, B)
                 G, m = self._veg_G_and_m(T, P)
-
+        
                 # mirror World.step() terms (no diffusion needed for "health" coloring)
-                growth = (float(P.B_regen) * G) * (1.0 - B / float(P.B_K)) * B
+                growth = (float(P.B_regen) * G) * (1.0 - B * invBK) * B
                 wither = m * B
-
+        
                 eps = np.float32(1e-9)
                 stress = wither / (growth + wither + eps)  # 0..1
-
-                # color mapping:
-                #   greener when stress low, browner when stress high
-                #   brightness scales with biomass B
-                green = B * (1.0 - stress)
-                brown = B * stress
-
-                # Use a "brownish" mix: red + some green; keep blue low
+        
+                # brightness scales with normalized biomass (kg -> 0..1)
+                green = B01 * (1.0 - stress)
+                brown = B01 * stress
+        
                 R = brown
                 Gc = green + 0.35 * brown
                 Bl = 0.10 * brown
-
+        
                 img = np.dstack([R, Gc, Bl]).astype(np.float32, copy=False)
 
         else:
             # default "CBF": R=C, G=B, B=F
-            img = np.dstack([C, B, F])
+            img = np.dstack([C, B01, F])
 
         img = self._gamma(img)
         return _as_u8_rgb(img)

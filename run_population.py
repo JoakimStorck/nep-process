@@ -161,10 +161,11 @@ if __name__ == "__main__":
         
             if float(a.tick) > 0.0 and pop.t >= next_tick_t:
                 next_tick_t = pop.t + float(a.tick)
-                mean_E, mean_D = pop.mean_stats()
+                mean_E, mean_D, mean_M, mean_Ecap, mean_R = pop.mean_stats()
                 print(
                     f"t={pop.t:8.2f}  pop={len(pop.agents):4d}  b+={b:3d} d+={d:3d}  "
-                    f"b={births_total:6d} d={deaths_total:6d}  mean_E={mean_E:.3f} mean_D={mean_D:.3f}",
+                    f"b={births_total:6d} d={deaths_total:6d}  "
+                    f"mean_E={mean_E:.1f} mean_Ecap={mean_Ecap:.1f} mean_R={mean_R:.3f} mean_M={mean_M:.4f} mean_D={mean_D:.3f}",
                     flush=True,
                 )
         
