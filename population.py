@@ -231,32 +231,41 @@ class Population:
         return child
 
     def _try_reproduce(self, parent: Agent) -> Optional[Agent]:
-        """
-        Canonical reproduction path:
-          1) Parent decides eligibility (Agent.ready_to_reproduce / wants_to_reproduce)
-          2) Pay energy cost (Agent.pay_repro_cost)
-          3) Optionally provision child mass from parent (Agent.provide_child_mass)
-          4) Spawn child + init newborn
-        """
         if len(self.agents) >= int(self.PP.max_pop):
             return None
         if not parent.body.alive:
             return None
         if not parent.ready_to_reproduce():
+            # (OBS: ready bör vara deterministisk gate, wanting stokastisk)
             return None
         if not parent.wants_to_reproduce(self.rng):
             return None
-
-        # Pay reproduction energy cost (sets cooldown internally)
-        _ = parent.pay_repro_cost(float(parent.pheno.repro_cost))
-
-        # Provision child mass (optional; if pheno lacks child_M, Agent defaults handle it)
+    
+        # 1) Provisionera barnmassa (faktisk)
         child_M_target = float(getattr(parent.pheno, "child_M", 0.0))
         child_M_from_parent = None
+        m_got = 0.0
         if child_M_target > 0.0:
-            got = parent.provide_child_mass(child_M_target)
-            child_M_from_parent = float(got) if got > 0.0 else None
-
+            m_got = float(parent.provide_child_mass(child_M_target))
+            child_M_from_parent = m_got if m_got > 0.0 else None
+    
+        # Om ingen massa kunde provisioneras: abort
+        if m_got <= 0.0:
+            return None
+    
+        # 2) Betala energikostnad proportionell mot faktisk barnmassa
+        # Parametrar i AP (eller PP): birth_k_E_per_M och ev birth_E0
+        E0 = float(getattr(self.AP, "birth_E0", 0.0))
+        k  = float(self.AP.birth_k_E_per_M)
+        costE = E0 + k * m_got
+    
+        paid = float(parent.pay_repro_cost(costE))
+        if paid + 1e-9 < costE:
+            # rollback massan (annars "förlorar" parent massa utan barn)
+            parent.body.M = float(parent.body.M) + m_got
+            return None
+    
+        # 3) Spawn
         return self._spawn_child(parent, child_M_from_parent=child_M_from_parent)
 
     # -----------------------

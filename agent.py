@@ -1,7 +1,8 @@
 # agent.py
 from __future__ import annotations
 
-import math
+
+import math, random
 from dataclasses import dataclass, field, replace
 from typing import Iterable, Optional, Tuple
 
@@ -62,6 +63,15 @@ def _apply_sense_to_AP(AP: "AgentParams", level: int) -> None:
         AP.ray_len = 12.0
         AP.noise_sigma = 0.045
 
+# reproduction helpers
+
+def sigmoid(x: float) -> float:
+    # clamp för numerisk stabilitet
+    if x < -60.0:
+        return 0.0
+    if x > 60.0:
+        return 1.0
+    return 1.0 / (1.0 + math.exp(-x))
 
 # -------------------------
 # Params
@@ -163,6 +173,12 @@ class AgentParams:
     # Reproduction (handled by Population)
     # ------------------------
     repro_cooldown_s: float = 8.0
+    M_repro_soft: float = 0.03
+    E_repro_soft: float = 0.05
+    
+    # Energy cost to produce offspring (absolute + proportional to offspring mass)
+    birth_E0: float = 0.0                 # [J] optional fixed overhead
+    birth_k_E_per_M: float = 7.0e4        # [J per mass-unit]
 
     # ------------------------
     # Optional aging / stochastic death knobs (unchanged)
@@ -1175,30 +1191,30 @@ class Agent:
             return False
         if float(self.age_s) < float(self.pheno.A_mature):
             return False
-
+    
         M = float(self.body.M)
-        Mreq = float(self.pheno.M_repro_min)
-        if M < max(float(self.AP.M_min), Mreq):
-            return False
-
+        Mreq = max(float(self.AP.M_min), float(self.pheno.M_repro_min))
+    
         Et = float(self.body.E_total())
         Ecap = float(self.body.E_cap())
-        if Et < float(self.pheno.E_repro_min) * Ecap:
-            return False
-
-        return True
+        efrac = Et / max(Ecap, 1e-12)
+    
+        sM = max(float(self.AP.M_repro_soft), 1e-6)
+        sE = max(float(self.AP.E_repro_soft), 1e-6)
+    
+        pM = sigmoid((M - Mreq) / sM)
+        pE = sigmoid((efrac - float(self.pheno.E_repro_min)) / sE)
+    
+        # "mjukt ready": kräver inte True/False på tröskel, bara att det finns chans
+        return float(pM * pE)
 
     def wants_to_reproduce(self, rng: np.random.Generator) -> bool:
-        if not self.ready_to_reproduce():
-            return False
         lam = float(self.pheno.repro_rate)
         p = 1.0 - math.exp(-lam * float(self.AP.dt))
         return bool(rng.random() < p)
 
     def pay_repro_cost(self, cost_E: float) -> float:
-        Ecap = float(self.body.E_cap())
-        costE = max(float(cost_E), float(self.pheno.repro_cost) * Ecap)
-
+        costE = max(0.0, float(cost_E))
         paidE = float(self.body.take_energy(costE))
         self.repro_cd_s = float(self.AP.repro_cooldown_s)
         return float(paidE)
