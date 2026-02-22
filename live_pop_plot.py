@@ -12,25 +12,95 @@ from typing import Any, Dict, List, Optional
 import queue
 import threading
 
+import math
+
 
 # ============================================================
 # Data model
 # ============================================================
 
+PCTS = (10, 25, 75, 90)
+
+
+def _get_first(d: Dict[str, Any], *keys: str, default=float("nan")):
+    for k in keys:
+        if k in d:
+            return d.get(k, default)
+    return default
+
+
 @dataclass
 class PopSeries:
     t: List[float] = field(default_factory=list)
     pop: List[int] = field(default_factory=list)
-    mean_E: List[float] = field(default_factory=list)
+
+    # damage (D)
     mean_D: List[float] = field(default_factory=list)
+    median_D: List[float] = field(default_factory=list)
+    p10_D: List[float] = field(default_factory=list)
+    p25_D: List[float] = field(default_factory=list)
+    p75_D: List[float] = field(default_factory=list)
+    p90_D: List[float] = field(default_factory=list)
+
+    # mass (M)
+    mean_M: List[float] = field(default_factory=list)
+    median_M: List[float] = field(default_factory=list)
+    p10_M: List[float] = field(default_factory=list)
+    p25_M: List[float] = field(default_factory=list)
+    p75_M: List[float] = field(default_factory=list)
+    p90_M: List[float] = field(default_factory=list)
+
+    # energy (E)
+    mean_E: List[float] = field(default_factory=list)
+    median_E: List[float] = field(default_factory=list)
+    p10_E: List[float] = field(default_factory=list)
+    p25_E: List[float] = field(default_factory=list)
+    p75_E: List[float] = field(default_factory=list)
+    p90_E: List[float] = field(default_factory=list)
 
     window: int = 4000  # 0 => keep all
 
     def reset(self) -> None:
         self.t.clear()
         self.pop.clear()
-        self.mean_E.clear()
+
         self.mean_D.clear()
+        self.median_D.clear()
+        self.p10_D.clear()
+        self.p25_D.clear()
+        self.p75_D.clear()
+        self.p90_D.clear()
+
+        self.mean_M.clear()
+        self.median_M.clear()
+        self.p10_M.clear()
+        self.p25_M.clear()
+        self.p75_M.clear()
+        self.p90_M.clear()
+
+        self.mean_E.clear()
+        self.median_E.clear()
+        self.p10_E.clear()
+        self.p25_E.clear()
+        self.p75_E.clear()
+        self.p90_E.clear()
+
+    def _append_window(self) -> None:
+        if int(self.window) <= 0:
+            return
+        w = int(self.window)
+        if len(self.t) <= w:
+            return
+
+        def trim(xs: List[Any]) -> None:
+            xs[:] = xs[-w:]
+
+        trim(self.t)
+        trim(self.pop)
+
+        trim(self.mean_D); trim(self.median_D); trim(self.p10_D); trim(self.p25_D); trim(self.p75_D); trim(self.p90_D)
+        trim(self.mean_M); trim(self.median_M); trim(self.p10_M); trim(self.p25_M); trim(self.p75_M); trim(self.p90_M)
+        trim(self.mean_E); trim(self.median_E); trim(self.p10_E); trim(self.p25_E); trim(self.p75_E); trim(self.p90_E)
 
     def append_population_event(self, obj: Dict[str, Any]) -> bool:
         if obj.get("event") != "population":
@@ -48,17 +118,32 @@ class PopSeries:
 
         self.t.append(tt)
         self.pop.append(pp)
-        self.mean_E.append(float(s.get("mean_E", float("nan"))))
-        self.mean_D.append(float(s.get("mean_D", float("nan"))))
 
-        if int(self.window) > 0:
-            w = int(self.window)
-            if len(self.t) > w:
-                self.t[:] = self.t[-w:]
-                self.pop[:] = self.pop[-w:]
-                self.mean_E[:] = self.mean_E[-w:]
-                self.mean_D[:] = self.mean_D[-w:]
+        # ---- D ----
+        self.mean_D.append(float(_get_first(s, "mean_D", default=float("nan"))))
+        self.median_D.append(float(_get_first(s, "median_D", "med_D", default=float("nan"))))
+        self.p10_D.append(float(_get_first(s, "p10_D", "pct10_D", default=float("nan"))))
+        self.p25_D.append(float(_get_first(s, "p25_D", "pct25_D", default=float("nan"))))
+        self.p75_D.append(float(_get_first(s, "p75_D", "pct75_D", default=float("nan"))))
+        self.p90_D.append(float(_get_first(s, "p90_D", "pct90_D", default=float("nan"))))
 
+        # ---- M ----
+        self.mean_M.append(float(_get_first(s, "mean_M", default=float("nan"))))
+        self.median_M.append(float(_get_first(s, "median_M", "med_M", default=float("nan"))))
+        self.p10_M.append(float(_get_first(s, "p10_M", "pct10_M", default=float("nan"))))
+        self.p25_M.append(float(_get_first(s, "p25_M", "pct25_M", default=float("nan"))))
+        self.p75_M.append(float(_get_first(s, "p75_M", "pct75_M", default=float("nan"))))
+        self.p90_M.append(float(_get_first(s, "p90_M", "pct90_M", default=float("nan"))))
+
+        # ---- E ----
+        self.mean_E.append(float(_get_first(s, "mean_E", default=float("nan"))))
+        self.median_E.append(float(_get_first(s, "median_E", "med_E", default=float("nan"))))
+        self.p10_E.append(float(_get_first(s, "p10_E", "pct10_E", default=float("nan"))))
+        self.p25_E.append(float(_get_first(s, "p25_E", "pct25_E", default=float("nan"))))
+        self.p75_E.append(float(_get_first(s, "p75_E", "pct75_E", default=float("nan"))))
+        self.p90_E.append(float(_get_first(s, "p90_E", "pct90_E", default=float("nan"))))
+
+        self._append_window()
         return True
 
 
@@ -93,7 +178,6 @@ def start_tail_thread(fp: str, q: "queue.Queue[dict]", *, poll_s: float = 0.25) 
                         q.put(obj)
                 q.put({"_event": "batch_done"})
 
-            # initial batch
             read_all_open()
 
             while True:
@@ -111,7 +195,6 @@ def start_tail_thread(fp: str, q: "queue.Queue[dict]", *, poll_s: float = 0.25) 
                 except FileNotFoundError:
                     continue
 
-                # rotation
                 if st.st_ino != inode:
                     f.close()
                     f = open(fp, "r", encoding="utf-8")
@@ -120,7 +203,6 @@ def start_tail_thread(fp: str, q: "queue.Queue[dict]", *, poll_s: float = 0.25) 
                     read_all_open()
                     continue
 
-                # truncate
                 cur = f.tell()
                 if st.st_size < cur:
                     q.put({"_event": "reset"})
@@ -141,6 +223,12 @@ def start_tail_thread(fp: str, q: "queue.Queue[dict]", *, poll_s: float = 0.25) 
 # Plot/UI
 # ============================================================
 
+def _fmt(x: float) -> str:
+    if x is None or (isinstance(x, float) and (math.isnan(x) or math.isinf(x))):
+        return "nan"
+    return f"{x:.3f}"
+
+
 def _status(series: PopSeries) -> str:
     if not series.t:
         return "no population events yet"
@@ -148,50 +236,98 @@ def _status(series: PopSeries) -> str:
     return (
         f"t={series.t[i]:.2f}  n={len(series.t)}\n"
         f"pop={series.pop[i]}\n"
-        f"mean_E={series.mean_E[i]:.3f}  mean_D={series.mean_D[i]:.3f}"
+        f"D mean/med={_fmt(series.mean_D[i])}/{_fmt(series.median_D[i])}\n"
+        f"M mean/med={_fmt(series.mean_M[i])}/{_fmt(series.median_M[i])}\n"
+        f"E mean/med={_fmt(series.mean_E[i])}/{_fmt(series.median_E[i])}"
     )
 
 
-def run_ui_loop(fig, ax_pop, ax_state, series: PopSeries, args, Q: "queue.Queue[dict]"):
+def _plot_stats(ax, t, mean, med, p10, p25, p75, p90, *, label_prefix: str, color: str, mean_lw=2.6, other_lw=1.1, ls="-"):
+    ax.plot(t, mean, label=f"{label_prefix} mean", linewidth=mean_lw, color=color, linestyle=ls)
+    ax.plot(t, med,  label=f"{label_prefix} median", linewidth=other_lw, color=color, linestyle=ls)
+
+    ax.plot(t, p25, label=f"{label_prefix} p25", linewidth=other_lw, color=color, linestyle="--")
+    ax.plot(t, p75, label=f"{label_prefix} p75", linewidth=other_lw, color=color, linestyle="--")
+
+    ax.plot(t, p10, label=f"{label_prefix} p10", linewidth=other_lw, color=color, linestyle=":")
+    ax.plot(t, p90, label=f"{label_prefix} p90", linewidth=other_lw, color=color, linestyle=":")
+
+
+def run_ui_loop(fig, ax_top, ax_top2, ax_bot, ax_bot2, series: PopSeries, args, Q: "queue.Queue[dict]"):
     last_redraw = 0.0
     redraw_min_dt = float(args.redraw_min_dt)
     max_items_per_tick = int(args.max_items_per_tick)
 
+    # user-requested: separate palettes for primary/secondary axes
+    col_primary = getattr(args, "color_primary", "#1f77b4")    # blue-ish
+    col_secondary = getattr(args, "color_secondary", "#d62728") # red-ish
+
     def redraw() -> None:
-        ax_pop.clear()
-        ax_state.clear()
+        ax_top.clear()
+        ax_top2.clear()
+        ax_bot.clear()
+        ax_bot2.clear()
 
         if not series.t:
-            ax_pop.set_title("Population (waiting for events)")
+            ax_top.set_title("Population (waiting for events)")
             fig.canvas.draw_idle()
             return
 
         t = series.t
 
-        # --- population ---
-        ax_pop.plot(t, series.pop, label="pop")
-        ax_pop.set_ylabel("population")
-        ax_pop.set_title("Population")
-        ax_pop.legend(loc="upper left", fontsize="small")
+        # -------------------------
+        # TOP: pop (primary) + damage (secondary)
+        # -------------------------
+        ax_top.plot(t, series.pop, label="pop", linewidth=2.6, color=col_primary)
+        ax_top.set_ylabel("population")
+        ax_top.set_title("Population + Damage")
 
-        # --- mean state ---
-        ax_state.plot(t, series.mean_E, label="mean_E")
-        ax_state.plot(t, series.mean_D, label="mean_D")
-        ax_state.set_xlabel("t")
-        ax_state.set_ylabel("mean")
-        ax_state.set_title("Mean health")
-        ax_state.legend(loc="upper left", fontsize="small")
+        _plot_stats(
+            ax_top2, t,
+            series.mean_D, series.median_D,
+            series.p10_D, series.p25_D, series.p75_D, series.p90_D,
+            label_prefix="D", color=col_secondary,
+        )
+        ax_top2.set_ylabel("damage (D)")
 
-        ax_pop.text(
+        # legends (separate)
+        ax_top.legend(loc="upper left", fontsize="small")
+        ax_top2.legend(loc="upper right", fontsize="small")
+
+        ax_top.text(
             0.01,
             0.02,
             _status(series),
-            transform=ax_pop.transAxes,
+            transform=ax_top.transAxes,
             fontsize="small",
             va="bottom",
             ha="left",
             bbox=dict(boxstyle="round", alpha=float(args.alpha_box)),
         )
+
+        # -------------------------
+        # BOTTOM: mass (primary) + energy (secondary)
+        # -------------------------
+        _plot_stats(
+            ax_bot, t,
+            series.mean_M, series.median_M,
+            series.p10_M, series.p25_M, series.p75_M, series.p90_M,
+            label_prefix="M", color=col_primary,
+        )
+        ax_bot.set_ylabel("mass (M)")
+
+        _plot_stats(
+            ax_bot2, t,
+            series.mean_E, series.median_E,
+            series.p10_E, series.p25_E, series.p75_E, series.p90_E,
+            label_prefix="E", color=col_secondary,
+        )
+        ax_bot2.set_ylabel("energy (E)")
+
+        ax_bot.set_xlabel("t")
+
+        ax_bot.legend(loc="upper left", fontsize="small")
+        ax_bot2.legend(loc="upper right", fontsize="small")
 
         fig.suptitle(f"Live pop plot ({args.fp})")
         fig.canvas.draw_idle()
@@ -252,30 +388,38 @@ def main() -> None:
     ap.add_argument("--timer_ms", type=int, default=50)
     ap.add_argument("--redraw_min_dt", type=float, default=0.20)
     ap.add_argument("--max_items_per_tick", type=int, default=5000)
+
+    # user: separate primary/secondary palettes
+    ap.add_argument("--color_primary", default="#1f77b4")
+    ap.add_argument("--color_secondary", default="#d62728")
+
     args = ap.parse_args()
 
     import matplotlib.pyplot as plt
 
-    fig, ax = plt.subplots(2, 1, sharex=True, figsize=(10, 7))
-    ax_pop, ax_state = ax
+    fig, ax = plt.subplots(2, 1, sharex=True, figsize=(11, 7.5))
+    ax_top, ax_bot = ax
+
+    # secondary axes
+    ax_top2 = ax_top.twinx()
+    ax_bot2 = ax_bot.twinx()
 
     series = PopSeries(window=int(args.window))
     Q: "queue.Queue[dict]" = queue.Queue()
 
     th = start_tail_thread(str(args.fp), Q, poll_s=float(args.poll))
-    tmr = run_ui_loop(fig, ax_pop, ax_state, series, args, Q)
+    tmr = run_ui_loop(fig, ax_top, ax_top2, ax_bot, ax_bot2, series, args, Q)
 
     # keep refs alive
     fig._tail_thread = th
     fig._live_timer = tmr
     fig._series = series
 
-    # Set window title
     try:
         fig.canvas.manager.set_window_title("NEP – Pop Plot")
     except Exception:
         pass
-        
+
     plt.show()
 
 

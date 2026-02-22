@@ -21,6 +21,40 @@ from simlog import records
 def torus_wrap(x: float, size: int) -> float:
     return x % size
 
+_PCTS = (10, 25, 75, 90)
+
+def _stats_1d(x: np.ndarray) -> dict[str, float]:
+    # x: float64 array
+    if x.size == 0:
+        return {
+            "mean": float("nan"),
+            "median": float("nan"),
+            "p10": float("nan"),
+            "p25": float("nan"),
+            "p75": float("nan"),
+            "p90": float("nan"),
+        }
+
+    x = x[np.isfinite(x)]
+    if x.size == 0:
+        return {
+            "mean": float("nan"),
+            "median": float("nan"),
+            "p10": float("nan"),
+            "p25": float("nan"),
+            "p75": float("nan"),
+            "p90": float("nan"),
+        }
+
+    p = np.percentile(x, _PCTS)
+    return {
+        "mean": float(np.mean(x)),
+        "median": float(np.median(x)),
+        "p10": float(p[0]),
+        "p25": float(p[1]),
+        "p75": float(p[2]),
+        "p90": float(p[3]),
+    }
 
 @dataclass
 class PopParams:
@@ -152,17 +186,49 @@ class Population:
         )
 
     def _emit_population(self, t: float, births: int, deaths: int) -> None:
-        mean_E, mean_D, mean_M, _, _ = self.mean_stats()
-
+        # Räkna bara levande för statistik + pop (mer semantiskt korrekt)
+        alive = [a for a in self.agents if a.body.alive]
+        pop_n = int(len(alive))
+    
+        E = np.fromiter((float(a.body.E_total()) for a in alive), dtype=np.float64, count=pop_n)
+        D = np.fromiter((float(a.body.D) for a in alive),       dtype=np.float64, count=pop_n)
+        M = np.fromiter((float(a.body.M) for a in alive),       dtype=np.float64, count=pop_n)
+    
+        sE = _stats_1d(E)
+        sD = _stats_1d(D)
+        sM = _stats_1d(M)
+    
+        # Backward compatible: mean_* som tidigare
+        # Nya fält: median_* och pXX_*
         payload = records.population_record(
             t=t,
-            pop_n=len(self.agents),
+            pop_n=pop_n,
             births=int(births),
             deaths=int(deaths),
-            mean_E=float(mean_E),
-            mean_D=float(mean_D),
-            mean_M=float(mean_M),
+        
+            mean_E=sE["mean"],
+            mean_D=sD["mean"],
+            mean_M=sM["mean"],
+        
+            median_E=sE["median"],
+            p10_E=sE["p10"],
+            p25_E=sE["p25"],
+            p75_E=sE["p75"],
+            p90_E=sE["p90"],
+        
+            median_D=sD["median"],
+            p10_D=sD["p10"],
+            p25_D=sD["p25"],
+            p75_D=sD["p75"],
+            p90_D=sD["p90"],
+        
+            median_M=sM["median"],
+            p10_M=sM["p10"],
+            p25_M=sM["p25"],
+            p75_M=sM["p75"],
+            p90_M=sM["p90"],
         )
+    
         self._emit("population", t, payload)
 
     def _emit_sample(self, t: float, a: Agent) -> None:
@@ -195,12 +261,18 @@ class Population:
     # -----------------------
     # births
     # -----------------------
-    def _spawn_child(self, parent: Agent, child_M_from_parent: float | None = None) -> Agent:
+    def _spawn_child(
+        self,
+        parent: Agent,
+        child_M_from_parent: float | None = None,
+        child_E_fast_J: float | None = None,
+        child_E_slow_J: float | None = None,
+    ) -> Agent:
         dx = float(self.rng.normal(0.0, float(self.PP.spawn_jitter_r)))
         dy = float(self.rng.normal(0.0, float(self.PP.spawn_jitter_r)))
-
+    
         g_child = child_genome_from_parent(parent.genome, rng=self.rng, cfg=self.MC)
-
+    
         child = Agent(
             AP=self.AP,
             genome=g_child,
@@ -210,23 +282,28 @@ class Population:
         )
         child.bind_world(self.world)
         child.birth_t = float(self.t)
-
+    
         # ParamBank slot
         key = (tuple(g_child.layer_sizes), str(g_child.act))
         bank = self._banks.get(key)
         if bank is None:
             bank = ParamBank.create(key[0], key[1], capacity=int(self.PP.max_pop))
             self._banks[key] = bank
-
+    
         slot = bank.alloc()
         bank.write_genome(slot, g_child)
-
+    
         child._policy_key = key
         child._policy_slot = slot
-
-        # newborn physiology (may incorporate mass provision)
-        child.init_newborn_state(parent.pheno, child_M_from_parent=child_M_from_parent)
-
+    
+        # newborn physiology (mass + ENERGY comes from parent)
+        child.init_newborn_state(
+            parent.pheno,
+            child_M_from_parent=child_M_from_parent,
+            child_E_fast_J=child_E_fast_J,
+            child_E_slow_J=child_E_slow_J,
+        )
+    
         self._emit_birth(self.t, child, parent)
         return child
 
@@ -236,7 +313,6 @@ class Population:
         if not parent.body.alive:
             return None
         if not parent.ready_to_reproduce():
-            # (OBS: ready bör vara deterministisk gate, wanting stokastisk)
             return None
         if not parent.wants_to_reproduce(self.rng):
             return None
@@ -249,24 +325,34 @@ class Population:
             m_got = float(parent.provide_child_mass(child_M_target))
             child_M_from_parent = m_got if m_got > 0.0 else None
     
-        # Om ingen massa kunde provisioneras: abort
         if m_got <= 0.0:
             return None
     
         # 2) Betala energikostnad proportionell mot faktisk barnmassa
-        # Parametrar i AP (eller PP): birth_k_E_per_M och ev birth_E0
         E0 = float(getattr(self.AP, "birth_E0", 0.0))
         k  = float(self.AP.birth_k_E_per_M)
         costE = E0 + k * m_got
     
         paid = float(parent.pay_repro_cost(costE))
         if paid + 1e-9 < costE:
-            # rollback massan (annars "förlorar" parent massa utan barn)
             parent.body.M = float(parent.body.M) + m_got
             return None
     
+        # 2B) Allokera del av paid som barnets initiala energireserv
+        birth_energy_eff = float(getattr(self.AP, "birth_energy_eff", 0.70))  # ny knob, default 0.70
+        birth_energy_eff = max(0.0, min(1.0, birth_energy_eff))
+        E_child = birth_energy_eff * paid
+    
+        child_E_fast_J = 0.85 * E_child
+        child_E_slow_J = 0.15 * E_child
+    
         # 3) Spawn
-        return self._spawn_child(parent, child_M_from_parent=child_M_from_parent)
+        return self._spawn_child(
+            parent,
+            child_M_from_parent=child_M_from_parent,
+            child_E_fast_J=child_E_fast_J,
+            child_E_slow_J=child_E_slow_J,
+        )
 
     # -----------------------
     # main loop
@@ -345,13 +431,22 @@ class Population:
         # (D) deaths -> carcass (kg) + release bank slot + emit death
         deaths = 0
         survivors: List[Agent] = []
+        
         for a in self.agents:
             if not a.body.alive:
                 # release policy slot
                 self._banks[a._policy_key].release(a._policy_slot)
-
-                # carcass mass = remaining body mass (kg)
-                carcass_kg = max(0.0, float(getattr(a.body, "M", 0.0)))
+        
+                body = a.body
+        
+                # carcass mass = structural mass + energy buffer converted to kg
+                M_struct = float(body.M)
+                E_buf = float(body.E_total())
+                E_carcass = float(a.AP.E_carcass_J_per_kg)
+        
+                M_buf_equiv = E_buf / max(E_carcass, 1e-12)
+                carcass_kg = M_struct + M_buf_equiv
+        
                 if carcass_kg > 0.0:
                     self.world.add_carcass(
                         float(a.x),
@@ -359,16 +454,24 @@ class Population:
                         amount_kg=carcass_kg,
                         rad=int(self.PP.carcass_rad),
                     )
-
+        
+                # Zero out body deterministically
+                body.M = 0.0
+                body.E_fast = 0.0
+                body.E_slow = 0.0
+        
                 deaths += 1
+        
                 self._emit_death(
                     self.t,
                     a,
                     carcass_amount=carcass_kg,
                     carcass_rad=int(self.PP.carcass_rad),
                 )
+        
             else:
                 survivors.append(a)
+        
         self.agents = survivors
 
         # (E) births (simple, deterministic pass; enforce cap)

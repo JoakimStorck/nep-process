@@ -129,6 +129,20 @@ class AgentParams:
     compute_cost: float = 5.0  # [W/kg]
 
     # ------------------------
+    # Thermoregulation (simple)
+    # ------------------------
+    Tb_init: float = 37.0
+    Tb_set: float = 37.0
+    Tb_min: float = 35.0
+
+    heatcap_J_per_kgC: float = 3500.0   # thermal inertia ~ M
+    thermo_k_W_per_C: float = 1.0       # heat loss coefficient ~ M^(2/3)
+    thermo_mass_exp: float = 2.0 / 3.0
+
+    thermo_Pmax_per_kg: float = 20.0    # max heat generation (W/kg)
+    cold_damage_gain: float = 0.03      # damage per second at severe cold
+    
+    # ------------------------
     # Sensing upkeep costs (per mass, per second via metabolism_scale)
     # ------------------------
     sense_cost_L1: float = 0.2
@@ -179,6 +193,7 @@ class AgentParams:
     # Energy cost to produce offspring (absolute + proportional to offspring mass)
     birth_E0: float = 0.0                 # [J] optional fixed overhead
     birth_k_E_per_M: float = 7.0e4        # [J per mass-unit]
+    birth_energy_eff: float = 0.70
 
     # ------------------------
     # Optional aging / stochastic death knobs (unchanged)
@@ -204,7 +219,8 @@ class Body:
     M: float = 0.0        # body mass
     D: float = 0.0        # accumulated damage
     Fg: float = 0.15      # fatigue level
-
+    Tb: float = 37.0      # Target body temperature
+    
     alive: bool = True
 
     # energy ledger diagnostics (per-individual)
@@ -304,6 +320,7 @@ class Body:
         food_carcass_kg: float,
         pheno: Phenotype,
         extra_drain: float = 0.0,
+        T_env: float = 0.0,
         rng=None,
         age_s: float = 0.0,
         t_now: float | None = None,
@@ -384,11 +401,14 @@ class Body:
         dE_store = min(E_in, room)
         dE_fast = 0.0
         dE_slow = 0.0
+        WF = 0.6
+        WS = 0.4
+        
         if dE_store > 0.0:
-            dE_fast = 0.85 * dE_store
-            dE_slow = 0.15 * dE_store
-            self.E_fast += dE_fast
-            self.E_slow += dE_slow
+            dE_fast_w = 0.85 * dE_store
+            dE_slow_w = 0.15 * dE_store
+            self.E_fast += dE_fast_w / WF
+            self.E_slow += dE_slow_w / WS
 
         E_to_M = max(0.0, E_in - dE_store)
         dM_grow = 0.0
@@ -410,7 +430,43 @@ class Body:
         out_sense = dt * metab * M_eff * sense_cost
         out_loco = max(0.0, float(extra_drain))
 
-        E_out_drain = out_basal + out_compute + out_sense + out_loco
+        # ---------------------------------------------------------
+        # (2B) Thermoregulation (optional, ledger-consistent)
+        # ---------------------------------------------------------
+        Tb = float(getattr(self, "Tb", float(getattr(self.P, "Tb_set", 37.0))))
+        Tset = float(getattr(self.P, "Tb_set", 37.0))
+        Tenv = float(T_env)
+
+        # heat loss ~ K(M) * (Tb - Tenv)
+        k0 = float(getattr(self.P, "thermo_k_W_per_C", 0.0))
+        expA = float(getattr(self.P, "thermo_mass_exp", 2.0 / 3.0))
+        K = k0 * (M_eff ** expA)
+
+        # thermal inertia C(M)
+        c0 = float(getattr(self.P, "heatcap_J_per_kgC", 0.0))
+        Cth = max(1e-9, c0 * M_eff)
+
+        # choose heat generation to push toward setpoint (clamped)
+        # required power to hold/approach setpoint (simple proportional)
+        # (enkel: försök kompensera förlust om Tb < Tset)
+        P_need = 0.0
+        if Tb < Tset:
+            # compensate current loss + small proportional term
+            P_need = max(0.0, K * (Tset - Tenv))
+
+        Pmax = float(getattr(self.P, "thermo_Pmax_per_kg", 0.0)) * M_eff
+        P_gen = min(P_need, Pmax)
+
+        out_thermo = dt * P_gen  # J
+
+        # update Tb using net heat
+        # dTb = (Qgen - Qloss) * dt / Cth
+        Qloss = K * (Tb - Tenv)
+        dTb = (P_gen - Qloss) * dt / Cth
+        Tb = Tb + dTb
+        self.Tb = Tb
+
+        E_out_drain = out_basal + out_compute + out_sense + out_loco + out_thermo
 
         paid = float(self.take_energy(E_out_drain))
         deficit = max(0.0, E_out_drain - paid)
@@ -430,7 +486,8 @@ class Body:
             if dM_cat > 0.0:
                 self.M -= dM_cat
                 E_from_M = dM_cat * E_body
-                self.E_fast += E_from_M
+                # lägg som weighted energi i fast-bufferten
+                self.E_fast += E_from_M / WF
 
             _ = float(self.take_energy(deficit))
 
@@ -464,8 +521,8 @@ class Body:
 
         k_E = 1.2
 
-        drain_rate = (out_basal + out_compute + out_sense + out_loco) / max(dt, 1e-12)  # J/s
-        drain_rate_n = drain_rate / max(Ecap, 1e-9)                                     # 1/s
+        drain_rate = (out_basal + out_compute + out_sense + out_loco + out_thermo) / max(dt, 1e-12)  # J/s
+        drain_rate_n = drain_rate / max(Ecap, 1e-9)                                                  # 1/s
 
         # damage inflow: effort + metabolic stress + optional aging
         k_eff = 0.02
@@ -478,7 +535,18 @@ class Body:
         age_rate = max(0.0, k_age0 + k_age1 * float(age_s))
         dD_age = dt * age_rate * (1.0 + k_ageD * d_norm) * (1.0 + frailty_gain)
 
-        dD_in = dD_eff + dD_met + dD_age
+        # --- cold stress (model-based, no policy bias) ---
+        Tb = float(getattr(self, "Tb", float(getattr(self.P, "Tb_set", 37.0))))
+        Tb_min = float(getattr(self.P, "Tb_min", 35.0))
+        cold_damage_gain = float(getattr(self.P, "cold_damage_gain", 0.0))
+
+        if Tb < Tb_min:
+            sev = clamp((Tb_min - Tb) / 10.0, 0.0, 1.0)   # 10°C span, tweakable
+            dD_cold = dt * cold_damage_gain * sev
+        else:
+            dD_cold = 0.0
+
+        dD_in = dD_eff + dD_met + dD_age + dD_cold
 
         # repair outflow
         E_rep_min = float(getattr(pheno, "E_rep_min", 0.0))
@@ -519,16 +587,21 @@ class Body:
         )
 
         # enforce storage capacity
-        Et = float(self.E_total())
-        Ecap = float(self.E_cap())
+        Et = self.E_total()
+        Ecap = self.E_cap()
         if Et > Ecap:
             overflow = Et - Ecap
-            take_fast = min(float(self.E_fast), overflow)
-            self.E_fast = float(self.E_fast) - take_fast
-            overflow -= take_fast
+        
+            take_fast_w = min(WF * self.E_fast, overflow)
+            if take_fast_w > 0.0:
+                self.E_fast -= take_fast_w / WF
+                overflow -= take_fast_w
+        
             if overflow > 0.0:
-                take_slow = min(float(self.E_slow), overflow)
-                self.E_slow = float(self.E_slow) - take_slow
+                take_slow_w = min(WS * self.E_slow, overflow)
+                if take_slow_w > 0.0:
+                    self.E_slow -= take_slow_w / WS
+                    overflow -= take_slow_w
 
         # ---------------------------------------------------------
         # (5) Deterministic death conditions
@@ -651,6 +724,7 @@ class Body:
             "E_out_compute": out_compute,
             "E_out_sense": out_sense,
             "E_out_loco": out_loco,
+            "E_out_thermo": out_thermo,
             "E_out_drain": E_out_drain,
             "E_out_repair": E_out_repair,
             "E_from_M": E_from_M,
@@ -957,6 +1031,9 @@ class Agent:
     last_B0: float = 0.0
     last_C0: float = 0.0
 
+    WF = 0.6
+    WS = 0.4
+
     sense_level: int = field(init=False, default=0)
 
     def __post_init__(self) -> None:
@@ -984,6 +1061,8 @@ class Agent:
         self.body.E_fast = (0.85 * E0) / 0.6
         self.body.E_slow = (0.15 * E0) / 0.4
 
+        self.body.Tb = float(getattr(self.AP, "Tb_init", 37.0))
+        
         self.body.D = 0.0
         self.body.Fg = float(self.body.Fg)
         self.body.alive = True
@@ -1076,22 +1155,10 @@ class Agent:
         allow_move = 1.0 - inh_move
         allow_eat = 1.0 - inh_eat
 
-        # 2) Temperature modulation (cold avoidance)
-        Tloc = world.temperature_at(self.x, self.y) if hasattr(world, "temperature_at") else 0.0
-        T_comfort = 10.0
-        T_width = 12.0
-        coldness = clamp((T_comfort - float(Tloc)) / max(T_width, 1e-9), 0.0, 1.0)
-        cold_drive = float(self.pheno.cold_aversion) * float(coldness)
-
-        thrust_eff = thrust * (1.0 - 0.85 * cold_drive)
-
-        s = int(world.P.size)
-        mid = 0.5 * (s - 1)
-        dy = (mid - float(self.y))
-        target_heading = math.atan2(dy, 0.0)
-        err = self._signed_angle(target_heading - self.heading)
-        bias_turn = clamp(err / math.pi, -1.0, 1.0)
-        turn = clamp(turn + 0.80 * cold_drive * bias_turn, -1.0, 1.0)
+        # 2) Temperature at location (NO policy modulation here)
+        #    Temperature effects are handled in Body.step() (thermoregulation + cold stress),
+        #    so the policy shouldn't get any hand-coded "avoid cold" bias.
+        Tloc = float(world.temperature_at(self.x, self.y)) if hasattr(world, "temperature_at") else 0.0
 
         # 3) Heading integration (turn + exploration jitter)
         jitter = float(rng.normal(0.0, 0.65)) * explore_drive
@@ -1104,7 +1171,7 @@ class Agent:
         fatigue = float(self.body.Fg)
         fatigue_factor = clamp(1.0 - 0.9 * fatigue, 0.05, 1.0)
         weak_move = float(self.body.move_factor())
-        u = clamp(allow_move * thrust_eff * fatigue_factor * weak_move, 0.0, 1.0)
+        u = clamp(allow_move * thrust * fatigue_factor * weak_move, 0.0, 1.0)
 
         # 5) Locomotion dynamics
         v_prev = max(0.0, float(self.last_speed))
@@ -1173,6 +1240,7 @@ class Agent:
             food_carcass_kg=food_carcass_kg,
             pheno=self.pheno,
             extra_drain=E_move,
+            T_env=Tloc,
             rng=rng,
             age_s=self.age_s,
         )
@@ -1192,21 +1260,19 @@ class Agent:
         if float(self.age_s) < float(self.pheno.A_mature):
             return False
     
+        # Hard gates (deterministiska): undvik "float-as-bool" och semantisk läcka
         M = float(self.body.M)
         Mreq = max(float(self.AP.M_min), float(self.pheno.M_repro_min))
-    
+        if M < Mreq:
+            return False
+
         Et = float(self.body.E_total())
         Ecap = float(self.body.E_cap())
         efrac = Et / max(Ecap, 1e-12)
-    
-        sM = max(float(self.AP.M_repro_soft), 1e-6)
-        sE = max(float(self.AP.E_repro_soft), 1e-6)
-    
-        pM = sigmoid((M - Mreq) / sM)
-        pE = sigmoid((efrac - float(self.pheno.E_repro_min)) / sE)
-    
-        # "mjukt ready": kräver inte True/False på tröskel, bara att det finns chans
-        return float(pM * pE)
+        if efrac < float(self.pheno.E_repro_min):
+            return False
+
+        return True
 
     def wants_to_reproduce(self, rng: np.random.Generator) -> bool:
         lam = float(self.pheno.repro_rate)
@@ -1216,7 +1282,6 @@ class Agent:
     def pay_repro_cost(self, cost_E: float) -> float:
         costE = max(0.0, float(cost_E))
         paidE = float(self.body.take_energy(costE))
-        self.repro_cd_s = float(self.AP.repro_cooldown_s)
         return float(paidE)
 
     def provide_child_mass(self, child_M: float) -> float:
@@ -1225,22 +1290,48 @@ class Agent:
         self.body.M = float(self.body.M) - got
         return float(got)
 
-    def init_newborn_state(self, parent_pheno: Phenotype, child_M_from_parent: float | None = None) -> None:
+    def init_newborn_state(
+        self,
+        parent_pheno: Phenotype,
+        child_M_from_parent: float | None = None,
+        child_E_fast_J: float | None = None,
+        child_E_slow_J: float | None = None,
+    ) -> None:
+        # Mass vid födsel: från parent (om provisionerad), annars fallback till pheno/AP.
         child_M = float(child_M_from_parent) if child_M_from_parent is not None else float(
             getattr(parent_pheno, "child_M", self.AP.M0 * 0.5)
         )
         child_M = max(float(self.AP.M_min), child_M)
         self.body.M = child_M
 
-        Ecap = float(self.body.E_cap())
-        Ef_u = clamp(float(getattr(parent_pheno, "child_E_fast", 0.50)), 0.0, 1.0)
-        Es_u = clamp(float(getattr(parent_pheno, "child_E_slow", 0.20)), 0.0, 1.0)
+        # Energi vid födsel: får INTE skapas "ur Ecap". Måste komma från parent.
+        Ef_J = max(0.0, float(child_E_fast_J)) if child_E_fast_J is not None else 0.0
+        Es_J = max(0.0, float(child_E_slow_J)) if child_E_slow_J is not None else 0.0
+        self.body.E_fast = Ef_J / self.WF
+        self.body.E_slow = Es_J / self.WS
 
-        self.body.E_fast = (Ef_u * Ecap) / 0.6
-        self.body.E_slow = (Es_u * Ecap) / 0.4
+        # Klipp mot Ecap deterministiskt
+        Et = float(self.body.E_total())
+        Ecap = float(self.body.E_cap())
+        if Et > Ecap:
+            overflow = Et - Ecap
+
+            # ta från fast först i WEIGHTED space
+            take_fast_w = min(self.WF * float(self.body.E_fast), overflow)
+            if take_fast_w > 0.0:
+                self.body.E_fast = float(self.body.E_fast) - (take_fast_w / self.WF)
+                overflow -= take_fast_w
+
+            if overflow > 0.0:
+                take_slow_w = min(self.WS * float(self.body.E_slow), overflow)
+                if take_slow_w > 0.0:
+                    self.body.E_slow = float(self.body.E_slow) - (take_slow_w / self.WS)
+                    overflow -= take_slow_w
 
         self.body.Fg = clamp(float(getattr(parent_pheno, "child_Fg", 0.15)), 0.0, 1.0)
+        self.body.Tb = float(getattr(self.AP, "Tb_init", 37.0))
         self.body.D = 0.0
         self.body.alive = True
         self.repro_cd_s = float(self.AP.repro_cooldown_s)
         self.age_s = 0.0
+        
