@@ -91,10 +91,10 @@ class WorldParams:
 # -------------------------
 @dataclass
 class World:
-    P: WorldParams
+    WP: WorldParams
 
     def __post_init__(self) -> None:
-        s = int(self.P.size)
+        s = int(self.WP.size)
 
         # occupancy (0=empty else agent_id)
         self.A = np.zeros((s, s), dtype=np.int32)
@@ -113,9 +113,9 @@ class World:
 
         self._lat = lat
         self._abs_lat = abs_lat
-        self._Tmean_y = np.float32(self.P.T_eq) - np.float32(self.P.dT_pole) * (abs_lat ** np.float32(self.P.lat_p))
-        self._Amp_y = np.float32(self.P.A_eq) + (np.float32(self.P.A_pole) - np.float32(self.P.A_eq)) * (
-            abs_lat ** np.float32(self.P.amp_q)
+        self._Tmean_y = np.float32(self.WP.T_eq) - np.float32(self.WP.dT_pole) * (abs_lat ** np.float32(self.WP.lat_p))
+        self._Amp_y = np.float32(self.WP.A_eq) + (np.float32(self.WP.A_pole) - np.float32(self.WP.A_eq)) * (
+            abs_lat ** np.float32(self.WP.amp_q)
         )
 
         # last-computed profiles (debug/inspection)
@@ -126,7 +126,7 @@ class World:
         self._update_temperature()
 
         # initial ecology
-        BK = float(self.P.B_K)
+        BK = float(self.WP.B_K)
         self.B.fill(np.float32(0.08 * BK))
 
         for _ in range(30):
@@ -143,11 +143,11 @@ class World:
     # Temperature / season
     # -------------------------
     def _update_temperature(self) -> None:
-        P = self.P
-        year_len = float(P.year_len) if float(P.year_len) > 1e-9 else 1.0
+        WP = self.WP
+        year_len = float(WP.year_len) if float(WP.year_len) > 1e-9 else 1.0
 
         phase = 2.0 * math.pi * ((self.t % year_len) / year_len)
-        phase -= float(P.season_phase0)
+        phase -= float(WP.season_phase0)
 
         s = np.float32(math.sin(phase))
         S_y = self._lat * s  # (size,)
@@ -155,8 +155,8 @@ class World:
         Ty = self._Tmean_y + self._Amp_y * S_y
         self.Ty = Ty.astype(np.float32, copy=False)
 
-        T0 = float(P.T0)
-        T1 = float(P.T1)
+        T0 = float(WP.T0)
+        T1 = float(WP.T1)
         if T1 <= T0 + 1e-9:
             gy = (Ty >= np.float32(T0)).astype(np.float32)
         else:
@@ -166,15 +166,15 @@ class World:
         self.gy = gy
 
     def temperature_field(self) -> np.ndarray:
-        s = int(self.P.size)
+        s = int(self.WP.size)
         return np.broadcast_to(self.Ty[:, None], (s, s)).astype(np.float32, copy=False)
 
     def growth_gate_field(self) -> np.ndarray:
-        s = int(self.P.size)
+        s = int(self.WP.size)
         return np.broadcast_to(self.gy[:, None], (s, s)).astype(np.float32, copy=False)
 
     def temperature_at(self, x: float, y: float) -> float:
-        s = int(self.P.size)
+        s = int(self.WP.size)
         yf = float(y) % s
         y0 = int(math.floor(yf)) % s
         y1 = (y0 + 1) % s
@@ -189,7 +189,7 @@ class World:
     def rebuild_agent_layer(self, agents: Iterable) -> None:
         A = self.A
         A.fill(0)
-        s = int(self.P.size)
+        s = int(self.WP.size)
         for ag in agents:
             if not ag.body.alive:
                 continue
@@ -209,14 +209,14 @@ class World:
         )
 
     def _clip_B(self, B: np.ndarray) -> np.ndarray:
-        return np.clip(B, 0.0, float(self.P.B_K)).astype(np.float32, copy=False)
+        return np.clip(B, 0.0, float(self.WP.B_K)).astype(np.float32, copy=False)
 
     def _add_blob(self, A: np.ndarray, cx: int, cy: int, amp: float, rad: int, hi: float) -> None:
         """
         Add a gaussian-ish blob with peak amplitude `amp` (same units as A),
         clipped to [0, hi].
         """
-        s = int(self.P.size)
+        s = int(self.WP.size)
         rr = float(rad * rad)
 
         ys = np.arange(s, dtype=np.float32)
@@ -235,8 +235,8 @@ class World:
         A[mask] = np.clip(A[mask] + blob[mask], 0.0, float(hi)).astype(np.float32, copy=False)
 
     def step(self) -> None:
-        dt = float(self.P.dt)
-        P = self.P
+        dt = float(self.WP.dt)
+        P = self.WP
 
         self._update_temperature()
         T = self.temperature_field()  # (s,s) degC
@@ -296,7 +296,7 @@ class World:
     # -------------------------
     def sample(self, x: float, y: float) -> Tuple[float, float]:
         """Bilinear sampling at a single point. Returns (B_kg, C_kg)."""
-        return _bilinear_scalar_BC(self.B, self.C, x, y, int(self.P.size))
+        return _bilinear_scalar_BC(self.B, self.C, x, y, int(self.WP.size))
 
     def sample_many(
         self,
@@ -313,7 +313,7 @@ class World:
         return _bilinear_many_BC(
             self.B, self.C,
             xs, ys,
-            int(self.P.size),
+            int(self.WP.size),
             outB=outB, outC=outC, tmp=tmp,
         )
 
@@ -330,7 +330,7 @@ class World:
         if not math.isfinite(amt) or amt <= 0.0:
             return 0.0
 
-        s = int(self.P.size)
+        s = int(self.WP.size)
         xf = float(x)
         yf = float(y)
         if not (math.isfinite(xf) and math.isfinite(yf)):
@@ -405,7 +405,7 @@ class World:
         """
         Add carcass mass to C (kg/cell). amount_kg is TOTAL kg deposited.
         """
-        s = int(self.P.size)
+        s = int(self.WP.size)
         amt = float(amount_kg)
         if not math.isfinite(amt) or amt <= 0.0:
             return

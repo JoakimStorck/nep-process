@@ -73,6 +73,10 @@ def sigmoid(x: float) -> float:
         return 1.0
     return 1.0 / (1.0 + math.exp(-x))
 
+# Generic helpers
+def _clamp01(x: float) -> float:
+    return 0.0 if x < 0.0 else 1.0 if x > 1.0 else x
+    
 # -------------------------
 # Params
 # -------------------------
@@ -84,6 +88,12 @@ class AgentParams:
     dt: float = 0.02
 
     # ------------------------
+    # Steering / policy kinematics
+    # ------------------------
+    v_max: float = 2.2
+    turn_rate: float = 2.2
+
+    # ------------------------
     # Sensing / perception
     # ------------------------
     n_rays: int = 12
@@ -91,11 +101,10 @@ class AgentParams:
     ray_step: float = 1.0
     noise_sigma: float = 0.06
 
-    # ------------------------
-    # Steering / policy kinematics
-    # ------------------------
-    v_max: float = 2.2
-    turn_rate: float = 2.2
+    # Sensing upkeep costs (per mass, per second via metabolism_scale)
+    sense_cost_L1: float = 0.2
+    sense_cost_L2: float = 0.5
+    sense_cost_L3: float = 1.0
 
     # ------------------------
     # Feeding: world pool units -> internal energy units
@@ -110,22 +119,25 @@ class AgentParams:
     # Energy storage capacity (J/kg)
     E_cap_per_M: float = 3.0e5
 
-    # Initial energy (J)
-    E0: float = 1.5e5
+    # ------------------------
+    # Energy ledger diagnostics
+    # ------------------------
+    ledger_eps_abs: float = 1e-8   # NEW: absolute drift tolerance
+    ledger_eps_rel: float = 1e-12  # NEW: relative drift tolerance
+    assert_ledger: bool = False    # NEW: raise if drift exceeds tolerances    
 
     # ------------------------
     # Initial physiological state
     # ------------------------
-    M0: float = 1.0  # initial body mass
+    M0: float = 1.0   # initial body mass
+    E0: float = 1.5e5 # initial energy (J)
 
     # ------------------------
     # Basal metabolism (allometric)
     # ------------------------
     k_basal: float = 30.0  # [W]
 
-    # ------------------------
     # Activity-related metabolic costs (non-locomotor)
-    # ------------------------
     compute_cost: float = 5.0  # [W/kg]
 
     # ------------------------
@@ -138,28 +150,20 @@ class AgentParams:
     heatcap_J_per_kgC: float = 3500.0   # thermal inertia ~ M
     thermo_k_W_per_C: float = 1.0       # heat loss coefficient ~ M^(2/3)
     thermo_mass_exp: float = 2.0 / 3.0
-
     thermo_Pmax_per_kg: float = 20.0    # max heat generation (W/kg)
     cold_damage_gain: float = 0.03      # damage per second at severe cold
-    
-    # ------------------------
-    # Sensing upkeep costs (per mass, per second via metabolism_scale)
-    # ------------------------
-    sense_cost_L1: float = 0.2
-    sense_cost_L2: float = 0.5
-    sense_cost_L3: float = 1.0
 
     # ------------------------
     # Locomotion mechanics
     # ------------------------
     F0: float = 4.0
-    force_mass_exp: float = 2 / 3
+    force_mass_exp: float = 2.0 / 3.0
     drag_lin: float = 0.8
     drag_quad: float = 0.2
     locomotion_eff: float = 0.25
 
     # ------------------------
-    # Starvation and weakness dynamics
+    # Starvation / weakness dynamics
     # ------------------------
     M_crit: float = 0.30
     M_min: float = 0.10
@@ -168,48 +172,80 @@ class AgentParams:
     starve_stress_gain: float = 1.0
 
     # ------------------------
-    # Fatigue dynamics (hazard removed)
+    # Fatigue dynamics
     # ------------------------
     fatigue_recover: float = 0.020
     fatigue_effort: float = 0.050
 
     # ------------------------
-    # Damage cap
+    # Damage / frailty (Body.step uses these)
     # ------------------------
     D_max: float = 1.0
+    frailty_gain_cap: float = 1.0  # NEW: clamp for pheno.frailty_gain
+
+    # Aging background damage (optional; defaults -> off)
+    k_age0: float = 0.0       # NEW: base background rate term
+    k_age1: float = 0.0       # NEW: linear-in-age coefficient
+    k_ageD: float = 0.4       # NEW: amplification by normalized damage
 
     # ------------------------
-    # Repair energy cost
+    # Repair / pain homeostasis
     # ------------------------
-    k_rep: float = 0.45
+    # pain
+    pain_k_dD: float = 1.0
+    pain_k_D: float = 0.2
+    pain_k_hunger: float = 0.0
+    pain_tau: float = 0.5
+
+    # repair (energy -> D reduction)
+    repair_gain: float = 1.0
+    repair_E_per_D: float = 0.02
+    repair_W_decay: float = 0.3
+    repair_eta0: float = 1.0
+    repair_eta_W: float = 0.2
+
+    # Legacy / currently unused (kan tas bort när du städat klart)
 
     # ------------------------
-    # Reproduction (handled by Population)
+    # Wear / aging accumulation (W dynamics)
+    # ------------------------
+    wear_a0: float = 0.0
+    wear_aE: float = 0.0
+    wear_aR: float = 0.0
+    wear_aD: float = 0.0
+
+    # ------------------------
+    # Reproduction (Population)
     # ------------------------
     repro_cooldown_s: float = 8.0
     M_repro_soft: float = 0.03
     E_repro_soft: float = 0.05
-    
-    # Energy cost to produce offspring (absolute + proportional to offspring mass)
-    birth_E0: float = 0.0                 # [J] optional fixed overhead
-    birth_k_E_per_M: float = 7.0e4        # [J per mass-unit]
+
+    birth_E0: float = 0.0
+    birth_k_E_per_M: float = 7.0e4
     birth_energy_eff: float = 0.70
 
     # ------------------------
-    # Optional aging / stochastic death knobs (unchanged)
+    # Stochastic death knobs
     # ------------------------
     median_age_s: float = 50.0
     death_h_base: float = 0.0  # if 0 -> computed from median_age_s in Body.step
     death_h_age: float = 0.0
     death_h_D: float = 0.0
 
-
 # -------------------------
 # Body: energy + mass (unbounded) + damage/fatigue (bounded)
 # -------------------------
+
 @dataclass
 class Body:
-    P: AgentParams
+    AP: "AgentParams"  # <-- var tidigare P: AgentParams (namnkrock)
+
+    # homeostatic / damage state
+    D: float = 0.0        # acute damage
+    W: float = 0.0        # wear/frailty
+    P: float = 0.0        # pain/drive
+    _D_prev: float = 0.0  # for dD/dt
 
     # energy buffers (weighted in E_total)
     E_fast: float = 0.0
@@ -217,10 +253,9 @@ class Body:
 
     # structural state
     M: float = 0.0        # body mass
-    D: float = 0.0        # accumulated damage
     Fg: float = 0.15      # fatigue level
     Tb: float = 37.0      # Target body temperature
-    
+
     alive: bool = True
 
     # energy ledger diagnostics (per-individual)
@@ -236,12 +271,12 @@ class Body:
     guard_killed: int = 0
     guard_clamp_steps: int = 0
     guard_last: dict | None = None
-
+    
     def E_total(self) -> float:
         return 0.6 * float(self.E_fast) + 0.4 * float(self.E_slow)
 
     def E_cap(self) -> float:
-        return float(self.P.E_cap_per_M) * max(1e-9, float(self.M))
+        return float(self.AP.E_cap_per_M) * max(1e-9, float(self.M))
 
     def hunger(self) -> float:
         Et = float(self.E_total())
@@ -250,20 +285,75 @@ class Body:
 
     def weakness(self) -> float:
         m = float(self.M)
-        mcrit = float(self.P.M_crit)
+        mcrit = float(self.AP.M_crit)
         if m >= mcrit:
             return 1.0
         if mcrit <= 1e-9:
             return 0.0
         return clamp(m / mcrit, 0.0, 1.0)
 
+    def step_pain_and_repair(self, ctx, pheno, *, D_before: float) -> float:    
+        """
+        Updates pain P and converts energy -> repair (reduces D).
+        Returns repair energy spent (for logging/aging accounting).
+        """
+        AP = self.AP
+        dt = float(ctx.dt)
+        dD = (float(self.D) - float(D_before)) / max(1e-9, dt)
+        dD_pos = dD if dD > 0.0 else 0.0
+    
+        hunger = float(self.hunger())
+    
+        P_target = (
+            float(AP.pain_k_dD) * dD_pos +
+            float(AP.pain_k_D)  * float(self.D) +
+            float(AP.pain_k_hunger) * hunger
+        )
+    
+        alpha = dt / max(1e-9, float(AP.pain_tau))
+        alpha = _clamp01(alpha)
+        self.P = float(self.P) + (P_target - float(self.P)) * alpha
+    
+        # R_max styrs av pheno.repair_capacity, inte AP
+        R_max = float(pheno.repair_capacity) * math.exp(-float(AP.repair_W_decay) * float(self.W))
+        R_des = max(0.0, float(AP.repair_gain) * float(self.P))
+        R_des = min(R_des, R_max)
+    
+        E_per_D = max(1e-9, float(AP.repair_E_per_D))
+        E_need = R_des * E_per_D
+        E_paid = float(self.take_energy(E_need))
+        R = E_paid / E_per_D
+    
+        eta = float(AP.repair_eta0) * math.exp(-float(AP.repair_eta_W) * float(self.W))
+        self.D = max(0.0, float(self.D) - eta * R)
+    
+        self._D_prev = float(self.D)   # om du fortfarande vill ha den som debug/state
+        return E_paid
+
+    def step_aging(
+        self,
+        ctx,
+        *,
+        E_spent_total: float,
+        repro_cost_paid: float,
+        dD_pos: float,
+    ) -> None:
+        AP = self.AP
+        dt = float(ctx.dt)
+        self.W = float(self.W) + dt * (
+            float(AP.wear_a0) +
+            float(AP.wear_aE) * float(E_spent_total) +
+            float(AP.wear_aR) * float(repro_cost_paid) +
+            float(AP.wear_aD) * float(dD_pos)
+        )    
+        
     def move_factor(self) -> float:
         w = float(self.weakness())
-        return float(self.P.v_weak_min + (1.0 - float(self.P.v_weak_min)) * w)
+        return float(self.AP.v_weak_min + (1.0 - float(self.AP.v_weak_min)) * w)
 
     def repair_factor(self) -> float:
         w = float(self.weakness())
-        return float(self.P.rep_weak_min + (1.0 - float(self.P.rep_weak_min)) * w)
+        return float(self.AP.rep_weak_min + (1.0 - float(self.AP.rep_weak_min)) * w)
 
     def _finite(self, x: float) -> bool:
         return math.isfinite(float(x))
@@ -302,18 +392,33 @@ class Body:
 
         return float(0.6 * d_fast + 0.4 * d_slow)
 
+    def scale_energy(self, factor: float) -> None:
+        f = max(0.0, float(factor))
+        self.E_fast = float(self.E_fast) * f
+        self.E_slow = float(self.E_slow) * f
+    
+    def clamp_energy_to_cap(self) -> None:
+        Et = float(self.E_total())
+        Ecap = float(self.E_cap())
+        if Et <= Ecap:
+            return
+        k = Ecap / max(Et, 1e-12)
+        self.scale_energy(k)
+        
     def _sense_cost(self, pheno: Phenotype) -> float:
         level = _sense_level(float(getattr(pheno, "sense_strength", 0.0)))
         if level == 1:
-            return float(getattr(self.P, "sense_cost_L1", 0.0))
+            return float(getattr(self.AP, "sense_cost_L1", 0.0))
         if level == 2:
-            return float(getattr(self.P, "sense_cost_L2", 0.0))
+            return float(getattr(self.AP, "sense_cost_L2", 0.0))
         if level >= 3:
-            return float(getattr(self.P, "sense_cost_L3", 0.0))
+            return float(getattr(self.AP, "sense_cost_L3", 0.0))
         return 0.0
 
     def step(
         self,
+        ctx: "StepCtx",
+        *,
         speed: float,
         activity: float,
         food_bio_kg: float,
@@ -321,10 +426,7 @@ class Body:
         pheno: Phenotype,
         extra_drain: float = 0.0,
         T_env: float = 0.0,
-        rng=None,
         age_s: float = 0.0,
-        t_now: float | None = None,
-        agent_id: int | None = None,
     ) -> None:
         """
         Hazard is removed. Damage/fatigue now depend on:
@@ -337,7 +439,8 @@ class Body:
         if not self.alive:
             return
 
-        dt = float(self.P.dt)
+        dt = float(ctx.dt)
+        rng = ctx.rng
 
         # ---------------------------------------------------------
         # (0) Numerical guards (pre)
@@ -390,8 +493,8 @@ class Body:
         m_car = max(0.0, float(food_carcass_kg))
 
         E_in = (
-            m_bio * float(self.P.E_bio_J_per_kg)
-            + m_car * float(self.P.E_carcass_J_per_kg)
+            m_bio * float(self.AP.E_bio_J_per_kg)
+            + m_car * float(self.AP.E_carcass_J_per_kg)
         )
 
         Et0 = float(self.E_total())
@@ -413,7 +516,7 @@ class Body:
         E_to_M = max(0.0, E_in - dE_store)
         dM_grow = 0.0
         if E_to_M > 0.0:
-            E_body = max(1e-12, float(self.P.E_body_J_per_kg))
+            E_body = max(1e-12, float(self.AP.E_body_J_per_kg))
             dM_grow = E_to_M / E_body
             self.M = float(self.M) + dM_grow
 
@@ -423,8 +526,8 @@ class Body:
         M_eff = max(1e-9, float(self.M))
         metab = float(getattr(pheno, "metabolism_scale", 1.0))
 
-        out_basal = dt * metab * (M_eff ** 0.75) * float(self.P.k_basal)
-        out_compute = dt * metab * M_eff * float(self.P.compute_cost) * float(activity)
+        out_basal = dt * metab * (M_eff ** 0.75) * float(self.AP.k_basal)
+        out_compute = dt * metab * M_eff * float(self.AP.compute_cost) * float(activity)
 
         sense_cost = float(self._sense_cost(pheno))
         out_sense = dt * metab * M_eff * sense_cost
@@ -433,17 +536,17 @@ class Body:
         # ---------------------------------------------------------
         # (2B) Thermoregulation (optional, ledger-consistent)
         # ---------------------------------------------------------
-        Tb = float(getattr(self, "Tb", float(getattr(self.P, "Tb_set", 37.0))))
-        Tset = float(getattr(self.P, "Tb_set", 37.0))
+        Tb = float(getattr(self, "Tb", float(getattr(self.AP, "Tb_set", 37.0))))
+        Tset = float(getattr(self.AP, "Tb_set", 37.0))
         Tenv = float(T_env)
 
         # heat loss ~ K(M) * (Tb - Tenv)
-        k0 = float(getattr(self.P, "thermo_k_W_per_C", 0.0))
-        expA = float(getattr(self.P, "thermo_mass_exp", 2.0 / 3.0))
+        k0 = float(getattr(self.AP, "thermo_k_W_per_C", 0.0))
+        expA = float(getattr(self.AP, "thermo_mass_exp", 2.0 / 3.0))
         K = k0 * (M_eff ** expA)
 
         # thermal inertia C(M)
-        c0 = float(getattr(self.P, "heatcap_J_per_kgC", 0.0))
+        c0 = float(getattr(self.AP, "heatcap_J_per_kgC", 0.0))
         Cth = max(1e-9, c0 * M_eff)
 
         # choose heat generation to push toward setpoint (clamped)
@@ -454,7 +557,7 @@ class Body:
             # compensate current loss + small proportional term
             P_need = max(0.0, K * (Tset - Tenv))
 
-        Pmax = float(getattr(self.P, "thermo_Pmax_per_kg", 0.0)) * M_eff
+        Pmax = float(getattr(self.AP, "thermo_Pmax_per_kg", 0.0)) * M_eff
         P_gen = min(P_need, Pmax)
 
         out_thermo = dt * P_gen  # J
@@ -470,15 +573,17 @@ class Body:
 
         paid = float(self.take_energy(E_out_drain))
         deficit = max(0.0, E_out_drain - paid)
+        E_paid_drain = paid
 
         # ---------------------------------------------------------
         # (3) Catabolism: convert body mass -> energy to cover deficit
         # ---------------------------------------------------------
         E_from_M = 0.0
         dM_cat = 0.0
+        paid2 = 0.0
 
         if deficit > 0.0:
-            E_body = max(1e-12, float(self.P.E_body_J_per_kg))
+            E_body = max(1e-12, float(self.AP.E_body_J_per_kg))
             want_cat = deficit / E_body
             M_avail = max(0.0, float(self.M))
             dM_cat = min(want_cat, M_avail)
@@ -489,7 +594,7 @@ class Body:
                 # lägg som weighted energi i fast-bufferten
                 self.E_fast += E_from_M / WF
 
-            _ = float(self.take_energy(deficit))
+            paid2 = float(self.take_energy(deficit))
 
         Et = float(self.E_total())
         Ecap = float(self.E_cap())
@@ -498,25 +603,29 @@ class Body:
         # (4) Damage + repair + fatigue
         # ---------------------------------------------------------
         D_before = float(self.D)
-        D_max = float(self.P.D_max)
+        D_max = float(self.AP.D_max)
+        
+        dD_rep = 0.0
+        E_out_repair = 0.0  # will be overwritten by pain-repair spend
+        
 
         e_lack = clamp((Ecap - Et) / max(Ecap, 1e-9), 0.0, 1.0)
         d_norm = clamp(D_before / max(D_max, 1e-9), 0.0, 1.0)
 
-        speed_n = clamp(float(speed) / max(float(self.P.v_max), 1e-9), 0.0, 1.0)
+        speed_n = clamp(float(speed) / max(float(self.AP.v_max), 1e-9), 0.0, 1.0)
         effort = speed_n + 0.6 * float(activity)
         rest = max(0.0, 1.0 - speed_n) * max(0.0, 1.0 - float(activity))
 
-        I_ref = max(1e-12, float(self.P.eat_rate) * dt * float(self.P.E_bio_J_per_kg))
+        I_ref = max(1e-12, float(self.AP.eat_rate) * dt * float(self.AP.E_bio_J_per_kg))
         intake_n = clamp(E_in / I_ref, 0.0, 1.0)
 
         w = float(self.weakness())
-        starve_stress = 1.0 + float(self.P.starve_stress_gain) * (1.0 - w)
+        starve_stress = 1.0 + float(self.AP.starve_stress_gain) * (1.0 - w)
 
         susc = float(getattr(pheno, "susceptibility", 1.0))
         frailty_gain = float(getattr(pheno, "frailty_gain", 0.0))
-        frailty_cap = float(getattr(self.P, "frailty_cap", 1.0))
-        frailty_gain = clamp(frailty_gain, 0.0, max(0.0, frailty_cap))
+        frailty_gain_cap = float(getattr(self.AP, "frailty_gain_cap", 1.0))
+        frailty_gain = clamp(frailty_gain, 0.0, max(0.0, frailty_gain_cap))
         frail = 1.0 + frailty_gain * d_norm
 
         k_E = 1.2
@@ -529,16 +638,16 @@ class Body:
         dD_eff = dt * (k_eff * susc * (1.0 + k_E * e_lack) * frail * effort * starve_stress)
         dD_met = dt * (float(getattr(pheno, "stress_per_drain", 0.0)) * drain_rate_n * starve_stress)
 
-        k_age0 = float(getattr(self.P, "k_age0", 0.0))
-        k_age1 = float(getattr(self.P, "k_age1", 0.0))
-        k_ageD = float(getattr(self.P, "k_ageD", 0.4))
+        k_age0 = float(getattr(self.AP, "k_age0", 0.0))
+        k_age1 = float(getattr(self.AP, "k_age1", 0.0))
+        k_ageD = float(getattr(self.AP, "k_ageD", 0.4))
         age_rate = max(0.0, k_age0 + k_age1 * float(age_s))
         dD_age = dt * age_rate * (1.0 + k_ageD * d_norm) * (1.0 + frailty_gain)
 
         # --- cold stress (model-based, no policy bias) ---
-        Tb = float(getattr(self, "Tb", float(getattr(self.P, "Tb_set", 37.0))))
-        Tb_min = float(getattr(self.P, "Tb_min", 35.0))
-        cold_damage_gain = float(getattr(self.P, "cold_damage_gain", 0.0))
+        Tb = float(getattr(self, "Tb", float(getattr(self.AP, "Tb_set", 37.0))))
+        Tb_min = float(getattr(self.AP, "Tb_min", 35.0))
+        cold_damage_gain = float(getattr(self.AP, "cold_damage_gain", 0.0))
 
         if Tb < Tb_min:
             sev = clamp((Tb_min - Tb) / 10.0, 0.0, 1.0)   # 10°C span, tweakable
@@ -547,38 +656,26 @@ class Body:
             dD_cold = 0.0
 
         dD_in = dD_eff + dD_met + dD_age + dD_cold
-
-        # repair outflow
-        E_rep_min = float(getattr(pheno, "E_rep_min", 0.0))
-        E_thr = E_rep_min * Ecap
-        G_E = clamp((Et - E_thr) / max(Ecap - E_thr, 1e-9), 0.0, 1.0)
-
-        G_rest = 0.2 + 0.8 * rest
-        G_int = 0.3 + 0.7 * intake_n
-        fresh = 1.0 - float(self.Fg)
-        G_fresh = 0.75 + 0.25 * fresh
-
-        frailty_damp = 1.0 / (1.0 + frailty_gain * d_norm)
-        rep_fac = float(self.repair_factor())
-
-        dD_rep = dt * float(getattr(pheno, "repair_capacity", 0.0)) * rep_fac * G_rest * G_E * G_int * G_fresh * frailty_damp
-
-        # energy cost for repair
-        E_out_repair = 0.0
-        k_rep = float(getattr(self.P, "k_rep", 0.45))
-        E_need = max(0.0, k_rep * dD_rep)
-        if E_need > 0.0:
-            E_paid = float(self.take_energy(E_need))
-            E_out_repair = E_paid
-            if E_paid < E_need:
-                dD_rep *= (E_paid / max(E_need, 1e-12))
+        dD_pos_rate = dD_in / max(dt, 1e-9)   # rate (per second) consistent with step_aging
 
         self.D = clamp(D_before + dD_in - dD_rep, 0.0, D_max)
+        E_pain_repair = self.step_pain_and_repair(ctx, pheno, D_before=D_before)
+        E_out_repair = E_pain_repair
+
+        E_paid_drain_total = float(E_paid_drain) + float(paid2)
+        E_spent_total = E_paid_drain_total + float(E_out_repair)
+        
+        self.step_aging(
+            ctx,
+            E_spent_total=E_spent_total,
+            repro_cost_paid=0.0,
+            dD_pos=float(dD_pos_rate),
+        )
 
         # fatigue (effort-driven + recover with rest)
         d_norm2 = clamp(float(self.D) / max(D_max, 1e-9), 0.0, 1.0)
-        fatigue_effort_eff = float(self.P.fatigue_effort) * (1.0 + 0.4 * d_norm2)
-        fatigue_recover_eff = float(self.P.fatigue_recover) * max(0.0, (1.0 - 0.05 * d_norm2))
+        fatigue_effort_eff = float(self.AP.fatigue_effort) * (1.0 + 0.4 * d_norm2)
+        fatigue_recover_eff = float(self.AP.fatigue_recover) * max(0.0, (1.0 - 0.05 * d_norm2))
 
         self.Fg = clamp(
             float(self.Fg) + dt * (fatigue_effort_eff * effort - fatigue_recover_eff * rest),
@@ -606,7 +703,7 @@ class Body:
         # ---------------------------------------------------------
         # (5) Deterministic death conditions
         # ---------------------------------------------------------
-        if float(self.D) >= D_max or float(self.M) <= float(self.P.M_min):
+        if float(self.D) >= D_max or float(self.M) <= float(self.AP.M_min):
             self.alive = False
             return
 
@@ -614,12 +711,12 @@ class Body:
         # (6) Stochastic death (optional)
         # ---------------------------------------------------------
         if rng is not None:
-            target_med = max(1e-6, float(getattr(self.P, "median_age_s", 50.0)))
-            h_base_cfg = float(getattr(self.P, "death_h_base", 0.0))
+            target_med = max(1e-6, float(getattr(self.AP, "median_age_s", 50.0)))
+            h_base_cfg = float(getattr(self.AP, "death_h_base", 0.0))
             h_base = h_base_cfg if h_base_cfg > 0.0 else (math.log(2.0) / target_med)
 
-            h_age = float(getattr(self.P, "death_h_age", 0.0))
-            h_D = float(getattr(self.P, "death_h_D", 0.0))
+            h_age = float(getattr(self.AP, "death_h_age", 0.0))
+            h_D = float(getattr(self.AP, "death_h_D", 0.0))
 
             hazard_rate = max(0.0, h_base + h_age * float(age_s) + h_D * d_norm2)
             p = 1.0 - math.exp(-hazard_rate * dt)
@@ -694,8 +791,8 @@ class Body:
         drift_rel = drift / scale
         drift_rel_abs = abs(drift_rel)
 
-        eps_abs = float(getattr(self.P, "ledger_eps_abs", 1e-8))
-        eps_rel = float(getattr(self.P, "ledger_eps_rel", 1e-12))
+        eps_abs = float(getattr(self.AP, "ledger_eps_abs", 1e-8))
+        eps_rel = float(getattr(self.AP, "ledger_eps_rel", 1e-12))
         ok = (drift_abs <= eps_abs) or (drift_rel_abs <= eps_rel)
 
         self.ledger_steps = int(getattr(self, "ledger_steps", 0)) + 1
@@ -739,7 +836,7 @@ class Body:
         if drift_abs >= prev_max_abs:
             self.ledger_worst = dict(self.last_ledger)
 
-        if bool(getattr(self.P, "assert_ledger", False)) and (not ok):
+        if bool(getattr(self.AP, "assert_ledger", False)) and (not ok):
             raise AssertionError(
                 f"Energy ledger drift: abs={drift_abs:.3e} rel={drift_rel:.3e} "
                 f"(eps_abs={eps_abs:.3e}, eps_rel={eps_rel:.3e})"
@@ -751,7 +848,7 @@ class Body:
 # -------------------------
 @dataclass
 class RaySensors:
-    P: AgentParams
+    AP: AgentParams
     world_size: int
 
     _n: int = field(init=False, default=0)
@@ -800,9 +897,9 @@ class RaySensors:
         return float(x / (x + K))
 
     def _rebuild_cache(self) -> None:
-        n = int(self.P.n_rays)
-        step = float(self.P.ray_step)
-        ray_len = float(self.P.ray_len)
+        n = int(self.AP.n_rays)
+        step = float(self.AP.ray_step)
+        ray_len = float(self.AP.ray_len)
 
         self._n = max(0, n)
 
@@ -882,7 +979,7 @@ class RaySensors:
         # ---- (A) Sample local physics ----
         B0_kg, C0_kg = world.sample(x, y)
 
-        Pworld = getattr(world, "P", None)
+        Pworld = getattr(world, "WP", None)
         Kb = float(getattr(Pworld, "B_sense_K", 0.0)) if Pworld is not None else 0.0
         Kc = float(getattr(Pworld, "C_sense_K", 0.0)) if Pworld is not None else 0.0
 
@@ -925,7 +1022,7 @@ class RaySensors:
         self._accC *= self._inv_wsum
 
         # ---- (E) Noise in u-domain
-        sig = float(self.P.noise_sigma)
+        sig = float(self.AP.noise_sigma)
         if sig > 0.0 and (rng is not None):
             rng.standard_normal(size=n, out=self._noise64)
             self._noiseB[:] = (self._noise64 * sig).astype(np.float32, copy=False)
@@ -990,7 +1087,7 @@ class RaySensors:
                 aid = int(A[iy, ix])
                 if aid != 0 and aid != int(self_id):
                     bearing_u = float(i) / float(n)
-                    dist_u = float(self._d[j] / max(float(self.P.ray_len), 1e-9))
+                    dist_u = float(self._d[j] / max(float(self.AP.ray_len), 1e-9))
                     return 1.0, bearing_u, dist_u
 
         return 0.0, 0.0, 0.0
@@ -1016,6 +1113,9 @@ class Agent:
 
     id: int = field(default_factory=_new_agent_id)
 
+    OBS_DIM: ClassVar[int] = 21
+    OUT_DIM: ClassVar[int] = 5
+    
     body: Body = field(init=False)
     sensors: RaySensors = field(init=False)
 
@@ -1069,7 +1169,7 @@ class Agent:
 
     def bind_world(self, world: World) -> None:
         self.world = world
-        size = int(world.P.size)
+        size = int(world.WP.size)
         if getattr(self, "sensors", None) is None or getattr(self.sensors, "world_size", None) != size:
             self.sensors = RaySensors(self.AP, world_size=size)
 
@@ -1133,15 +1233,15 @@ class Agent:
     def apply_outputs(
         self,
         world: World,
+        ctx: StepCtx,
         y: np.ndarray,
         B0: float,
         C0: float,
-        rng: np.random.Generator,
     ) -> Tuple[float, float]:
         if not self.body.alive:
             return 0.0, 0.0
 
-        dt = float(self.AP.dt)
+        dt = float(ctx.dt)
         self.age_s += dt
         self.repro_cd_s = max(0.0, float(self.repro_cd_s) - dt)
 
@@ -1161,7 +1261,7 @@ class Agent:
         Tloc = float(world.temperature_at(self.x, self.y)) if hasattr(world, "temperature_at") else 0.0
 
         # 3) Heading integration (turn + exploration jitter)
-        jitter = float(rng.normal(0.0, 0.65)) * explore_drive
+        jitter = float(ctx.rng.normal(0.0, 0.65)) * explore_drive
         self.heading = float(self.heading) + dt * float(self.AP.turn_rate) * (
             0.85 * allow_move * turn + 0.25 * jitter
         )
@@ -1198,8 +1298,8 @@ class Agent:
         E_move = (dt * P_mech) / eta
 
         # 7) Apply translation (torus)
-        self.x = torus_wrap(float(self.x) + dt * speed * math.cos(self.heading), world.P.size)
-        self.y = torus_wrap(float(self.y) + dt * speed * math.sin(self.heading), world.P.size)
+        self.x = torus_wrap(float(self.x) + dt * speed * math.cos(self.heading), world.WP.size)
+        self.y = torus_wrap(float(self.y) + dt * speed * math.sin(self.heading), world.WP.size)
 
         # 8) Feeding (kg)
         got_bio = 0.0
@@ -1234,6 +1334,7 @@ class Agent:
 
         # 11) Body dynamics (hazard removed)
         self.body.step(
+            ctx,
             speed=speed,
             activity=activity,
             food_bio_kg=food_bio_kg,
@@ -1241,7 +1342,6 @@ class Agent:
             pheno=self.pheno,
             extra_drain=E_move,
             T_env=Tloc,
-            rng=rng,
             age_s=self.age_s,
         )
 
@@ -1252,44 +1352,84 @@ class Agent:
         return float(B0), float(C0)
 
     # --- reproduction hooks (Population uses these) ---
+    
     def ready_to_reproduce(self) -> bool:
-        if not self.body.alive:
+        """Deterministiska gates (inga slumpmoment, inga 'pain'-heuristiker)."""
+        if not bool(self.body.alive):
             return False
+    
         if float(self.repro_cd_s) > 0.0:
             return False
+    
+        # maturity (age is tracked in seconds)
         if float(self.age_s) < float(self.pheno.A_mature):
             return False
     
-        # Hard gates (deterministiska): undvik "float-as-bool" och semantisk läcka
+        # mass gate: must stay above both AP.M_min and phenotype gate
         M = float(self.body.M)
         Mreq = max(float(self.AP.M_min), float(self.pheno.M_repro_min))
         if M < Mreq:
             return False
-
+    
+        # energy gate: compare fraction of capacity (robust for absolute E units)
         Et = float(self.body.E_total())
         Ecap = float(self.body.E_cap())
         efrac = Et / max(Ecap, 1e-12)
         if efrac < float(self.pheno.E_repro_min):
             return False
-
+    
         return True
-
+    
+    
     def wants_to_reproduce(self, rng: np.random.Generator) -> bool:
+        # Hard gates (alive, cooldown, maturity, M, energy fraction)
+        if not self.ready_to_reproduce():
+            return False
+    
+        # Pain / regulation gates
+        if float(self.body.hunger()) > 0.7:
+            return False
+        if float(self.body.D) > 0.25:
+            return False
+        if float(self.body.Fg) > 0.85:
+            return False
+    
+        # Stochastic trigger
+        dt = float(self.AP.dt)
         lam = float(self.pheno.repro_rate)
-        p = 1.0 - math.exp(-lam * float(self.AP.dt))
+        p = 1.0 - math.exp(-lam * dt)
         return bool(rng.random() < p)
-
-    def pay_repro_cost(self, cost_E: float) -> float:
-        costE = max(0.0, float(cost_E))
-        paidE = float(self.body.take_energy(costE))
-        return float(paidE)
-
+    
+    
+    def pay_repro_cost(self, cost_E_J: float) -> float:
+        """
+        Dra energi från parent. Returnerar faktiskt betald energi (J).
+        OBS: Den här är bara en transfer; pain/damage ska uppstå via
+        din ordinarie energi-/stresslogik i steget.
+        """
+        want_J = max(0.0, float(cost_E_J))
+        paid_J = float(self.body.take_energy(want_J))
+        return paid_J
+    
+    
     def provide_child_mass(self, child_M: float) -> float:
+        """
+        Flytta massa från parent till barn utan att gå under M_min.
+        Returnerar faktiskt given massa.
+        """
         want = max(0.0, float(child_M))
-        got = min(want, max(0.0, float(self.body.M) - float(self.AP.M_min)))
-        self.body.M = float(self.body.M) - got
+        M = float(self.body.M)
+        Mmin = float(self.AP.M_min)
+    
+        free = max(0.0, M - Mmin)
+        got = min(want, free)
+    
+        if got > 0.0:
+            self.body.M = M - got
+    
         return float(got)
-
+    
+    
     def init_newborn_state(
         self,
         parent_pheno: Phenotype,
@@ -1297,41 +1437,62 @@ class Agent:
         child_E_fast_J: float | None = None,
         child_E_slow_J: float | None = None,
     ) -> None:
-        # Mass vid födsel: från parent (om provisionerad), annars fallback till pheno/AP.
-        child_M = float(child_M_from_parent) if child_M_from_parent is not None else float(
-            getattr(parent_pheno, "child_M", self.AP.M0 * 0.5)
-        )
+        """
+        Initiera nyfödd deterministiskt:
+          - Massan: från parent om provisionerad, annars fallback till pheno/AP.
+          - Energi: får bara komma från parent (J in), aldrig från Ecap.
+          - Klipp mot Ecap.
+          - Reset interna tillstånd.
+        """
+    
+        # ---- Mass ----
+        if child_M_from_parent is not None:
+            child_M = float(child_M_from_parent)
+        else:
+            child_M = float(getattr(parent_pheno, "child_M", float(self.AP.M0) * 0.5))
+    
         child_M = max(float(self.AP.M_min), child_M)
-        self.body.M = child_M
-
-        # Energi vid födsel: får INTE skapas "ur Ecap". Måste komma från parent.
+        self.body.M = float(child_M)
+    
+        # ---- Energy (J -> internal units via WF/WS) ----
         Ef_J = max(0.0, float(child_E_fast_J)) if child_E_fast_J is not None else 0.0
         Es_J = max(0.0, float(child_E_slow_J)) if child_E_slow_J is not None else 0.0
-        self.body.E_fast = Ef_J / self.WF
-        self.body.E_slow = Es_J / self.WS
-
-        # Klipp mot Ecap deterministiskt
+    
+        self.body.E_fast = Ef_J / float(self.WF)
+        self.body.E_slow = Es_J / float(self.WS)
+    
+        # ---- Clip to Ecap deterministiskt (weighted space) ----
         Et = float(self.body.E_total())
         Ecap = float(self.body.E_cap())
-        if Et > Ecap:
-            overflow = Et - Ecap
-
-            # ta från fast först i WEIGHTED space
-            take_fast_w = min(self.WF * float(self.body.E_fast), overflow)
+        overflow = Et - Ecap
+        if overflow > 0.0:
+            # take from fast first in weighted units
+            fast_w = float(self.WF) * float(self.body.E_fast)
+            take_fast_w = min(fast_w, overflow)
             if take_fast_w > 0.0:
-                self.body.E_fast = float(self.body.E_fast) - (take_fast_w / self.WF)
+                self.body.E_fast = float(self.body.E_fast) - (take_fast_w / float(self.WF))
                 overflow -= take_fast_w
-
+    
             if overflow > 0.0:
-                take_slow_w = min(self.WS * float(self.body.E_slow), overflow)
+                slow_w = float(self.WS) * float(self.body.E_slow)
+                take_slow_w = min(slow_w, overflow)
                 if take_slow_w > 0.0:
-                    self.body.E_slow = float(self.body.E_slow) - (take_slow_w / self.WS)
+                    self.body.E_slow = float(self.body.E_slow) - (take_slow_w / float(self.WS))
                     overflow -= take_slow_w
-
+    
+        # ---- Other body fields ----
         self.body.Fg = clamp(float(getattr(parent_pheno, "child_Fg", 0.15)), 0.0, 1.0)
         self.body.Tb = float(getattr(self.AP, "Tb_init", 37.0))
+    
+        # ---- Reset internal accumulators/state ----
         self.body.D = 0.0
+        self.body.W = 0.0
+        self.body.P = 0.0
+        self.body._D_prev = 0.0
+    
         self.body.alive = True
+    
+        # newborn: start with cooldown so they can't instantly reproduce
         self.repro_cd_s = float(self.AP.repro_cooldown_s)
         self.age_s = 0.0
         

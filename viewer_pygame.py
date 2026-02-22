@@ -158,11 +158,11 @@ class WorldViewer:
         return np.zeros_like(shape_like, dtype=np.float32)
 
     @staticmethod
-    def _veg_G_and_m(T: np.ndarray, P) -> Tuple[np.ndarray, np.ndarray]:
+    def _veg_G_and_m(T: np.ndarray, WP) -> Tuple[np.ndarray, np.ndarray]:
         """Reconstruct G(T) and m(T) using WorldParams-compatible fields."""
         # G(T) triangular window
         G = np.zeros_like(T, dtype=np.float32)
-        Tmin, Topt, Tmax = float(P.T_grow_min), float(P.T_grow_opt), float(P.T_grow_max)
+        Tmin, Topt, Tmax = float(WP.T_grow_min), float(WP.T_grow_opt), float(WP.T_grow_max)
 
         if Topt > Tmin + 1e-9:
             G = np.where((T >= Tmin) & (T < Topt), (T - Tmin) / (Topt - Tmin), G)
@@ -171,15 +171,15 @@ class WorldViewer:
         G = np.clip(G, 0.0, 1.0).astype(np.float32, copy=False)
 
         # m(T) wither rate
-        m = np.full_like(T, float(P.B_wither_base), dtype=np.float32)
+        m = np.full_like(T, float(WP.B_wither_base), dtype=np.float32)
 
-        if float(getattr(P, "B_wither_cold", 0.0)) > 0.0 and float(getattr(P, "cold_width", 0.0)) > 1e-9:
-            Sc = np.clip((float(P.T_cold) - T) / float(P.cold_width), 0.0, 1.0).astype(np.float32, copy=False)
-            m += float(P.B_wither_cold) * Sc
+        if float(getattr(WP, "B_wither_cold", 0.0)) > 0.0 and float(getattr(WP, "cold_width", 0.0)) > 1e-9:
+            Sc = np.clip((float(WP.T_cold) - T) / float(WP.cold_width), 0.0, 1.0).astype(np.float32, copy=False)
+            m += float(WP.B_wither_cold) * Sc
 
-        if float(getattr(P, "B_wither_hot", 0.0)) > 0.0 and float(getattr(P, "hot_width", 0.0)) > 1e-9:
-            Sh = np.clip((T - float(P.T_hot)) / float(P.hot_width), 0.0, 1.0).astype(np.float32, copy=False)
-            m += float(P.B_wither_hot) * Sh
+        if float(getattr(WP, "B_wither_hot", 0.0)) > 0.0 and float(getattr(WP, "hot_width", 0.0)) > 1e-9:
+            Sh = np.clip((T - float(WP.T_hot)) / float(WP.hot_width), 0.0, 1.0).astype(np.float32, copy=False)
+            m += float(WP.B_wither_hot) * Sh
 
         return G, m
 
@@ -188,8 +188,8 @@ class WorldViewer:
         B = np.asarray(world.B, dtype=np.float32)
         C = np.asarray(world.C, dtype=np.float32)
 
-        P = getattr(world, "P", None)
-        BK = float(getattr(P, "B_K", 1.0)) if P is not None else 1.0
+        WP = getattr(world, "WP", None)
+        BK = float(getattr(WP, "B_K", 1.0)) if WP is not None else 1.0
         B01 = np.clip(B / max(BK, 1e-12), 0.0, 1.0).astype(np.float32, copy=False)
 
         mode = self.cfg.mode.upper().strip()
@@ -209,19 +209,19 @@ class WorldViewer:
 
         elif mode == "VEG":
             # vegetation "health": green<->brown based on stress = wither/(growth+wither)
-            P = world.P if hasattr(world, "P") else getattr(world, "params", None)
-            if P is None:
+            WP = world.WP
+            if WP is None:
                 img = np.dstack([B01, B01, B01])
             else:
-                BK = float(getattr(P, "B_K", 1.0))
+                BK = float(getattr(WP, "B_K", 1.0))
                 invBK = 1.0 / max(BK, 1e-12)
                 B01 = np.clip(B * invBK, 0.0, 1.0).astype(np.float32, copy=False)
 
                 T = self._temp_field(world, B)
-                G, m = self._veg_G_and_m(T, P)
+                G, m = self._veg_G_and_m(T, WP)
 
                 # mirror World.step() terms (no diffusion needed for "health" coloring)
-                growth = (float(P.B_regen) * G) * (1.0 - B * invBK) * B
+                growth = (float(WP.B_regen) * G) * (1.0 - B * invBK) * B
                 wither = m * B
 
                 eps = np.float32(1e-9)
@@ -260,7 +260,7 @@ class WorldViewer:
             return
 
         pygame = self.pg
-        s = int(pop.world.P.size) if hasattr(pop, "world") else None
+        s = int(pop.world.WP.size) if hasattr(pop, "world") else None
         if s is None:
             return
 
