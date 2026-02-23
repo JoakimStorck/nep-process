@@ -224,6 +224,7 @@ class AgentParams:
     birth_E0: float = 0.0
     birth_k_E_per_M: float = 7.0e4
     birth_energy_eff: float = 0.70
+    gestation_growth_kg_per_s: float = 0.002  # exempel: 2 g/s
 
     # ------------------------
     # Stochastic death knobs
@@ -271,6 +272,12 @@ class Body:
     guard_killed: int = 0
     guard_clamp_steps: int = 0
     guard_last: dict | None = None
+
+    # --- gestation buffer (netto-delta method) ---
+    gestating: bool = False
+    gest_M: float = 0.0          # accumulated fetal mass (M-units)
+    gest_E_J: float = 0.0        # accumulated fetal energy in J (weighted space)
+    gest_M_target: float = 0.0   # target fetal mass
     
     def E_total(self) -> float:
         return 0.6 * float(self.E_fast) + 0.4 * float(self.E_slow)
@@ -369,6 +376,28 @@ class Body:
             "alive": bool(self.alive),
         }
 
+    def start_gestation(self, M_target: float) -> bool:
+        Mt = max(0.0, float(M_target))
+        if Mt <= 0.0:
+            return False
+        if self.gestating:
+            return False
+        self.gestating = True
+        self.gest_M = 0.0
+        self.gest_E_J = 0.0
+        self.gest_M_target = Mt
+        return True
+    
+    def abort_gestation(self) -> None:
+        # Nothing to refund because buffers were taken from net deltas (already removed from parent)
+        self.gestating = False
+        self.gest_M = 0.0
+        self.gest_E_J = 0.0
+        self.gest_M_target = 0.0
+    
+    def gestation_ready(self) -> bool:
+        return bool(self.gestating and (float(self.gest_M) >= float(self.gest_M_target) > 0.0))
+        
     def take_energy(self, amount: float) -> float:
         amt = float(max(0.0, amount))
         if amt <= 0.0:
@@ -429,19 +458,30 @@ class Body:
         age_s: float = 0.0,
     ) -> None:
         """
-        Hazard is removed. Damage/fatigue now depend on:
-          - effort/activity
-          - energy lack
-          - normalized metabolic drain
-          - aging background (optional)
-          - repair capacity / rest / intake
+        Hazard removed.
+    
+        Single-pay design:
+          - Intake updates stores/mass.
+          - Compute all drains (including thermo + gestation overhead/build).
+          - Pay drains ONCE from buffers.
+          - If short -> catabolize mass above M_min to cover deficit, then pay remaining.
+          - Then repair/pain (separate payment).
+          - Ledger checks energy consistency.
+    
+        Gestation model ("Väg 2"):
+          - gest_M / gest_E_J tracked separately from structural M.
+          - gestation build consumes energy (and optionally catabolism) to convert into fetal tissue.
+          - (optional) gestation overhead is just another drain term.
         """
         if not self.alive:
             return
-
+    
         dt = float(ctx.dt)
         rng = ctx.rng
-
+    
+        WF = 0.6
+        WS = 0.4
+    
         # ---------------------------------------------------------
         # (0) Numerical guards (pre)
         # ---------------------------------------------------------
@@ -457,7 +497,7 @@ class Body:
             self.guard_last = self._guard_snapshot("pre_state")
             self.alive = False
             return
-
+    
         if not (
             self._finite(speed)
             and self._finite(activity)
@@ -479,234 +519,296 @@ class Body:
             }
             self.alive = False
             return
-
+    
         # ---------------------------------------------------------
         # (0B) Ledger baselines
         # ---------------------------------------------------------
         E_before = float(self.E_total())
         M_before = float(self.M)
-
+    
         # ---------------------------------------------------------
-        # (1) Intake -> E buffers (up to cap), surplus -> mass
+        # (1) Intake -> buffers (up to cap), surplus -> mass
         # ---------------------------------------------------------
         m_bio = max(0.0, float(food_bio_kg))
         m_car = max(0.0, float(food_carcass_kg))
-
+    
         E_in = (
             m_bio * float(self.AP.E_bio_J_per_kg)
             + m_car * float(self.AP.E_carcass_J_per_kg)
         )
-
+    
         Et0 = float(self.E_total())
         Ecap0 = float(self.E_cap())
         room = max(0.0, Ecap0 - Et0)
-
+    
         dE_store = min(E_in, room)
-        dE_fast = 0.0
-        dE_slow = 0.0
-        WF = 0.6
-        WS = 0.4
-        
+    
         if dE_store > 0.0:
+            # store split in weighted J-space
             dE_fast_w = 0.85 * dE_store
             dE_slow_w = 0.15 * dE_store
             self.E_fast += dE_fast_w / WF
             self.E_slow += dE_slow_w / WS
-
+    
         E_to_M = max(0.0, E_in - dE_store)
         dM_grow = 0.0
         if E_to_M > 0.0:
             E_body = max(1e-12, float(self.AP.E_body_J_per_kg))
             dM_grow = E_to_M / E_body
             self.M = float(self.M) + dM_grow
-
+    
         # ---------------------------------------------------------
-        # (2) Drains (basal + compute + sense + locomotion(extra))
+        # (2) Effective mass (carried load) + basal/compute/sense/loco
         # ---------------------------------------------------------
-        M_eff = max(1e-9, float(self.M))
+        burden = max(0.0, float(getattr(self.AP, "gestation_mass_burden", 0.0)))
+        M_carry = float(self.M)
+        if bool(self.gestating):
+            M_carry += burden * max(0.0, float(self.gest_M))
+    
+        M_eff = max(1e-9, M_carry)
         metab = float(getattr(pheno, "metabolism_scale", 1.0))
-
+    
         out_basal = dt * metab * (M_eff ** 0.75) * float(self.AP.k_basal)
         out_compute = dt * metab * M_eff * float(self.AP.compute_cost) * float(activity)
-
+    
         sense_cost = float(self._sense_cost(pheno))
         out_sense = dt * metab * M_eff * sense_cost
+    
         out_loco = max(0.0, float(extra_drain))
-
+    
         # ---------------------------------------------------------
-        # (2B) Thermoregulation (optional, ledger-consistent)
+        # (2B) Thermoregulation (ledger-consistent)
         # ---------------------------------------------------------
         Tb = float(getattr(self, "Tb", float(getattr(self.AP, "Tb_set", 37.0))))
         Tset = float(getattr(self.AP, "Tb_set", 37.0))
         Tenv = float(T_env)
-
-        # heat loss ~ K(M) * (Tb - Tenv)
+    
         k0 = float(getattr(self.AP, "thermo_k_W_per_C", 0.0))
         expA = float(getattr(self.AP, "thermo_mass_exp", 2.0 / 3.0))
         K = k0 * (M_eff ** expA)
-
-        # thermal inertia C(M)
+    
         c0 = float(getattr(self.AP, "heatcap_J_per_kgC", 0.0))
         Cth = max(1e-9, c0 * M_eff)
-
-        # choose heat generation to push toward setpoint (clamped)
-        # required power to hold/approach setpoint (simple proportional)
-        # (enkel: försök kompensera förlust om Tb < Tset)
+    
         P_need = 0.0
         if Tb < Tset:
-            # compensate current loss + small proportional term
             P_need = max(0.0, K * (Tset - Tenv))
-
+    
         Pmax = float(getattr(self.AP, "thermo_Pmax_per_kg", 0.0)) * M_eff
         P_gen = min(P_need, Pmax)
-
+    
         out_thermo = dt * P_gen  # J
-
-        # update Tb using net heat
-        # dTb = (Qgen - Qloss) * dt / Cth
+    
         Qloss = K * (Tb - Tenv)
         dTb = (P_gen - Qloss) * dt / Cth
-        Tb = Tb + dTb
-        self.Tb = Tb
+        self.Tb = Tb + dTb
+    
+        # ---------------------------------------------------------
+        # (2C) Gestation (Väg 2): overhead + build energy
+        # ---------------------------------------------------------
+        out_gest_overhead = 0.0   # J
+        out_gest_build = 0.0      # J actually paid this tick for fetal tissue
+        dM_gest = 0.0             # kg fetal tissue built this tick
+    
+        # diagnostics for ledger
+        dM_cat_gest = 0.0         # kg catabolized specifically to support gestation build
+        E_from_M_gest = 0.0       # J injected via that catabolism (then spent)
 
-        E_out_drain = out_basal + out_compute + out_sense + out_loco + out_thermo
-
+        # i Body.step() tidigt
+        if bool(getattr(self, "gestating", False)) and not hasattr(self, "_dbg_gest_started"):
+            self._dbg_gest_started = True
+            print(f"[DBG] gestating became true: agent_id={int(getattr(ctx,'agent_id',-1))} t={float(ctx.t):.2f}")
+            
+        if bool(self.gestating):
+            # overhead power drain (optional)
+            Pg_over = max(0.0, float(getattr(self.AP, "gestation_P_overhead_per_kg", 0.0))) * M_eff
+            out_gest_overhead = dt * Pg_over
+    
+            # build toward target
+            M_tgt = max(0.0, float(self.gest_M_target))
+            M_cur = max(0.0, float(self.gest_M))
+    
+            if M_tgt > 0.0 and M_cur < M_tgt:
+                rate = max(0.0, float(getattr(self.AP, "gestation_growth_kg_per_s", 0.0)))
+                dM_want = min(rate * dt, M_tgt - M_cur)
+    
+                if dM_want > 0.0:
+                    E_body = max(1e-12, float(self.AP.E_body_J_per_kg))
+                    E_need = dM_want * E_body
+    
+                    # pay from buffers
+                    paid1 = float(self.take_energy(E_need))
+                    deficit_g = max(0.0, E_need - paid1)
+    
+                    paid2 = 0.0
+                    if deficit_g > 0.0:
+                        # catabolize above M_min to fund remaining gestation need
+                        Mmin = float(self.AP.M_min)
+                        free = max(0.0, float(self.M) - Mmin)
+    
+                        want_cat = deficit_g / E_body
+                        dM_cat_gest = min(want_cat, free)
+    
+                        if dM_cat_gest > 0.0:
+                            self.M -= dM_cat_gest
+                            E_from_M_gest = dM_cat_gest * E_body
+                            # inject to fast buffer in same weighted convention, then immediately pay
+                            self.E_fast += E_from_M_gest / WF
+    
+                        paid2 = float(self.take_energy(deficit_g))
+    
+                    paid_total = paid1 + paid2
+                    out_gest_build = paid_total
+    
+                    dM_gest = paid_total / E_body
+                    if dM_gest > 0.0:
+                        self.gest_M = M_cur + dM_gest
+                        self.gest_E_J = float(self.gest_E_J) + paid_total
+    
+        # ---------------------------------------------------------
+        # (2D) Pay drains ONCE (this is the critical fix)
+        # ---------------------------------------------------------
+        E_out_drain = (
+            out_basal + out_compute + out_sense + out_loco + out_thermo
+            + out_gest_overhead + out_gest_build
+        )
+    
         paid = float(self.take_energy(E_out_drain))
         deficit = max(0.0, E_out_drain - paid)
         E_paid_drain = paid
-
+    
         # ---------------------------------------------------------
-        # (3) Catabolism: convert body mass -> energy to cover deficit
+        # (3) Catabolism: cover remaining deficit (if any), above M_min
         # ---------------------------------------------------------
         E_from_M = 0.0
         dM_cat = 0.0
         paid2 = 0.0
-
+    
         if deficit > 0.0:
             E_body = max(1e-12, float(self.AP.E_body_J_per_kg))
             want_cat = deficit / E_body
-            M_avail = max(0.0, float(self.M))
-            dM_cat = min(want_cat, M_avail)
-
+    
+            Mmin = float(self.AP.M_min)
+            free = max(0.0, float(self.M) - Mmin)
+            dM_cat = min(want_cat, free)
+    
             if dM_cat > 0.0:
                 self.M -= dM_cat
                 E_from_M = dM_cat * E_body
-                # lägg som weighted energi i fast-bufferten
                 self.E_fast += E_from_M / WF
-
+    
             paid2 = float(self.take_energy(deficit))
-
+            deficit = max(0.0, deficit - paid2)
+            E_paid_drain += paid2
+    
+        # snapshot after drains/catabolism (for stress math)
         Et = float(self.E_total())
         Ecap = float(self.E_cap())
-
+    
         # ---------------------------------------------------------
         # (4) Damage + repair + fatigue
         # ---------------------------------------------------------
         D_before = float(self.D)
         D_max = float(self.AP.D_max)
-        
-        dD_rep = 0.0
-        E_out_repair = 0.0  # will be overwritten by pain-repair spend
-        
-
+    
+        # (we no longer use dD_rep precomputed; repair handled in step_pain_and_repair)
+        E_out_repair = 0.0
+    
         e_lack = clamp((Ecap - Et) / max(Ecap, 1e-9), 0.0, 1.0)
         d_norm = clamp(D_before / max(D_max, 1e-9), 0.0, 1.0)
-
+    
         speed_n = clamp(float(speed) / max(float(self.AP.v_max), 1e-9), 0.0, 1.0)
         effort = speed_n + 0.6 * float(activity)
         rest = max(0.0, 1.0 - speed_n) * max(0.0, 1.0 - float(activity))
-
-        I_ref = max(1e-12, float(self.AP.eat_rate) * dt * float(self.AP.E_bio_J_per_kg))
-        intake_n = clamp(E_in / I_ref, 0.0, 1.0)
-
+    
         w = float(self.weakness())
         starve_stress = 1.0 + float(self.AP.starve_stress_gain) * (1.0 - w)
-
+    
         susc = float(getattr(pheno, "susceptibility", 1.0))
         frailty_gain = float(getattr(pheno, "frailty_gain", 0.0))
         frailty_gain_cap = float(getattr(self.AP, "frailty_gain_cap", 1.0))
         frailty_gain = clamp(frailty_gain, 0.0, max(0.0, frailty_gain_cap))
         frail = 1.0 + frailty_gain * d_norm
-
+    
+        # normalized drain rate (for stress_per_drain)
+        drain_rate = E_out_drain / max(dt, 1e-12)
+        drain_rate_n = drain_rate / max(Ecap, 1e-9)  # 1/s
+    
         k_E = 1.2
-
-        drain_rate = (out_basal + out_compute + out_sense + out_loco + out_thermo) / max(dt, 1e-12)  # J/s
-        drain_rate_n = drain_rate / max(Ecap, 1e-9)                                                  # 1/s
-
-        # damage inflow: effort + metabolic stress + optional aging
         k_eff = 0.02
         dD_eff = dt * (k_eff * susc * (1.0 + k_E * e_lack) * frail * effort * starve_stress)
         dD_met = dt * (float(getattr(pheno, "stress_per_drain", 0.0)) * drain_rate_n * starve_stress)
-
+    
+        # aging background (optional)
         k_age0 = float(getattr(self.AP, "k_age0", 0.0))
         k_age1 = float(getattr(self.AP, "k_age1", 0.0))
         k_ageD = float(getattr(self.AP, "k_ageD", 0.4))
         age_rate = max(0.0, k_age0 + k_age1 * float(age_s))
         dD_age = dt * age_rate * (1.0 + k_ageD * d_norm) * (1.0 + frailty_gain)
-
-        # --- cold stress (model-based, no policy bias) ---
-        Tb = float(getattr(self, "Tb", float(getattr(self.AP, "Tb_set", 37.0))))
+    
+        # cold stress
+        Tb_now = float(getattr(self, "Tb", float(getattr(self.AP, "Tb_set", 37.0))))
         Tb_min = float(getattr(self.AP, "Tb_min", 35.0))
         cold_damage_gain = float(getattr(self.AP, "cold_damage_gain", 0.0))
-
-        if Tb < Tb_min:
-            sev = clamp((Tb_min - Tb) / 10.0, 0.0, 1.0)   # 10°C span, tweakable
+        if Tb_now < Tb_min:
+            sev = clamp((Tb_min - Tb_now) / 10.0, 0.0, 1.0)
             dD_cold = dt * cold_damage_gain * sev
         else:
             dD_cold = 0.0
-
+    
         dD_in = dD_eff + dD_met + dD_age + dD_cold
-        dD_pos_rate = dD_in / max(dt, 1e-9)   # rate (per second) consistent with step_aging
-
-        self.D = clamp(D_before + dD_in - dD_rep, 0.0, D_max)
-        E_pain_repair = self.step_pain_and_repair(ctx, pheno, D_before=D_before)
+        dD_pos_rate = dD_in / max(dt, 1e-9)
+    
+        self.D = clamp(D_before + dD_in, 0.0, D_max)
+    
+        # repair/pain spend (separate)
+        E_pain_repair = float(self.step_pain_and_repair(ctx, pheno, D_before=D_before))
         E_out_repair = E_pain_repair
-
-        E_paid_drain_total = float(E_paid_drain) + float(paid2)
-        E_spent_total = E_paid_drain_total + float(E_out_repair)
-        
+    
+        # aging / wear accumulation
+        E_spent_total = float(E_paid_drain) + float(E_out_repair)
         self.step_aging(
             ctx,
             E_spent_total=E_spent_total,
             repro_cost_paid=0.0,
             dD_pos=float(dD_pos_rate),
         )
-
-        # fatigue (effort-driven + recover with rest)
+    
+        # fatigue update
         d_norm2 = clamp(float(self.D) / max(D_max, 1e-9), 0.0, 1.0)
         fatigue_effort_eff = float(self.AP.fatigue_effort) * (1.0 + 0.4 * d_norm2)
         fatigue_recover_eff = float(self.AP.fatigue_recover) * max(0.0, (1.0 - 0.05 * d_norm2))
-
+    
         self.Fg = clamp(
             float(self.Fg) + dt * (fatigue_effort_eff * effort - fatigue_recover_eff * rest),
             0.0,
             1.0,
         )
-
+    
         # enforce storage capacity
-        Et = self.E_total()
-        Ecap = self.E_cap()
+        Et = float(self.E_total())
+        Ecap = float(self.E_cap())
         if Et > Ecap:
             overflow = Et - Ecap
-        
-            take_fast_w = min(WF * self.E_fast, overflow)
+    
+            take_fast_w = min(WF * float(self.E_fast), overflow)
             if take_fast_w > 0.0:
-                self.E_fast -= take_fast_w / WF
+                self.E_fast = float(self.E_fast) - (take_fast_w / WF)
                 overflow -= take_fast_w
-        
+    
             if overflow > 0.0:
-                take_slow_w = min(WS * self.E_slow, overflow)
+                take_slow_w = min(WS * float(self.E_slow), overflow)
                 if take_slow_w > 0.0:
-                    self.E_slow -= take_slow_w / WS
+                    self.E_slow = float(self.E_slow) - (take_slow_w / WS)
                     overflow -= take_slow_w
-
+    
         # ---------------------------------------------------------
         # (5) Deterministic death conditions
         # ---------------------------------------------------------
         if float(self.D) >= D_max or float(self.M) <= float(self.AP.M_min):
             self.alive = False
             return
-
+    
         # ---------------------------------------------------------
         # (6) Stochastic death (optional)
         # ---------------------------------------------------------
@@ -714,20 +816,21 @@ class Body:
             target_med = max(1e-6, float(getattr(self.AP, "median_age_s", 50.0)))
             h_base_cfg = float(getattr(self.AP, "death_h_base", 0.0))
             h_base = h_base_cfg if h_base_cfg > 0.0 else (math.log(2.0) / target_med)
-
+    
             h_age = float(getattr(self.AP, "death_h_age", 0.0))
             h_D = float(getattr(self.AP, "death_h_D", 0.0))
-
+    
             hazard_rate = max(0.0, h_base + h_age * float(age_s) + h_D * d_norm2)
             p = 1.0 - math.exp(-hazard_rate * dt)
             if rng.random() < p:
                 self.alive = False
                 return
-
+    
         # ---------------------------------------------------------
         # (7) Numerical guard (post)
         # ---------------------------------------------------------
         clamped = False
+    
         if float(self.E_fast) < 0.0:
             self.E_fast = 0.0
             clamped = True
@@ -737,22 +840,22 @@ class Body:
         if float(self.M) < 0.0:
             self.M = 0.0
             clamped = True
-
+    
         D0 = float(self.D)
         self.D = clamp(D0, 0.0, D_max)
         if float(self.D) != D0:
             clamped = True
-
+    
         Fg0 = float(self.Fg)
         self.Fg = clamp(Fg0, 0.0, 1.0)
         if float(self.Fg) != Fg0:
             clamped = True
-
+    
         if clamped:
             self.guard_steps += 1
             self.guard_clamp_steps += 1
             self.guard_last = self._guard_snapshot("post_clamp")
-
+    
         if not (
             self._finite(self.E_fast)
             and self._finite(self.E_slow)
@@ -765,20 +868,22 @@ class Body:
             self.guard_last = self._guard_snapshot("post_state")
             self.alive = False
             return
-
+    
         # ---------------------------------------------------------
         # (8) Ledger finalize
         # ---------------------------------------------------------
+        # include gestation-catabolism diagnostics into totals
+        E_from_M_total = float(E_from_M) + float(E_from_M_gest)
+        dM_cat_total = float(dM_cat) + float(dM_cat_gest)
+    
         E_after = float(self.E_total())
         M_after = float(self.M)
-
-        expected_E_after = (
-            E_before + dE_store + E_from_M - E_out_drain - E_out_repair
-        )
-
+    
+        expected_E_after = E_before + dE_store + E_from_M_total - E_out_drain - E_out_repair
+    
         drift = E_after - expected_E_after
         drift_abs = abs(drift)
-
+    
         scale = max(
             1.0,
             abs(E_before),
@@ -786,25 +891,25 @@ class Body:
             abs(dE_store),
             abs(E_out_drain),
             abs(E_out_repair),
-            abs(E_from_M),
+            abs(E_from_M_total),
         )
         drift_rel = drift / scale
         drift_rel_abs = abs(drift_rel)
-
+    
         eps_abs = float(getattr(self.AP, "ledger_eps_abs", 1e-8))
         eps_rel = float(getattr(self.AP, "ledger_eps_rel", 1e-12))
         ok = (drift_abs <= eps_abs) or (drift_rel_abs <= eps_rel)
-
+    
         self.ledger_steps = int(getattr(self, "ledger_steps", 0)) + 1
         if not ok:
             self.ledger_bad_steps = int(getattr(self, "ledger_bad_steps", 0)) + 1
-
+    
         prev_max_abs = float(getattr(self, "ledger_max_abs", 0.0))
         prev_max_rel = float(getattr(self, "ledger_max_rel", 0.0))
-
+    
         self.ledger_max_abs = max(prev_max_abs, drift_abs)
         self.ledger_max_rel = max(prev_max_rel, drift_rel_abs)
-
+    
         self.last_ledger = {
             "ok": ok,
             "eps_abs": eps_abs,
@@ -813,29 +918,43 @@ class Body:
             "drift": drift,
             "drift_abs": drift_abs,
             "drift_rel": drift_rel,
+    
             "E_before": E_before,
             "E_in": E_in,
             "E_store": dE_store,
             "E_to_M": E_to_M,
+    
             "E_out_basal": out_basal,
             "E_out_compute": out_compute,
             "E_out_sense": out_sense,
             "E_out_loco": out_loco,
             "E_out_thermo": out_thermo,
+            "E_out_gest_overhead": out_gest_overhead,
+            "E_out_gest_build": out_gest_build,
             "E_out_drain": E_out_drain,
+    
             "E_out_repair": E_out_repair,
-            "E_from_M": E_from_M,
+            "E_from_M": E_from_M_total,
             "deficit": deficit,
             "E_after": E_after,
+    
             "M_before": M_before,
             "dM_grow": dM_grow,
-            "dM_cat": dM_cat,
+            "dM_cat": dM_cat_total,
             "M_after": M_after,
+    
+            # gestation state
+            "gestating": bool(self.gestating),
+            "gest_M": float(self.gest_M),
+            "gest_M_target": float(self.gest_M_target),
+            "gest_E_J": float(self.gest_E_J),
+            "dM_gest": dM_gest,
+            "dM_cat_gest": dM_cat_gest,
         }
-
+    
         if drift_abs >= prev_max_abs:
             self.ledger_worst = dict(self.last_ledger)
-
+    
         if bool(getattr(self.AP, "assert_ledger", False)) and (not ok):
             raise AssertionError(
                 f"Energy ledger drift: abs={drift_abs:.3e} rel={drift_rel:.3e} "
@@ -1240,89 +1359,109 @@ class Agent:
     ) -> Tuple[float, float]:
         if not self.body.alive:
             return 0.0, 0.0
-
+    
         dt = float(ctx.dt)
+    
+        # --- bookkeeping (agent-level clocks) ---
         self.age_s += dt
         self.repro_cd_s = max(0.0, float(self.repro_cd_s) - dt)
-
+    
+        # ---------------------------------------------------------
         # 1) Decode policy outputs
+        # ---------------------------------------------------------
         turn = float(np.tanh(y[0]))  # [-1,1]
         thrust = float(1.0 / (1.0 + np.exp(-float(y[1]))))         # [0,1]
         inh_move = float(1.0 / (1.0 + np.exp(-float(y[2]))))       # [0,1]
         inh_eat = float(1.0 / (1.0 + np.exp(-float(y[3]))))        # [0,1]
         explore_drive = float(1.0 / (1.0 + np.exp(-float(y[4]))))  # [0,1]
-
+    
         allow_move = 1.0 - inh_move
         allow_eat = 1.0 - inh_eat
-
-        # 2) Temperature at location (NO policy modulation here)
-        #    Temperature effects are handled in Body.step() (thermoregulation + cold stress),
-        #    so the policy shouldn't get any hand-coded "avoid cold" bias.
+    
+        # ---------------------------------------------------------
+        # 2) Temperature at location (NO policy modulation)
+        # ---------------------------------------------------------
         Tloc = float(world.temperature_at(self.x, self.y)) if hasattr(world, "temperature_at") else 0.0
-
+    
+        # ---------------------------------------------------------
         # 3) Heading integration (turn + exploration jitter)
+        # ---------------------------------------------------------
         jitter = float(ctx.rng.normal(0.0, 0.65)) * explore_drive
         self.heading = float(self.heading) + dt * float(self.AP.turn_rate) * (
             0.85 * allow_move * turn + 0.25 * jitter
         )
         self.heading = self._signed_angle(self.heading)
-
+    
+        # ---------------------------------------------------------
         # 4) Locomotion control u in [0,1]
+        # ---------------------------------------------------------
         fatigue = float(self.body.Fg)
         fatigue_factor = clamp(1.0 - 0.9 * fatigue, 0.05, 1.0)
         weak_move = float(self.body.move_factor())
         u = clamp(allow_move * thrust * fatigue_factor * weak_move, 0.0, 1.0)
-
+    
+        # ---------------------------------------------------------
         # 5) Locomotion dynamics
+        # ---------------------------------------------------------
         v_prev = max(0.0, float(self.last_speed))
         M_pre = max(1e-9, float(self.body.M))
-
+    
         F0_cap = float(getattr(self.AP, "F0", 4.0))
         alpha = float(getattr(self.AP, "force_mass_exp", 2.0 / 3.0))
         F_prop = u * F0_cap * (M_pre ** alpha)
-
+    
         c1 = float(getattr(self.AP, "drag_lin", 0.8))
         c2 = float(getattr(self.AP, "drag_quad", 0.2))
-
+    
         F_drag_prev = c1 * v_prev + c2 * v_prev * v_prev
         a = (F_prop - F_drag_prev) / M_pre
         v_euler = max(0.0, v_prev + dt * a)
-
+    
         speed = min(v_euler, float(self.AP.v_max))
         v_mid = 0.5 * (v_prev + speed)
         self.last_speed = float(speed)
-
-        # 6) Locomotion energy
+    
+        # ---------------------------------------------------------
+        # 6) Locomotion energy (J)
+        # ---------------------------------------------------------
         eta = clamp(float(getattr(self.AP, "locomotion_eff", 0.25)), 1e-6, 1.0)
         P_mech = max(0.0, F_prop * v_mid)
         E_move = (dt * P_mech) / eta
-
+    
+        # ---------------------------------------------------------
         # 7) Apply translation (torus)
+        # ---------------------------------------------------------
         self.x = torus_wrap(float(self.x) + dt * speed * math.cos(self.heading), world.WP.size)
         self.y = torus_wrap(float(self.y) + dt * speed * math.sin(self.heading), world.WP.size)
-
+    
+        # ---------------------------------------------------------
         # 8) Feeding (kg)
+        # ---------------------------------------------------------
         got_bio = 0.0
         got_carcass = 0.0
         if allow_eat > 0.20:
             want_kg = float(self.AP.eat_rate) * dt * (0.25 + 0.75 * float(self.body.hunger()))
             got_total, got_carcass = world.consume_food(self.x, self.y, amount=want_kg, prefer_carcass=True)
             got_bio = max(0.0, float(got_total) - float(got_carcass))
-
+    
         food_bio_kg = float(got_bio)
         food_carcass_kg = float(got_carcass)
-
+    
+        # ---------------------------------------------------------
         # 9) Activity proxy
+        # ---------------------------------------------------------
         speed_n = clamp(speed / max(float(self.AP.v_max), 1e-9), 0.0, 1.0)
         ate = 1.0 if (allow_eat > 0.20 and (food_bio_kg + food_carcass_kg) > 0.0) else 0.0
         activity = 0.03 + 0.45 * speed_n + 0.10 * ate
-
+    
+        # ---------------------------------------------------------
         # 10) Social attraction (unchanged semantics)
+        # ---------------------------------------------------------
         soc = float(getattr(self.pheno, "sociability", 0.0))
         SOC_TURN_GAIN = 0.55
         SOC_DIST_GAIN = 1.00
         SOC_JITTER_DAMP = 0.60
-
+    
         N, Nu, Nd = self.sensors.see_agent_first_hit(world, self.x, self.y, self.heading, self.id)
         if N > 0.5 and soc > 1e-6:
             a_hit = self.heading + (2.0 * math.pi * float(Nu))
@@ -1331,8 +1470,10 @@ class Agent:
             wdist = clamp(1.0 - SOC_DIST_GAIN * float(Nd), 0.0, 1.0)
             turn = clamp(turn + SOC_TURN_GAIN * soc * wdist * biasN, -1.0, 1.0)
             explore_drive = explore_drive * (1.0 - SOC_JITTER_DAMP * soc * wdist)
-
-        # 11) Body dynamics (hazard removed)
+    
+        # ---------------------------------------------------------
+        # 11) Body dynamics (includes gestation build model: "Väg 2")
+        # ---------------------------------------------------------
         self.body.step(
             ctx,
             speed=speed,
@@ -1344,34 +1485,39 @@ class Agent:
             T_env=Tloc,
             age_s=self.age_s,
         )
-
+    
+        # ---------------------------------------------------------
         # 12) Tracking
+        # ---------------------------------------------------------
         self.last_B0 = float(B0)
         self.last_C0 = float(C0)
-
+    
         return float(B0), float(C0)
 
     # --- reproduction hooks (Population uses these) ---
     
     def ready_to_reproduce(self) -> bool:
-        """Deterministiska gates (inga slumpmoment, inga 'pain'-heuristiker)."""
-        if not bool(self.body.alive):
+        if not self.body.alive:
             return False
     
-        if float(self.repro_cd_s) > 0.0:
+        # already pregnant => don't start a new one
+        if bool(getattr(self.body, "gestating", False)):
             return False
     
-        # maturity (age is tracked in seconds)
+        # cooldown gate  (FIX: repro_cd_s is on Agent, not Body)
+        if float(getattr(self, "repro_cd_s", 0.0)) > 0.0:
+            return False
+    
+        # maturity gate
         if float(self.age_s) < float(self.pheno.A_mature):
             return False
     
-        # mass gate: must stay above both AP.M_min and phenotype gate
+        # hard resource gates (parent must have buffer above minimum)
         M = float(self.body.M)
         Mreq = max(float(self.AP.M_min), float(self.pheno.M_repro_min))
         if M < Mreq:
             return False
     
-        # energy gate: compare fraction of capacity (robust for absolute E units)
         Et = float(self.body.E_total())
         Ecap = float(self.body.E_cap())
         efrac = Et / max(Ecap, 1e-12)
@@ -1379,7 +1525,6 @@ class Agent:
             return False
     
         return True
-    
     
     def wants_to_reproduce(self, rng: np.random.Generator) -> bool:
         # Hard gates (alive, cooldown, maturity, M, energy fraction)
@@ -1400,6 +1545,10 @@ class Agent:
         p = 1.0 - math.exp(-lam * dt)
         return bool(rng.random() < p)
     
+    def start_gestation(self) -> bool:
+        # child mass target from phenotype (absolute units)
+        M_target = float(getattr(self.pheno, "child_M", 0.0))
+        return bool(self.body.start_gestation(M_target))
     
     def pay_repro_cost(self, cost_E_J: float) -> float:
         """

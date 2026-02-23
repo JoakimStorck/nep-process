@@ -319,56 +319,69 @@ class Population:
         self._emit_birth(self.t, child, parent)
         return child
 
-    def _try_reproduce(self, parent: Agent, ctx: StepCtx) -> Optional[Agent]:
-        if len(self.agents) >= int(self.PP.max_pop):
-            return None
+    def _try_start_gestation(self, parent: Agent, ctx: StepCtx) -> None:
+        if not parent.body.alive:
+            return
+        if bool(getattr(parent.body, "gestating", False)):
+            return
+        if not parent.ready_to_reproduce():
+            return
+        if not parent.wants_to_reproduce(self.rng):
+            return
+    
+        # child mass target (du har redan logik någonstans; om inte: lägg den i Agent/Population)
+        child_M_target = float(getattr(parent.pheno, "child_M", 0.0))
+        # eller: child_M_target = float(self._child_M_target(parent))  # om du har den funktionen i Population
+        if child_M_target <= 0.0:
+            return
+    
+        b = parent.body
+        b.gestating = True
+        b.fetus_M = 0.0
+        b.fetus_M_target = child_M_target
+    
+        # sätt ev. en per-agent gestation growth om du vill (annars global i AP)
+        # b.gestation_growth_kg_per_s = ...
+        parent.start_gestation()
+        
+    def _try_birth(self, parent: Agent, ctx: StepCtx) -> Optional[Agent]:
         if not parent.body.alive:
             return None
-        if not parent.ready_to_reproduce():
-            return None
-        if not parent.wants_to_reproduce(self.rng):
-            return None
     
-        # 1) Provisionera barnmassa (faktisk)
-        child_M_target = float(getattr(parent.pheno, "child_M", 0.0))
-        child_M_from_parent = None
-        m_got = 0.0
-        if child_M_target > 0.0:
-            m_got = float(parent.provide_child_mass(child_M_target))
-            child_M_from_parent = m_got if m_got > 0.0 else None
-    
-        if m_got <= 0.0:
+        b = parent.body
+        if not bool(getattr(b, "gestating", False)):
             return None
     
-        # 2) Betala energikostnad proportionell mot faktisk barnmassa
-        E0 = float(getattr(self.AP, "birth_E0", 0.0))
-        k  = float(self.AP.birth_k_E_per_M)
-        costE = E0 + k * m_got
-    
-        paid = float(parent.pay_repro_cost(costE))
-        if paid + 1e-9 < costE:
-            parent.body.M = float(parent.body.M) + m_got
+        fetus_M = float(getattr(b, "fetus_M", 0.0))
+        target = float(getattr(b, "fetus_M_target", 0.0))
+        if target <= 0.0:
             return None
     
-        # 2B) Allokera del av paid som barnets initiala energireserv
-        birth_energy_eff = float(getattr(self.AP, "birth_energy_eff", 0.70))  # ny knob, default 0.70
-        birth_energy_eff = max(0.0, min(1.0, birth_energy_eff))
-        E_child = birth_energy_eff * paid
+        # födselkriterium
+        if fetus_M < target * 0.999:   # eller fetus_M + eps < target
+            return None
     
-        child_E_fast_J = 0.85 * E_child
-        child_E_slow_J = 0.15 * E_child
+        # barnet får massan som byggts
+        child_M = fetus_M
     
-        # 3) Spawn
+        # valfritt: initial energi (håll gärna väldigt liten / 0 i början)
+        child_E_fast_J = 0.0
+        child_E_slow_J = 0.0
+    
+        # nollställ graviditet innan spawn (bra)
+        b.gestating = False
+        b.fetus_M = 0.0
+        b.fetus_M_target = 0.0
+    
         child = self._spawn_child(
             parent,
             ctx,
-            child_M_from_parent=child_M_from_parent,
+            child_M_from_parent=child_M,   # namnet är lite missvisande men funkar: child.init_newborn_state tar massan
             child_E_fast_J=child_E_fast_J,
             child_E_slow_J=child_E_slow_J,
         )
-        
-        parent.repro_cd_s = float(parent.AP.repro_cooldown_s)
-        
+    
+        parent.repro_cd_s = float(self.AP.repro_cooldown_s)
         return child
 
     # -----------------------
@@ -450,66 +463,6 @@ class Population:
                 B0, C0 = BC_list[i]
                 _ = a.apply_outputs(self.world, ctx, Y[i], B0, C0)
     
-#        # ------------------------------------------------------------
-#        # (C2) hazards/incidents -> D  (koppla in din befintliga logik här)
-#        # ------------------------------------------------------------
-#        # Om du redan har hazard-logik som uppdaterar body.D: anropa den här.
-#        # Exempel: a.apply_hazards(self.world, ctx, rng=self.rng) eller body.apply_hazards(...)
-#        # Lämnad som hook för att undvika att vi gissar fel funktionsnamn.
-#        alive = [a for a in self.agents if a.body.alive]
-#        if alive:
-#            for a in alive:
-#                # Hook 1: Agent-nivå
-#                if hasattr(a, "apply_hazards"):
-#                    a.apply_hazards(self.world, ctx, rng=self.rng)  # type: ignore
-#                # Hook 2: Body-nivå
-#                elif hasattr(a.body, "apply_hazards"):
-#                    a.body.apply_hazards(self.world, ctx, a.AP, rng=self.rng)  # type: ignore
-#    
-#        # ------------------------------------------------------------
-#        # (C3) pain + repair (E -> D) + aging (W)
-#        # ------------------------------------------------------------
-#        # Vi vill ha dD_pos före step_pain_and_repair (eftersom den uppdaterar _D_prev).
-#        if alive:
-#            # (valfritt) om du vill kunna logga/ackumulera total repair spend per tick
-#            repair_E_spent_tick = 0.0
-#    
-#            # Om du har metabolism/maintenance-drain som separat steg: hook här.
-#            # Vi kör pain/repair först (hazard -> pain -> repair), sen metabolism.
-#            for a in alive:
-#                b = a.body
-#    
-#                # dD_pos baserat på "rå" D-ändring från hazardfasen
-#                dD = (float(b.D) - float(b._D_prev)) / max(1e-9, dt)
-#                dD_pos = dD if dD > 0.0 else 0.0
-#    
-#                if hasattr(b, "step_pain_and_repair"):
-#                    repair_E_spent = b.step_pain_and_repair(ctx)
-#                    repair_E_spent_tick += float(repair_E_spent)
-#                else:
-#                    repair_E_spent = 0.0
-#    
-#                # Metabolism/maintenance hook (om du har den explicit)
-#                # Ex: b.step_metabolism(ctx, a.AP) eller a.step_metabolism(...)
-#                E_spent_other = 0.0
-#                if hasattr(b, "step_metabolism"):
-#                    E_spent_other = float(b.step_metabolism(ctx, a.AP))  # type: ignore
-#                elif hasattr(a, "step_metabolism"):
-#                    E_spent_other = float(a.step_metabolism(self.world, ctx))  # type: ignore
-#    
-#                # Aging/W
-#                if hasattr(b, "step_aging"):
-#                    # repro_cost_paid: koppla in när reproduktion faktiskt betalas
-#                    b.step_aging(
-#                        ctx,
-#                        E_spent_total=float(repair_E_spent) + float(E_spent_other),
-#                        repro_cost_paid=0.0,
-#                        dD_pos=float(dD_pos),
-#                    )
-#    
-#            # Om du vill: spara tick-summan för observers/loggar
-#            self._last_repair_E_spent_tick = repair_E_spent_tick  # valfritt attribut
-    
         # (D) deaths -> carcass (kg) + release bank slot + emit death
         deaths = 0
         survivors: List[Agent] = []
@@ -561,21 +514,97 @@ class Population:
         if len(self.agents) < int(self.PP.max_pop):
             children: List[Agent] = []
             cap = int(self.PP.max_pop)
-    
+
+            # --- debug counters (alive-only) ---
+            dbg_alive = 0
+            dbg_gest = 0
+
+            # non-gestating + ready gates
+            dbg_ready_start = 0        # ready_to_reproduce() among non-gestating
+            dbg_wants_start = 0        # wants_to_reproduce() among ready (would start now)
+            dbg_tried_start = 0        # how many times we actually called _try_start_gestation
+
+            # gestation progress
+            dbg_ready_birth = 0        # gestation_ready() true
+            dbg_near_birth = 0         # gest_M close to target (>= 0.95)
+
+            # outcomes
+            dbg_births_now = 0
+
+            # robust periodic printing: every ~10 simulated seconds
+            # avoids float equality traps
+            dbg_tick = int(getattr(self, "_dbg_repro_tick", 0)) + 1
+            self._dbg_repro_tick = dbg_tick
+            every = max(1, int(round(10.0 / max(dt, 1e-12))))  # dt=0.02 -> 500 ticks
+
             for a in self.agents:
                 if len(self.agents) + len(children) >= cap:
                     break
                 if not a.body.alive:
                     continue
-    
-                # IMPORTANT: ctx in signature to stop churn
-                child = self._try_reproduce(a, ctx)
+
+                dbg_alive += 1
+
+                is_gest = bool(getattr(a.body, "gestating", False))
+                if is_gest:
+                    dbg_gest += 1
+
+                    # gestation progress diagnostics (Väg 2 fields)
+                    M_cur = float(getattr(a.body, "gest_M", 0.0))
+                    M_tgt = float(getattr(a.body, "gest_M_target", 0.0))
+
+                    if M_tgt > 0.0 and M_cur >= 0.95 * M_tgt:
+                        dbg_near_birth += 1
+
+                    # prefer canonical hook if present
+                    if hasattr(a.body, "gestation_ready") and bool(a.body.gestation_ready()):
+                        dbg_ready_birth += 1
+
+                else:
+                    # ready gate for starting gestation
+                    if a.ready_to_reproduce():
+                        dbg_ready_start += 1
+                        # "would it trigger now" (use the same RNG / function as start gate)
+                        if a.wants_to_reproduce(self.rng):
+                            dbg_wants_start += 1
+
+                # (1) if pregnant and ready -> give birth
+                child = self._try_birth(a, ctx)
                 if child is not None:
                     children.append(child)
-    
+                    dbg_births_now += 1
+                    continue
+
+                # (2) else maybe start gestation
+                if (not is_gest) and a.ready_to_reproduce():
+                    dbg_tried_start += 1
+                self._try_start_gestation(a, ctx)
+
             if children:
                 self.agents.extend(children)
             births = len(children)
+
+            # periodic aggregate print
+            if (dbg_tick % every) == 0:
+                shown = 0
+                for a in self.agents:
+                    if not a.body.alive:
+                        continue
+                    if not bool(getattr(a.body, "gestating", False)):
+                        continue
+                    b = a.body
+                    print(
+                        f"    [gest] id={int(a.id):4d} "
+                        f"gest_M={float(getattr(b,'gest_M',-1.0)):.4f}/"
+                        f"{float(getattr(b,'gest_M_target',-1.0)):.4f} "
+                        f"fetus_M={float(getattr(b,'fetus_M',-1.0)):.4f}/"
+                        f"{float(getattr(b,'fetus_M_target',-1.0)):.4f} "
+                        f"E={float(b.E_total()):.1f} M={float(b.M):.4f} "
+                        f"cd={float(getattr(a,'repro_cd_s',-1.0)):.1f}"
+                    )
+                    shown += 1
+                    if shown >= 3:
+                        break
     
         # (F) sampling (one agent per sample_dt)
         sd = float(self.PP.sample_dt)

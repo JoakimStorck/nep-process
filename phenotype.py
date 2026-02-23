@@ -126,8 +126,8 @@ class PhenoRanges:
 
     # NEW: child mass at birth
     # OBS: välj intervall efter din mass-enhet. Här startar vi konservativt.
-    child_M_min: float = 0.02
-    child_M_max: float = 0.20
+    child_M_min: float = 0.1
+    child_M_max: float = 0.3
 
     cold_aversion_min: float = 0.0
     cold_aversion_max: float = 1.0
