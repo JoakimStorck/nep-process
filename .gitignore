@@ -13,7 +13,6 @@ __pycache__/
 # --- Logs / profiling ---
 *.log
 *.pstats
-simlog/
 
 # --- Generated figures ---
 Figure_*.png
