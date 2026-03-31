@@ -426,6 +426,34 @@ class WorldViewer:
             # Fyllda cirklar med biologisk färg
             pygame.draw.circle(self._screen, color, (px, py), radius)
 
+            # --- Parningsläge: pulserande ring ---
+            ready = False
+            try:
+                ready = a.ready_to_reproduce()
+            except Exception:
+                pass
+            if ready:
+                pulse = 0.5 + 0.5 * math.sin(self._step * 0.25)
+                ring_alpha = int(120 + 120 * pulse)
+                ring_r = radius + 2 + int(pulse * 2)
+                ring_color = (255, 220, 50, ring_alpha)
+                ring_surf = pygame.Surface((ring_r*2+2, ring_r*2+2), pygame.SRCALPHA)
+                pygame.draw.circle(ring_surf, ring_color,
+                                   (ring_r+1, ring_r+1), ring_r, 2)
+                self._screen.blit(ring_surf, (px - ring_r - 1, py - ring_r - 1))
+
+            # --- Graviditet: liten inre prick för fostret ---
+            body = getattr(a, "body", None)
+            if body is not None and getattr(body, "gestating", False):
+                gest_M      = float(getattr(body, "gest_M", 0.0))
+                gest_M_tgt  = float(getattr(body, "gest_M_target", 1e-9))
+                frac        = min(1.0, gest_M / max(gest_M_tgt, 1e-9))
+                fetus_r     = max(1, int(radius * 0.35 + frac * radius * 0.25))
+                # Färg: grön-vit baserat på energi/massa-fraktion
+                g_val       = int(180 + 75 * frac)
+                fetus_color = (200, g_val, 120)
+                pygame.draw.circle(self._screen, fetus_color, (px, py), fetus_r)
+
             # Riktningslinje i samma färg men lite mörkare
             if self.cfg.draw_heading and hl > 0:
                 dim = tuple(max(0, int(c * 0.6)) for c in color)
@@ -481,7 +509,7 @@ class WorldViewer:
             line2 = "T(mean/min/max)=NA"
 
         rays_str = "strålar:PÅ" if self.cfg.draw_rays else "strålar:av"
-        line3 = f"agents: storlek=massa  grön=frisk→röd=döende  ljus=energi  [{rays_str} R]"
+        line3 = f"grön=frisk→röd=döende  ljus=energi  gul ring=parningsredo  vit prick=gravid  [{rays_str} R]"
 
         x0, y0 = 5, 5
         dy = 18

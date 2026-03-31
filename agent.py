@@ -51,19 +51,19 @@ def _apply_sense_to_AP(AP: "AgentParams", level: int) -> None:
     # Höj stegvis: fler strålar + längre räckvidd + mindre brus.
     if level <= 0:
         AP.n_rays = 12
-        AP.ray_len = 7.0
+        AP.ray_len_front = 7.0
         AP.noise_sigma = 0.06
     elif level == 1:
         AP.n_rays = 16
-        AP.ray_len = 8.0
+        AP.ray_len_front = 8.0
         AP.noise_sigma = 0.055
     elif level == 2:
         AP.n_rays = 24
-        AP.ray_len = 10.0
+        AP.ray_len_front = 10.0
         AP.noise_sigma = 0.050
     else:  # level 3
         AP.n_rays = 32
-        AP.ray_len = 12.0
+        AP.ray_len_front = 12.0
         AP.noise_sigma = 0.045
 
 # reproduction helpers
@@ -100,7 +100,10 @@ class AgentParams:
     # Sensing / perception
     # ------------------------
     n_rays: int = 12
-    ray_len: float = 4.0    # var 7.0 — kortare räckvidd, mindre "näringssoppa"-sensing
+    ray_len_front: float = 7.0    # max räckvidd framåt (ellipsens långa halva)
+    ray_eccentricity: float = 0.7  # 0=cirkel → 1=extremt avlångt
+                                   # r(θ) = r_front×(1-e)/(1-e×cos(θ))
+                                   # sida(90°)=r_front×(1-e)≈2.1, bak(180°)≈1.2
     ray_step: float = 1.0
     noise_sigma: float = 0.06
 
@@ -1086,75 +1089,78 @@ class RaySensors:
         return float(x / (x + K))
 
     def _rebuild_cache(self) -> None:
-        n = int(self.AP.n_rays)
+        n    = int(self.AP.n_rays)
         step = float(self.AP.ray_step)
-        ray_len = float(self.AP.ray_len)
+        r_front = float(self.AP.ray_len_front)
+        e       = max(0.0, min(0.999, float(self.AP.ray_eccentricity)))
 
         self._n = max(0, n)
 
         def z1(dtype=np.float32):
             return np.zeros((0,), dtype=dtype)
-
         def z2(dtype=np.float32):
             return np.zeros((0, 0), dtype=dtype)
 
-        if self._n <= 0 or step <= 0.0 or ray_len <= 0.0:
+        if self._n <= 0 or step <= 0.0 or r_front <= 0.0:
             self._m = 0
-            self._ang_base = z1()
-            self._ang = z1()
-            self._d = z1()
-            self._w = z1()
-            self._wsum = np.float32(1.0)
-            self._inv_wsum = np.float32(1.0)
-            self._dx = z1()
-            self._dy = z1()
-            self._xs = z2()
-            self._ys = z2()
-            self._Bp = z2()
-            self._Cp = z2()
-            self._accB = z1()
-            self._accC = z1()
-            self._noiseB = z1()
-            self._noiseC = z1()
+            self._ray_m = np.zeros((0,), dtype=np.int32)
+            self._ang_base = z1(); self._ang = z1()
+            self._d = z1(); self._w = z1()
+            self._wsum = np.float32(1.0); self._inv_wsum = np.float32(1.0)
+            self._dx = z1(); self._dy = z1()
+            self._xs = z2(); self._ys = z2()
+            self._Bp = z2(); self._Cp = z2()
+            self._accB = z1(); self._accC = z1()
+            self._noiseB = z1(); self._noiseC = z1()
             self._noise64 = z1(dtype=np.float64)
             self._ixs = np.empty((0, 0), dtype=np.int32)
             self._iys = np.empty((0, 0), dtype=np.int32)
             return
 
+        # Strålvinklar i [0, 2π)
         self._ang_base = (
             np.float32(2.0 * np.pi)
             * (np.arange(self._n, dtype=np.float32) / np.float32(self._n))
         )
         self._ang = np.empty((self._n,), dtype=np.float32)
 
-        self._d = np.arange(step, ray_len + 1e-6, step, dtype=np.float32)
+        # Buffrar allokeras för maximalt djup (framåt = r_front)
+        self._d = np.arange(step, r_front + 1e-6, step, dtype=np.float32)
         self._m = int(self._d.size)
+
+        # Per-stråle djup via ellipsformeln (polär konik med fokus i origo):
+        #   r(θ) = r_front × (1-e) / (1 - e × cos(θ))
+        # θ=0   → r_front          (framåt, maximum)
+        # θ=π/2 → r_front × (1-e) (sida)
+        # θ=π   → r_front×(1-e)/(1+e) (bakåt, minimum)
+        self._ray_m = np.empty((self._n,), dtype=np.int32)
+        for i in range(self._n):
+            ang = float(self._ang_base[i])
+            if ang > math.pi:
+                ang -= 2.0 * math.pi
+            r_i = r_front * (1.0 - e) / (1.0 - e * math.cos(ang))
+            m_i = max(1, int(r_i / step + 0.5))
+            self._ray_m[i] = min(m_i, self._m)
 
         self._w = (np.float32(1.0) / (np.float32(1.0) + np.float32(0.25) * self._d)).astype(
             np.float32, copy=False
         )
-        self._wsum = np.sum(self._w, dtype=np.float32) + np.float32(1e-9)
+        self._wsum    = np.sum(self._w, dtype=np.float32) + np.float32(1e-9)
         self._inv_wsum = np.float32(1.0) / self._wsum
 
         self._dx = np.empty((self._n,), dtype=np.float32)
         self._dy = np.empty((self._n,), dtype=np.float32)
         self._xs = np.empty((self._n, self._m), dtype=np.float32)
         self._ys = np.empty((self._n, self._m), dtype=np.float32)
-
         self._Bp = np.empty((self._n, self._m), dtype=np.float32)
         self._Cp = np.empty((self._n, self._m), dtype=np.float32)
-
         self._accB = np.empty((self._n,), dtype=np.float32)
         self._accC = np.empty((self._n,), dtype=np.float32)
-
         self._noiseB = np.empty((self._n,), dtype=np.float32)
         self._noiseC = np.empty((self._n,), dtype=np.float32)
         self._noise64 = np.empty((self._n,), dtype=np.float64)
-
-        # Förallokerade int32-buffrar för see_agent_first_hit (undviker astype-allokering)
         self._ixs = np.empty((self._n, self._m), dtype=np.int32)
         self._iys = np.empty((self._n, self._m), dtype=np.int32)
-
     def sense(
         self,
         world: World,
@@ -1185,11 +1191,10 @@ class RaySensors:
 
         n = int(self._n)
         m_full = int(self._m)
-        m = m_full if (m_eff <= 0 or m_eff >= m_full) else int(m_eff)
-        if n <= 0 or m <= 0:
+        if n <= 0 or m_full <= 0:
             return (float(B0_u), float(C0_u)), self._accB[:0], self._accC[:0]
 
-        # ---- (B) Ray geometry (bara upp till m steg) ----
+        # ---- (B) Ray geometry — alltid full räckvidd (m_full) ----
         np.add(self._ang_base, np.float32(heading), out=self._ang)
         np.cos(self._ang, out=self._dx)
         np.sin(self._ang, out=self._dy)
@@ -1197,31 +1202,37 @@ class RaySensors:
         xx = np.float32(x)
         yy = np.float32(y)
 
-        np.multiply(self._dx[:, None], self._d[None, :m], out=self._xs[:, :m])
-        self._xs[:, :m] += xx
-        np.multiply(self._dy[:, None], self._d[None, :m], out=self._ys[:, :m])
-        self._ys[:, :m] += yy
+        np.multiply(self._dx[:, None], self._d[None, :], out=self._xs)
+        self._xs += xx
+        np.multiply(self._dy[:, None], self._d[None, :], out=self._ys)
+        self._ys += yy
 
         ws = np.float32(self.world_size)
-        np.mod(self._xs[:, :m], ws, out=self._xs[:, :m])
-        np.mod(self._ys[:, :m], ws, out=self._ys[:, :m])
+        np.mod(self._xs, ws, out=self._xs)
+        np.mod(self._ys, ws, out=self._ys)
 
-        # ---- (C) Sample world fields along rays (kg) ----
-        Bkg, Ckg = world.sample_many(
-            self._xs[:, :m], self._ys[:, :m],
-            outB=self._Bp[:, :m], outC=self._Cp[:, :m],
-        )
+        # ---- (C) Sample world fields ----
+        Bkg, Ckg = world.sample_many(self._xs, self._ys, outB=self._Bp, outC=self._Cp)
 
-        # ---- (D) Convert kg -> u in-place, integrate med trunkerade vikter
+        # ---- (D) Konvertera kg→u, maskera bortom per-stråle djup, integrera ----
         self._sat_u(Bkg, Kb)
         self._sat_u(Ckg, Kc)
 
-        w_trunc = self._w[:m]
-        wsum_trunc = float(np.sum(w_trunc)) + 1e-9
-        np.matmul(Bkg, w_trunc, out=self._accB)
-        np.matmul(Ckg, w_trunc, out=self._accC)
-        self._accB *= (1.0 / wsum_trunc)
-        self._accC *= (1.0 / wsum_trunc)
+        # Använd m_eff som globalt tak om angivet, annars _ray_m per stråle
+        if m_eff > 0 and m_eff < m_full:
+            ray_depths = np.minimum(self._ray_m, m_eff)
+        else:
+            ray_depths = self._ray_m
+
+        # Mask: True där avståndssteg j < stråle i's djup
+        j_idx  = np.arange(m_full, dtype=np.int32)[None, :]   # (1, m)
+        dmask  = j_idx < ray_depths[:, None]                   # (n, m)
+
+        # Viktad summa per stråle med per-stråle viktsum
+        w2d    = np.where(dmask, self._w[None, :], np.float32(0.0))
+        wsum_r = w2d.sum(axis=1, keepdims=True).clip(min=1e-9)
+        self._accB[:] = (Bkg * w2d).sum(axis=1) / wsum_r.squeeze()
+        self._accC[:] = (Ckg * w2d).sum(axis=1) / wsum_r.squeeze()
 
         # ---- (E) Noise in u-domain
         sig = float(self.AP.noise_sigma)
@@ -1262,11 +1273,9 @@ class RaySensors:
         """
         n = int(self._n)
         m_full = int(self._m)
-        m = m_full if (m_eff <= 0 or m_eff >= m_full) else int(m_eff)
-        if n <= 0 or m <= 0:
+        if n <= 0 or m_full <= 0:
             return 0.0, 0.0, 0.0, -1
 
-        # Strålegeometri — xs/ys redan beräknade i sense(), men heading kan skilja
         np.add(self._ang_base, np.float32(heading), out=self._ang)
         np.cos(self._ang, out=self._dx)
         np.sin(self._ang, out=self._dy)
@@ -1274,35 +1283,43 @@ class RaySensors:
         xx = np.float32(x)
         yy = np.float32(y)
 
-        np.multiply(self._dx[:, None], self._d[None, :m], out=self._xs[:, :m])
-        self._xs[:, :m] += xx
-        np.multiply(self._dy[:, None], self._d[None, :m], out=self._ys[:, :m])
-        self._ys[:, :m] += yy
+        np.multiply(self._dx[:, None], self._d[None, :], out=self._xs)
+        self._xs += xx
+        np.multiply(self._dy[:, None], self._d[None, :], out=self._ys)
+        self._ys += yy
 
         ws = np.float32(self.world_size)
-        s = int(self.world_size)
-        np.mod(self._xs[:, :m], ws, out=self._xs[:, :m])
-        np.mod(self._ys[:, :m], ws, out=self._ys[:, :m])
+        s  = int(self.world_size)
+        np.mod(self._xs, ws, out=self._xs)
+        np.mod(self._ys, ws, out=self._ys)
 
-        np.floor(self._xs[:, :m], out=self._xs[:, :m])
-        np.floor(self._ys[:, :m], out=self._ys[:, :m])
-        np.mod(self._xs[:, :m], s, out=self._xs[:, :m])
-        np.mod(self._ys[:, :m], s, out=self._ys[:, :m])
-        np.copyto(self._ixs[:, :m], self._xs[:, :m], casting="unsafe")
-        np.copyto(self._iys[:, :m], self._ys[:, :m], casting="unsafe")
+        np.floor(self._xs, out=self._xs)
+        np.floor(self._ys, out=self._ys)
+        np.mod(self._xs, s, out=self._xs)
+        np.mod(self._ys, s, out=self._ys)
+        np.copyto(self._ixs, self._xs, casting="unsafe")
+        np.copyto(self._iys, self._ys, casting="unsafe")
 
-        aids = world.A[self._iys[:, :m], self._ixs[:, :m]]
+        aids = world.A[self._iys, self._ixs]
         mask = (aids != 0) & (aids != int(self_id))
+
+        # Maskera bortom per-stråle djup (ellipsmodell)
+        if m_eff > 0 and m_eff < m_full:
+            ray_depths = np.minimum(self._ray_m, m_eff)
+        else:
+            ray_depths = self._ray_m
+        j_idx    = np.arange(m_full, dtype=np.int32)[None, :]
+        depth_ok = j_idx < ray_depths[:, None]
+        mask     = mask & depth_ok
 
         hit_per_j = mask.any(axis=0)
         if not hit_per_j.any():
             return 0.0, 0.0, 0.0, -1
 
-        j_hit = int(np.argmax(hit_per_j))
-        i_hit = int(np.argmax(mask[:, j_hit]))
-
+        j_hit     = int(np.argmax(hit_per_j))
+        i_hit     = int(np.argmax(mask[:, j_hit]))
         bearing_u = float(i_hit) / float(n)
-        dist_u = float(self._d[j_hit]) / max(float(self.AP.ray_len), 1e-9)
+        dist_u    = float(self._d[j_hit]) / max(float(self.AP.ray_len_front), 1e-9)
         return 1.0, bearing_u, dist_u, j_hit
 
 
@@ -1483,6 +1500,11 @@ class Agent:
         # --- Full sensing med adaptivt djup ---
         m_eff = self._sense_m_eff
 
+        # Parningsläge: kör alltid full sensing för att inte missa en potentiell partner
+        if self.ready_to_reproduce():
+            m_eff = m_full
+            self._sense_cd = 0
+
         (B0, C0), rays_B, rays_C = self.sensors.sense(
             world, self.x, self.y, self.heading, rng=rng, m_eff=m_eff,
         )
@@ -1632,37 +1654,49 @@ class Agent:
         activity = 0.03 + 0.45 * speed_n + 0.10 * ate
     
         # ---------------------------------------------------------
-        # 10) Social interaktion: repulsion (nära) + attraktion/repulsion (långt)
+        # 10) Social interaktion + parningsattraktion
         # ---------------------------------------------------------
-        # Systemet har två zoner:
-        #   Nära  (Nd < REP_ZONE): hård repulsion för alla agenter — undviker kollision.
-        #   Långt (Nd > REP_ZONE): soc > 0.5 → attraktion, soc < 0.5 → extra repulsion.
-        # Det ger emergent flockbeteende för högsociala och territoriellt beteende för lågsociala.
-        soc = float(getattr(self.pheno, "sociability", 0.0))
-        SOC_TURN_GAIN  = 0.70
-        SOC_DIST_GAIN  = 1.00
-        SOC_JITTER_DAMP = 0.60
-        REP_ZONE       = 0.35   # Nd < detta → alltid repulsion
-
+        soc   = float(getattr(self.pheno, "sociability", 0.0))
         N, Nu, Nd = self._cached_agent_hit
-        if N > 0.5:
+        in_mating_mode = self.ready_to_reproduce()
+
+        if in_mating_mode and N > 0.5:
+            # PARNINGSATTRAKTION: åsidosätter nätverkets output helt.
+            # En redo individ som ser en annan agent styr rakt mot dem
+            # med full kraft — ingen jitter, ingen explore_drive.
+            # Det biologiska motivet: parrningsdrift är starkare än matdrift.
+            a_hit   = self.heading + (2.0 * math.pi * float(Nu))
+            errN    = self._signed_angle(a_hit - self.heading)
+            biasN   = clamp(errN / math.pi, -1.0, 1.0)
+
+            Nd_f    = float(Nd)
+            if Nd_f > 0.05:
+                # Inte i direktkontakt: sväng hårt mot grannen, full gas
+                MATE_TURN = 0.95
+                turn          = clamp(MATE_TURN * biasN, -1.0, 1.0)
+                thrust        = 1.0          # full fart
+                explore_drive = 0.0          # noll jitter
+            # Vid Nd < 0.05: de är i princip på varandra — parning sker
+            # via population._try_mating(), rör sig inte mer
+
+        elif N > 0.5:
+            # Normal social interaktion (ej parningsläge)
             a_hit  = self.heading + (2.0 * math.pi * float(Nu))
             errN   = self._signed_angle(a_hit - self.heading)
-            biasN  = clamp(errN / math.pi, -1.0, 1.0)   # +1 = granne till höger
+            biasN  = clamp(errN / math.pi, -1.0, 1.0)
+            Nd_f   = float(Nd)
 
-            Nd_f = float(Nd)
+            REP_ZONE = 0.35
             if Nd_f < REP_ZONE:
-                # Nära: repulsion alltid — sväng bort från grannen
-                rep_strength = 1.0 - (Nd_f / REP_ZONE)   # starkare ju närmare
-                turn = clamp(turn - SOC_TURN_GAIN * rep_strength * biasN, -1.0, 1.0)
+                rep_strength  = 1.0 - (Nd_f / REP_ZONE)
+                turn          = clamp(turn - 0.70 * rep_strength * biasN, -1.0, 1.0)
                 explore_drive = explore_drive * (1.0 - 0.3 * rep_strength)
             else:
-                # Långt: sociability styr riktning (soc=0→repulsion, soc=1→attraktion)
-                soc_bias = 2.0 * soc - 1.0   # -1..+1
+                soc_bias = 2.0 * soc - 1.0
                 if abs(soc_bias) > 1e-6:
-                    wdist = clamp(1.0 - SOC_DIST_GAIN * Nd_f, 0.0, 1.0)
-                    turn  = clamp(turn + SOC_TURN_GAIN * soc_bias * wdist * biasN, -1.0, 1.0)
-                    explore_drive = explore_drive * (1.0 - SOC_JITTER_DAMP * abs(soc_bias) * wdist)
+                    wdist         = clamp(1.0 - Nd_f, 0.0, 1.0)
+                    turn          = clamp(turn + 0.70 * soc_bias * wdist * biasN, -1.0, 1.0)
+                    explore_drive = explore_drive * (1.0 - 0.60 * abs(soc_bias) * wdist)
     
         # ---------------------------------------------------------
         # 11) Body dynamics (includes gestation build model: "Väg 2")

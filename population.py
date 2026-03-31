@@ -10,7 +10,7 @@ import numpy as np
 from world import World, WorldParams
 from mlp import MLPGenome
 from agent import Agent, AgentParams, torus_wrap
-from genetics import child_genome_from_parent, MutationConfig
+from genetics import child_genome_from_parent, recombine, MutationConfig
 
 # new logging
 from simlog.events import Event, EventName
@@ -70,7 +70,9 @@ class PopParams:
     sample_avoid_repeat_k: int = 0
 
     warm_age_max_s: float = 60.0
-    warm_cd_max_s: float = 8.0  # eller använd AP.repro_cooldown_s och skippa denna
+    warm_cd_max_s: float = 8.0
+
+    mating_radius: float = 1.5   # direktkontakt — dragkraften tar dem dit
 
 
 @dataclass
@@ -99,6 +101,11 @@ class Population:
     _next_sample_t: float = 0.0
     _recent_sample_ids: List[int] = field(default_factory=list)
 
+    # Kumulativa totaler (aldrig nollställda) — samma semantik som konsolutskriften.
+    # Analysverktyg kan diffa konsekutiva poster för att få per-period-värden.
+    _births_total: int = 0
+    _deaths_total: int = 0
+
     # world logging knobs (gating lives in logger)
     world_log_with_percentiles: bool = True
 
@@ -110,6 +117,8 @@ class Population:
 
         self._next_sample_t = 0.0
         self._recent_sample_ids = []
+        self._births_total = 0
+        self._deaths_total = 0
 
         # ensure MC uses PP.n_traits (single source of truth for this run)
         if int(self.MC.n_traits) != int(self.PP.n_traits):
@@ -348,19 +357,110 @@ class Population:
         self._emit_birth(self.t, child, parent)
         return child
 
-    def _try_start_gestation(self, parent: Agent, ctx: StepCtx) -> None:
-        if not parent.body.alive:
-            return
-        if parent.body.gestating:
-            return
-        if not parent.ready_to_reproduce():
-            return
-        if not parent.wants_to_reproduce(self.rng):
-            return
+    def _spawn_child(
+        self,
+        parent: Agent,
+        ctx: StepCtx,
+        child_M_from_parent: float,
+        child_E_fast_J: float,
+        child_E_slow_J: float,
+        other_parent: Optional[Agent] = None,
+    ) -> Agent:
+        dx = float(self.rng.normal(0.0, float(self.PP.spawn_jitter_r)))
+        dy = float(self.rng.normal(0.0, float(self.PP.spawn_jitter_r)))
 
-        # Body är den enda auktoriteten över fysiologiskt tillstånd.
-        # Agent.start_gestation() läser child_M från pheno och delegerar till body.start_gestation().
-        parent.start_gestation()
+        if other_parent is not None:
+            g_child = recombine(parent.genome, other_parent.genome, rng=self.rng, cfg=self.MC)
+        else:
+            g_child = child_genome_from_parent(parent.genome, rng=self.rng, cfg=self.MC)
+
+        child = Agent(
+            AP=self.AP,
+            genome=g_child,
+            x=torus_wrap(float(parent.x) + dx, int(self.WP.size)),
+            y=torus_wrap(float(parent.y) + dy, int(self.WP.size)),
+            heading=float(self.rng.uniform(-math.pi, math.pi)),
+        )
+        child.bind_world(self.world)
+        child.birth_t = float(self.t)
+
+        key = (tuple(g_child.layer_sizes), str(g_child.act))
+        bank = self._banks.get(key)
+        if bank is None:
+            bank = ParamBank.create(key[0], key[1], capacity=int(self.PP.max_pop))
+            self._banks[key] = bank
+
+        slot = bank.alloc()
+        bank.write_genome(slot, g_child)
+
+        child._policy_key = key
+        child._policy_slot = slot
+
+        child.init_newborn_state(
+            parent.pheno,
+            child_M_from_parent=child_M_from_parent,
+            child_E_fast_J=child_E_fast_J,
+            child_E_slow_J=child_E_slow_J,
+        )
+
+        self._emit_birth(self.t, child, parent)
+        return child
+
+    def _try_mating(self, agent: Agent, ctx: StepCtx) -> None:
+        """
+        Sexuell reproduktion: agent måste möta en annan redo individ inom mating_radius.
+        Den tyngste bäraren startar gestation med rekombinerat barnets genom.
+        Den andre betalar en liten parningskostnad och får cooldown.
+        """
+        if not agent.body.alive:
+            return
+        if agent.body.gestating:
+            return
+        if not agent.ready_to_reproduce():
+            return
+        # Parning är deterministisk vid möte — ingen stokastisk gate.
+        # Hitta närmaste redo granne inom mating_radius
+        r_max  = float(self.PP.mating_radius)
+        size   = float(self.WP.size)
+        best   = None
+        best_d = r_max + 1.0
+
+        for other in self.agents:
+            if other is agent or not other.body.alive:
+                continue
+            if not other.ready_to_reproduce():
+                continue
+            if other.body.gestating:
+                continue
+
+            # Torusdistans
+            dx = abs(float(other.x) - float(agent.x))
+            dy = abs(float(other.y) - float(agent.y))
+            dx = min(dx, size - dx)
+            dy = min(dy, size - dy)
+            d  = math.sqrt(dx*dx + dy*dy)
+
+            if d < best_d:
+                best_d = d
+                best   = other
+
+        if best is None:
+            return   # ingen lämplig partner hittad
+
+        # Den tyngste bär fostret — mer resurser → bättre förälder
+        if float(best.body.M) > float(agent.body.M):
+            bearer, partner = best, agent
+        else:
+            bearer, partner = agent, best
+
+        # Starta gestation på bäraren med rekombinerat genom
+        bearer._mating_partner = partner   # temporär referens för _try_birth
+        bearer.start_gestation()
+
+        # Partnern betalar liten parningskostnad och får cooldown
+        mating_cost = 0.05 * float(partner.body.E_cap())
+        partner.pay_repro_cost(mating_cost)
+        partner.repro_cd_s = float(self.AP.repro_cooldown_s)
         
     def _try_birth(self, parent: Agent, ctx: StepCtx) -> Optional[Agent]:
         if not parent.body.alive:
@@ -404,12 +504,17 @@ class Population:
         repro_cost_J = float(parent.pheno.repro_cost) * float(parent.body.E_cap())
         parent.pay_repro_cost(repro_cost_J)
 
+        other_parent = getattr(parent, "_mating_partner", None)
+        # Rensa referensen så den inte hänger kvar
+        parent._mating_partner = None
+
         child = self._spawn_child(
             parent,
             ctx,
             child_M_from_parent=child_M,
             child_E_fast_J=child_E_fast_J,
             child_E_slow_J=child_E_slow_J,
+            other_parent=other_parent,
         )
 
         parent.repro_cd_s = float(self.AP.repro_cooldown_s)
@@ -558,12 +663,15 @@ class Population:
                     children.append(child)
                     continue
 
-                # (2) annars: försök starta gestation
-                self._try_start_gestation(a, ctx)
+                # (2) annars: försök para sig (sexuell reproduktion)
+                self._try_mating(a, ctx)
 
             if children:
                 self.agents.extend(children)
             births = len(children)
+
+        self._births_total += births
+        self._deaths_total += deaths
     
         # (F) sampling (one agent per sample_dt)
         sd = float(self.PP.sample_dt)
@@ -588,7 +696,7 @@ class Population:
     
         # (G) emit world + population
         self._emit_world(self.t)
-        self._emit_population(self.t, births=births, deaths=deaths)
+        self._emit_population(self.t, births=self._births_total, deaths=self._deaths_total)
     
         return births, deaths
 

@@ -88,15 +88,15 @@ _T_M_TARGET        = 20   # genetiskt bestämd vuxenmassa
 class PhenoRanges:
     # maturity
     A_mature_min: float = 5.0
-    A_mature_max: float = 40.0
+    A_mature_max: float = 20.0   # var 40.0 — kortare mognadsperiod relativt livslängden
 
     # reproduction
     repro_rate_min: float = 1.00
     repro_rate_max: float = 2.50
 
     # reproduction
-    E_repro_min_min: float = 0.10   # förälder måste ha minst 10% energi (var 0.05)
-    E_repro_min_max: float = 0.40   # upp till 40% krävs (var 0.35)
+    E_repro_min_min: float = 0.05   # var 0.10
+    E_repro_min_max: float = 0.25   # var 0.40 — sänkt så att mean_R≈0.33 räcker
     
     repro_cost_min: float = 0.01
     repro_cost_max: float = 0.05    # sänkt tak — extra cost vid födseln (var 0.08)

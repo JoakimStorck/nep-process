@@ -70,6 +70,55 @@ def child_genome_from_parent(parent: MLPGenome, rng: np.random.Generator, cfg: M
 
     return g
 
+def recombine(
+    g1: MLPGenome,
+    g2: MLPGenome,
+    rng: np.random.Generator,
+    cfg: MutationConfig,
+) -> MLPGenome:
+    """
+    Sexuell rekombination: kombinerar gener från två föräldrar.
+
+    Traits: uniform crossover — varje trait väljs oberoende från g1 eller g2.
+    MLP-vikter: per-parameter uniform crossover (inte 50/50-medelvärde,
+                vilket komprimerar viktrymden och hämmar evolution).
+    Mutation appliceras efteråt, precis som vid asexuell reproduktion.
+    """
+    ensure_initialized(g1, rng, cfg)
+    ensure_initialized(g2, rng, cfg)
+
+    child = g1.copy()
+
+    # --- Traits: uniform crossover ---
+    if g1.traits is not None and g2.traits is not None:
+        t1, t2 = g1.traits, g2.traits
+        n = min(len(t1), len(t2))
+        mask = rng.random(n) < 0.5
+        child.traits = t1.copy()
+        child.traits[:n] = np.where(mask, t1[:n], t2[:n]).astype(np.float32)
+
+    # --- MLP-vikter: uniform crossover per parameter ---
+    if (g1.weights is not None and g2.weights is not None and
+            len(g1.weights) == len(g2.weights)):
+        child.weights = [w.copy() for w in g1.weights]
+        child.biases  = [b.copy() for b in g1.biases]
+        for i in range(len(g1.weights)):
+            W1, W2 = g1.weights[i], g2.weights[i]
+            B1, B2 = g1.biases[i],  g2.biases[i]
+            if W1.shape == W2.shape:
+                mW = rng.random(W1.shape) < 0.5
+                child.weights[i] = np.where(mW, W1, W2).astype(np.float32)
+            if B1.shape == B2.shape:
+                mB = rng.random(B1.shape) < 0.5
+                child.biases[i]  = np.where(mB, B1, B2).astype(np.float32)
+
+    # Mutation efteråt
+    _mutate_weights(child, rng, sigma=cfg.weights_sigma, p=cfg.weights_p)
+    _mutate_traits(child, rng, sigma=cfg.traits_sigma, p=cfg.traits_p, clip=cfg.traits_clip)
+
+    return child
+
+
 def _mutate_weights(g: MLPGenome, rng: np.random.Generator, sigma: float, p: float) -> None:
     assert g.weights is not None and g.biases is not None
     for i in range(len(g.weights)):
