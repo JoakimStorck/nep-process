@@ -9,7 +9,7 @@ import numpy as np
 
 from world import World, WorldParams
 from mlp import MLPGenome
-from agent import Agent, AgentParams
+from agent import Agent, AgentParams, torus_wrap
 from genetics import child_genome_from_parent, MutationConfig
 
 # new logging
@@ -17,9 +17,6 @@ from simlog.events import Event, EventName
 from simlog.sinks import EventHub
 from simlog import records
 
-
-def torus_wrap(x: float, size: int) -> float:
-    return x % size
 
 _PCTS = (10, 25, 75, 90)
 
@@ -59,9 +56,9 @@ def _stats_1d(x: np.ndarray) -> dict[str, float]:
 @dataclass
 class PopParams:
     init_pop: int = 12
-    max_pop: int = 2000
+    max_pop: int = 500   # höjt — naturlig matbrist sätter taket nu, inte detta
 
-    n_traits: int = 20
+    n_traits: int = 21   # M_TARGET (index 20) tillagt
 
     spawn_jitter_r: float = 1.5
 
@@ -129,26 +126,60 @@ class Population:
                 self.rng, n_traits=int(self.PP.n_traits)
             )
 
+            # Sprid ut agenter över hela världen
+            x = float(self.rng.uniform(0.0, float(self.WP.size)))
+            y = float(self.rng.uniform(0.0, float(self.WP.size)))
+
             a = Agent(
                 AP=self.AP,
                 genome=g,
-                x=float(self.WP.size / 2 + self.rng.normal(0.0, 3.0)),
-                y=float(self.WP.size / 2 + self.rng.normal(0.0, 3.0)),
+                x=x,
+                y=y,
                 heading=float(self.rng.uniform(-math.pi, math.pi)),
             )
             a.bind_world(self.world)
 
-            # birth time bookkeeping (optional; age is tracked inside Agent)
-            # warm-start: spread ages so they don't all mature at once
-            warm_age_max = float(self.PP.warm_age_max_s)  # t.ex. 60.0
-            # gör en del individer “äldre” direkt; skala med A_mature så de inte alla når maturity samtidigt
-            age0 = float(self.rng.uniform(0.0, 2.0 * float(a.pheno.A_mature)))
-            a.birth_t = float(self.t - age0)
+            # --- Warm start: åldersstrukturerad population ---
+            # Ålder uniform från nyfödd till 3× mognadsåldern —
+            # ger realistisk blandning av unga, vuxna och gamla.
+            A_mature  = float(a.pheno.A_mature)
+            age_s     = float(self.rng.uniform(0.0, 3.0 * A_mature))
+            a.age_s   = age_s
+            a.birth_t = float(self.t - age_s)
 
-            a.body.M *= float(self.rng.uniform(0.9, 1.05))
-            a.body.scale_energy(self.rng.uniform(0.85, 1.10))
+            # Massa korrelerad med ålder och M_target
+            child_M_mid = 0.12
+            # Vuxenmassa hämtas från agentens genetiska program
+            adult_M = float(getattr(a.pheno, "M_target", float(self.AP.M0)))
+            adult_M *= float(self.rng.uniform(0.7, 1.0))  # lite variation
+            if age_s < A_mature:
+                frac = age_s / max(A_mature, 1e-9)
+                M0   = child_M_mid + frac * (adult_M - child_M_mid)
+            elif age_s < 2.0 * A_mature:
+                M0 = adult_M
+            else:
+                shrink = (age_s - 2.0 * A_mature) / max(A_mature, 1e-9)
+                M0     = adult_M * max(0.5, 1.0 - 0.2 * shrink)
+            a.body.M = max(float(self.AP.M_min),
+                           M0 * float(self.rng.uniform(0.9, 1.1)))
+
+            # Slitage W: ackumulerat vid denna ålder
+            a.body.W = (float(self.AP.wear_a0) * age_s
+                        * float(self.rng.uniform(0.8, 1.2)))
+
+            # Skada D: låg för unga, stigande för gamla
+            import math as _math
+            R_frac = _math.exp(-float(self.AP.repair_W_decay) * a.body.W)
+            D_bg   = max(0.0, 1.0 - R_frac) * float(self.rng.uniform(0.0, 0.5))
+            a.body.D = min(float(self.AP.D_max) * 0.8, D_bg)
+
+            # Energi: varierat
+            a.body.scale_energy(self.rng.uniform(0.4, 0.95))
             a.body.clamp_energy_to_cap()
-            a.repro_cd_s = float(self.rng.uniform(0.0, float(self.AP.repro_cooldown_s)))
+
+            # Cooldown: spridd
+            a.repro_cd_s = float(
+                self.rng.uniform(0.0, float(self.AP.repro_cooldown_s)))
 
             # allocate slot in bank and write genome params once
             key = (tuple(g.layer_sizes), str(g.act))
@@ -163,9 +194,7 @@ class Population:
             a._policy_key = key
             a._policy_slot = slot
 
-            # optional: log initial agents as births (parent=None)
             self._emit_birth(self.t, a, parent=None)
-
             self.agents.append(a)
 
     # -----------------------
@@ -322,65 +351,67 @@ class Population:
     def _try_start_gestation(self, parent: Agent, ctx: StepCtx) -> None:
         if not parent.body.alive:
             return
-        if bool(getattr(parent.body, "gestating", False)):
+        if parent.body.gestating:
             return
         if not parent.ready_to_reproduce():
             return
         if not parent.wants_to_reproduce(self.rng):
             return
-    
-        # child mass target (du har redan logik någonstans; om inte: lägg den i Agent/Population)
-        child_M_target = float(getattr(parent.pheno, "child_M", 0.0))
-        # eller: child_M_target = float(self._child_M_target(parent))  # om du har den funktionen i Population
-        if child_M_target <= 0.0:
-            return
-    
-        b = parent.body
-        b.gestating = True
-        b.fetus_M = 0.0
-        b.fetus_M_target = child_M_target
-    
-        # sätt ev. en per-agent gestation growth om du vill (annars global i AP)
-        # b.gestation_growth_kg_per_s = ...
+
+        # Body är den enda auktoriteten över fysiologiskt tillstånd.
+        # Agent.start_gestation() läser child_M från pheno och delegerar till body.start_gestation().
         parent.start_gestation()
         
     def _try_birth(self, parent: Agent, ctx: StepCtx) -> Optional[Agent]:
         if not parent.body.alive:
             return None
-    
+
         b = parent.body
-        if not bool(getattr(b, "gestating", False)):
+
+        # Body är den enda auktoriteten: gestation_ready() kontrollerar gest_M >= gest_M_target.
+        if not b.gestation_ready():
             return None
-    
-        fetus_M = float(getattr(b, "fetus_M", 0.0))
-        target = float(getattr(b, "fetus_M_target", 0.0))
-        if target <= 0.0:
-            return None
-    
-        # födselkriterium
-        if fetus_M < target * 0.999:   # eller fetus_M + eps < target
-            return None
-    
-        # barnet får massan som byggts
-        child_M = fetus_M
-    
-        # valfritt: initial energi (håll gärna väldigt liten / 0 i början)
-        child_E_fast_J = 0.0
-        child_E_slow_J = 0.0
-    
-        # nollställ graviditet innan spawn (bra)
-        b.gestating = False
-        b.fetus_M = 0.0
-        b.fetus_M_target = 0.0
-    
+
+        # Hämta den massa som Body byggt upp under gestationen.
+        child_M = float(b.gest_M)
+
+        # Återställ gestationstillstånd via Body innan spawn
+        # (abort_gestation() nollställer gestating, gest_M, gest_E_J, gest_M_target).
+        b.abort_gestation()
+
+        # --- 1.4: Energi till barnet (dras från föräldern) ---
+        # child_E_fast/slow är fraktioner av barnets energikapacitet — en livshistoriestrategi.
+        # Barnets Ecap beräknas från dess massa och den delade AP-konstanten.
+        child_Ecap = float(self.AP.E_cap_per_M) * max(child_M, float(self.AP.M_min))
+        child_E_fast_J = float(parent.pheno.child_E_fast) * child_Ecap
+        child_E_slow_J = float(parent.pheno.child_E_slow) * child_Ecap
+
+        # Föräldern betalar barnenergin ur sina egna buffrar.
+        # pay_repro_cost() anropar body.take_energy() — aldrig mer än vad som finns.
+        total_child_E = child_E_fast_J + child_E_slow_J
+        paid_to_child = float(parent.pay_repro_cost(total_child_E))
+
+        # Skala ner proportionellt om föräldern inte hade råd.
+        if total_child_E > 1e-12:
+            scale = paid_to_child / total_child_E
+        else:
+            scale = 0.0
+        child_E_fast_J *= scale
+        child_E_slow_J *= scale
+
+        # --- 1.5: Reproduktionskostnad (extra föräldrastress vid födseln) ---
+        # repro_cost är en fraktion av förälderns Ecap — kostnad utöver energin till barnet.
+        repro_cost_J = float(parent.pheno.repro_cost) * float(parent.body.E_cap())
+        parent.pay_repro_cost(repro_cost_J)
+
         child = self._spawn_child(
             parent,
             ctx,
-            child_M_from_parent=child_M,   # namnet är lite missvisande men funkar: child.init_newborn_state tar massan
+            child_M_from_parent=child_M,
             child_E_fast_J=child_E_fast_J,
             child_E_slow_J=child_E_slow_J,
         )
-    
+
         parent.repro_cd_s = float(self.AP.repro_cooldown_s)
         return child
 
@@ -515,96 +546,24 @@ class Population:
             children: List[Agent] = []
             cap = int(self.PP.max_pop)
 
-            # --- debug counters (alive-only) ---
-            dbg_alive = 0
-            dbg_gest = 0
-
-            # non-gestating + ready gates
-            dbg_ready_start = 0        # ready_to_reproduce() among non-gestating
-            dbg_wants_start = 0        # wants_to_reproduce() among ready (would start now)
-            dbg_tried_start = 0        # how many times we actually called _try_start_gestation
-
-            # gestation progress
-            dbg_ready_birth = 0        # gestation_ready() true
-            dbg_near_birth = 0         # gest_M close to target (>= 0.95)
-
-            # outcomes
-            dbg_births_now = 0
-
-            # robust periodic printing: every ~10 simulated seconds
-            # avoids float equality traps
-            dbg_tick = int(getattr(self, "_dbg_repro_tick", 0)) + 1
-            self._dbg_repro_tick = dbg_tick
-            every = max(1, int(round(10.0 / max(dt, 1e-12))))  # dt=0.02 -> 500 ticks
-
             for a in self.agents:
                 if len(self.agents) + len(children) >= cap:
                     break
                 if not a.body.alive:
                     continue
 
-                dbg_alive += 1
-
-                is_gest = bool(getattr(a.body, "gestating", False))
-                if is_gest:
-                    dbg_gest += 1
-
-                    # gestation progress diagnostics (Väg 2 fields)
-                    M_cur = float(getattr(a.body, "gest_M", 0.0))
-                    M_tgt = float(getattr(a.body, "gest_M_target", 0.0))
-
-                    if M_tgt > 0.0 and M_cur >= 0.95 * M_tgt:
-                        dbg_near_birth += 1
-
-                    # prefer canonical hook if present
-                    if hasattr(a.body, "gestation_ready") and bool(a.body.gestation_ready()):
-                        dbg_ready_birth += 1
-
-                else:
-                    # ready gate for starting gestation
-                    if a.ready_to_reproduce():
-                        dbg_ready_start += 1
-                        # "would it trigger now" (use the same RNG / function as start gate)
-                        if a.wants_to_reproduce(self.rng):
-                            dbg_wants_start += 1
-
-                # (1) if pregnant and ready -> give birth
+                # (1) om gravid och klar -> föd
                 child = self._try_birth(a, ctx)
                 if child is not None:
                     children.append(child)
-                    dbg_births_now += 1
                     continue
 
-                # (2) else maybe start gestation
-                if (not is_gest) and a.ready_to_reproduce():
-                    dbg_tried_start += 1
+                # (2) annars: försök starta gestation
                 self._try_start_gestation(a, ctx)
 
             if children:
                 self.agents.extend(children)
             births = len(children)
-
-            # periodic aggregate print
-            if (dbg_tick % every) == 0:
-                shown = 0
-                for a in self.agents:
-                    if not a.body.alive:
-                        continue
-                    if not bool(getattr(a.body, "gestating", False)):
-                        continue
-                    b = a.body
-                    print(
-                        f"    [gest] id={int(a.id):4d} "
-                        f"gest_M={float(getattr(b,'gest_M',-1.0)):.4f}/"
-                        f"{float(getattr(b,'gest_M_target',-1.0)):.4f} "
-                        f"fetus_M={float(getattr(b,'fetus_M',-1.0)):.4f}/"
-                        f"{float(getattr(b,'fetus_M_target',-1.0)):.4f} "
-                        f"E={float(b.E_total()):.1f} M={float(b.M):.4f} "
-                        f"cd={float(getattr(a,'repro_cd_s',-1.0)):.1f}"
-                    )
-                    shown += 1
-                    if shown >= 3:
-                        break
     
         # (F) sampling (one agent per sample_dt)
         sd = float(self.PP.sample_dt)

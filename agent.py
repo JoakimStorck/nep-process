@@ -19,14 +19,17 @@ def torus_wrap(x: float, size: int) -> float:
 
 # -------------------------
 # Agent ids
-# -------------------------
-_NEXT_AGENT_ID = 0
+import itertools as _itertools
+
+# Agent-ID-räknare: per-modul-instans, unik per Python-process.
+# Använd _agent_id_counter.reset() finns inte — starta om processen för rena körningar.
+# OBS: om flera Population-instanser körs i samma process delar de ID-rymden,
+# vilket är korrekt (IDs förblir globalt unika).
+_agent_id_counter = _itertools.count(1)
 
 
 def _new_agent_id() -> int:
-    global _NEXT_AGENT_ID
-    _NEXT_AGENT_ID += 1
-    return _NEXT_AGENT_ID
+    return next(_agent_id_counter)
 
 
 # -------------------------
@@ -97,9 +100,21 @@ class AgentParams:
     # Sensing / perception
     # ------------------------
     n_rays: int = 12
-    ray_len: float = 7.0
+    ray_len: float = 4.0    # var 7.0 — kortare räckvidd, mindre "näringssoppa"-sensing
     ray_step: float = 1.0
     noise_sigma: float = 0.06
+
+    # Adaptiv sensing-rate (fladdermus-modell):
+    # Agenter scannar omgivningen lågfrekvent i frånvaro av stimuli,
+    # och växlar till hög frekvens + kortare räckvidd när mat eller grannar detekteras.
+    # sense_idle_steps:    steg mellan fullständiga skanningar i frånvaro av stimuli
+    #                      (idle=10 → 80% av skanningarna sparas i tomma miljöer)
+    # sense_alert_steps:   steg mellan skanningar när stimuli detekteras
+    #                      (alert=3 → tät tracking av känt objekt)
+    # sense_alert_thresh:  u-signal som räknas som "detekterad" (0=ingenting, 1=max)
+    sense_idle_steps: int = 10
+    sense_alert_steps: int = 3
+    sense_alert_thresh: float = 0.15
 
     # Sensing upkeep costs (per mass, per second via metabolism_scale)
     sense_cost_L1: float = 0.2
@@ -165,8 +180,8 @@ class AgentParams:
     # ------------------------
     # Starvation / weakness dynamics
     # ------------------------
-    M_crit: float = 0.30
-    M_min: float = 0.10
+    M_crit: float = 0.25   # under detta försvagas rörelseförmågan
+    M_min: float = 0.07    # absolut minimum — lite under child_M_min för buffert
     v_weak_min: float = 0.25
     rep_weak_min: float = 0.20
     starve_stress_gain: float = 1.0
@@ -183,10 +198,23 @@ class AgentParams:
     D_max: float = 1.0
     frailty_gain_cap: float = 1.0  # NEW: clamp for pheno.frailty_gain
 
-    # Aging background damage (optional; defaults -> off)
-    k_age0: float = 0.0       # NEW: base background rate term
-    k_age1: float = 0.0       # NEW: linear-in-age coefficient
-    k_ageD: float = 0.4       # NEW: amplification by normalized damage
+    # Aging background damage.
+    # k_age1 (linjärt med ålder) är biologiskt korrekt: unga är nästan oskadade,
+    # gamla ackumulerar skada exponentiellt snabbare.
+    # k_age0=0 → ingen konstant bakgrund (var 0.200 — dödade unga för snabbt).
+    # k_age1=0.001 → dD/dt = 0.001×age_s: vid 250s ger 0.25 D/s → döden.
+    k_age0: float = 0.000
+    k_age1: float = 0.001      # D/s per sekund ålder (var 0.0)
+    k_ageD: float = 0.4
+    k_age1: float = 0.0
+    k_ageD: float = 0.4
+
+    # Skadehastighet — grundterm i dD_eff.
+    # Kalibrerat så att ung frisk agent har dD << reparationskapacitet (D ≈ 0),
+    # men gammal agent (W ≈ 12-15) får D att stiga mot 1.0 → biologisk åldersdöd.
+    # Analytisk kalibrering (normal aktivitet, repair_capacity = 0.055, wear_a0 = 0.04):
+    #   dD_eff ≈ 0.00130/steg  →  kritisk W ≈ 12  →  naturlig livslängd ≈ 300s
+    k_damage: float = 0.15     # var hardkodad 0.02 i Body.step
 
     # ------------------------
     # Repair / pain homeostasis
@@ -200,19 +228,25 @@ class AgentParams:
     # repair (energy -> D reduction)
     repair_gain: float = 1.0
     repair_E_per_D: float = 0.02
-    repair_W_decay: float = 0.3
+    repair_W_decay: float = 0.15   # var 0.3 — mjukare degradering av reparation med ålder
     repair_eta0: float = 1.0
-    repair_eta_W: float = 0.2
+    repair_eta_W: float = 0.1     # var 0.2
 
     # Legacy / currently unused (kan tas bort när du städat klart)
 
-    # ------------------------
-    # Wear / aging accumulation (W dynamics)
-    # ------------------------
-    wear_a0: float = 0.0
+    # Wear / slitageackumulering (W-dynamik) — driver för åldrande.
+    # W växer långsamt hela livet och försämrar reparationskapaciteten exponentiellt.
+    #   R_max = repair_capacity × exp(-repair_W_decay × W)
+    #
+    # Tidsskaleproblem: wear_a0=0.04 gav W=4 vid t=100s (en generation) →
+    # reparationen halverades redan i generation 1 → populationskollaps.
+    # Mål: W-systemet ska verka på MÅNGA generationers tidsskala.
+    #   wear_a0=0.004 → W=0.4 vid t=100s, W=4 vid t=1000s (10 generationer)
+    #   repair_W_decay=0.15 → mjukare degradering (var 0.3)
+    wear_a0: float = 0.035     # D börjar stiga vid t≈200s, död ~250s
     wear_aE: float = 0.0
     wear_aR: float = 0.0
-    wear_aD: float = 0.0
+    wear_aD: float = 0.002
 
     # ------------------------
     # Reproduction (Population)
@@ -224,15 +258,36 @@ class AgentParams:
     birth_E0: float = 0.0
     birth_k_E_per_M: float = 7.0e4
     birth_energy_eff: float = 0.70
-    gestation_growth_kg_per_s: float = 0.002  # exempel: 2 g/s
 
-    # ------------------------
-    # Stochastic death knobs
-    # ------------------------
-    median_age_s: float = 50.0
-    death_h_base: float = 0.0  # if 0 -> computed from median_age_s in Body.step
+    # Aktiv tillväxt mot M_target.
+    # growth_rate_per_s: kg/s tillväxt (nå M_target på ~100s från nyfödd)
+    # growth_E_per_kg: anabolisk byggkostnad — INTE energidensitet i vävnad.
+    #   Samma princip som gestation_E_per_kg: metaboliskt arbete, inte lagrat innehåll.
+    growth_rate_per_s: float = 0.008    # 0.008 kg/s → ~100s till vuxen storlek
+    growth_E_per_kg:   float = 10_000.0 # J/kg (samma som gestation_E_per_kg)
+
+    # Gestationstillväxthastighet (kg/s fetal vävnad per sekund).
+    # 0.004 kg/s → 50s för ett 0.2 kg foster (var 0.002 = 100s).
+    # Föräldern kataboliserar ~0.2 kg kroppsmassa under gestationen (M: 1.0→0.8). ✓
+    gestation_growth_kg_per_s: float = 0.004
+
+    # Energikostnad för att bygga fetal vävnad (J/kg).
+    # OBS: Detta är INTE samma som E_body_J_per_kg (energidensitet vid katabolism).
+    # Anabolisk byggkostnad ≈ metaboliskt arbete för syntes, ej lagrad energi i vävnaden.
+    # Kalibrering: 0.002 kg/s × 10 000 J/kg = 20 J/s ≈ 2/3 av basalmetabolismen.
+    # Det gör gestation energimässigt rimlig utan att tömma föräldern på sekunder.
+    gestation_E_per_kg: float = 10_000.0  # J/kg (var implicit E_body_J_per_kg = 7 000 000)
+
+    # Stokastisk dödsrisk — liten och tillståndsberoende ("olyckor").
+    # Biologisk princip: friska agenter har låg olycksrisk; skadade har hög.
+    # death_h_base = 0.0 → ingen konstant bakgrundshazard (sätt > 0 för att aktivera).
+    # death_h_D    → D-beroende hazard: skadade agenter är mer sårbara för yttre hot.
+    # OBS: median_age_s används INTE längre som fallback när death_h_base = 0.
+    #      Livslängd emergerar ur W/D/M-systemet, inte ur en parameter.
+    median_age_s: float = 50.0   # behålls för bakåtkompatibilitet men används ej som default
+    death_h_base: float = 0.0    # konstant hazard (av som default)
     death_h_age: float = 0.0
-    death_h_D: float = 0.0
+    death_h_D: float = 0.01      # D-beroende hazard (var 0.0)
 
 # -------------------------
 # Body: energy + mass (unbounded) + damage/fatigue (bounded)
@@ -437,11 +492,11 @@ class Body:
     def _sense_cost(self, pheno: Phenotype) -> float:
         level = _sense_level(float(getattr(pheno, "sense_strength", 0.0)))
         if level == 1:
-            return float(getattr(self.AP, "sense_cost_L1", 0.0))
+            return float(self.AP.sense_cost_L1)
         if level == 2:
-            return float(getattr(self.AP, "sense_cost_L2", 0.0))
+            return float(self.AP.sense_cost_L2)
         if level >= 3:
-            return float(getattr(self.AP, "sense_cost_L3", 0.0))
+            return float(self.AP.sense_cost_L3)
         return 0.0
 
     def step(
@@ -525,82 +580,116 @@ class Body:
         # ---------------------------------------------------------
         E_before = float(self.E_total())
         M_before = float(self.M)
+
+        # ---------------------------------------------------------
+        # (0C) Cacha AP-parametrar som lokala variabler
+        # Lokala variabler (LOAD_FAST) är ~3× snabbare än attributuppslag.
+        # Alla dessa parametrar är konstanta under agentens liv.
+        # ---------------------------------------------------------
+        AP = self.AP
+        _E_bio        = float(AP.E_bio_J_per_kg)
+        _E_carcass    = float(AP.E_carcass_J_per_kg)
+        _E_body       = float(AP.E_body_J_per_kg)
+        _E_cap_per_M  = float(AP.E_cap_per_M)
+        _k_basal      = float(AP.k_basal)
+        _compute_cost = float(AP.compute_cost)
+        _v_max        = float(AP.v_max)
+        _D_max        = float(AP.D_max)
+        _M_min        = float(AP.M_min)
+        _M_crit       = float(AP.M_crit)
+        _starve_gain  = float(AP.starve_stress_gain)
+        _frailty_cap  = float(AP.frailty_gain_cap)
+        _fatigue_eff  = float(AP.fatigue_effort)
+        _fatigue_rec  = float(AP.fatigue_recover)
+        _Tb_set       = float(AP.Tb_set)
+        _Tb_min       = float(AP.Tb_min)
+        _thermo_k     = float(AP.thermo_k_W_per_C)
+        _thermo_exp   = float(AP.thermo_mass_exp)
+        _heatcap      = float(AP.heatcap_J_per_kgC)
+        _thermo_Pmax  = float(AP.thermo_Pmax_per_kg)
+        _cold_dmg     = float(AP.cold_damage_gain)
+        _gest_burden  = float(getattr(AP, "gestation_mass_burden", 0.0))
+        _gest_over    = float(getattr(AP, "gestation_P_overhead_per_kg", 0.0))
+        _gest_rate    = float(AP.gestation_growth_kg_per_s)
+        _gest_E_kg    = float(AP.gestation_E_per_kg)
+        _k_damage     = float(getattr(AP, "k_damage", 0.02))
+        _k_age0       = float(AP.k_age0)
+        _k_age1       = float(AP.k_age1)
+        _k_ageD       = float(AP.k_ageD)
+        _h_base       = float(AP.death_h_base)
+        _h_age        = float(AP.death_h_age)
+        _h_D          = float(AP.death_h_D)
+        _loco_eff     = float(AP.locomotion_eff)
+        _wear_a0      = float(AP.wear_a0)
+        _wear_aE      = float(AP.wear_aE)
+        _wear_aD      = float(AP.wear_aD)
+        _growth_rate  = float(AP.growth_rate_per_s)
+        _growth_E_kg  = float(AP.growth_E_per_kg)
+        # M_target: genetiskt bestämd vuxenmassa från phenotype
+        _M_target     = float(getattr(pheno, "M_target", float(AP.M0)))
     
         # ---------------------------------------------------------
         # (1) Intake -> buffers (up to cap), surplus -> mass
         # ---------------------------------------------------------
         m_bio = max(0.0, float(food_bio_kg))
         m_car = max(0.0, float(food_carcass_kg))
-    
-        E_in = (
-            m_bio * float(self.AP.E_bio_J_per_kg)
-            + m_car * float(self.AP.E_carcass_J_per_kg)
-        )
-    
+
+        E_in = m_bio * _E_bio + m_car * _E_carcass
+
         Et0 = float(self.E_total())
-        Ecap0 = float(self.E_cap())
+        Ecap0 = _E_cap_per_M * max(1e-9, float(self.M))
         room = max(0.0, Ecap0 - Et0)
-    
+
         dE_store = min(E_in, room)
-    
+
         if dE_store > 0.0:
-            # store split in weighted J-space
             dE_fast_w = 0.85 * dE_store
             dE_slow_w = 0.15 * dE_store
             self.E_fast += dE_fast_w / WF
             self.E_slow += dE_slow_w / WS
-    
+
         E_to_M = max(0.0, E_in - dE_store)
-        dM_grow = 0.0
-        if E_to_M > 0.0:
-            E_body = max(1e-12, float(self.AP.E_body_J_per_kg))
-            dM_grow = E_to_M / E_body
-            self.M = float(self.M) + dM_grow
-    
+        # OBS: energiöverskott lagras inte längre som massa här.
+        # Tillväxt sker via det genetiska M_target-drivet i sektion 2C.5.
+        # Eventuellt överskott stannar i energibuffertarna (kläms mot Ecap nedan).
+
         # ---------------------------------------------------------
         # (2) Effective mass (carried load) + basal/compute/sense/loco
         # ---------------------------------------------------------
-        burden = max(0.0, float(getattr(self.AP, "gestation_mass_burden", 0.0)))
         M_carry = float(self.M)
         if bool(self.gestating):
-            M_carry += burden * max(0.0, float(self.gest_M))
-    
+            M_carry += _gest_burden * max(0.0, float(self.gest_M))
+
         M_eff = max(1e-9, M_carry)
-        metab = float(getattr(pheno, "metabolism_scale", 1.0))
-    
-        out_basal = dt * metab * (M_eff ** 0.75) * float(self.AP.k_basal)
-        out_compute = dt * metab * M_eff * float(self.AP.compute_cost) * float(activity)
-    
+        metab = float(pheno.metabolism_scale)
+
+        # Basalmetabolism skalas med nuvarande massa (M_eff).
+        # Det obligatoriska tillväxtdrivet (sektion 2C.5) är den mekanism som
+        # förhindrar r-strategi via minimerad massa — inte metaboliken.
+        out_basal   = dt * metab * (M_eff ** 0.75) * _k_basal
+        out_compute = dt * metab * M_eff * _compute_cost * float(activity)
+
         sense_cost = float(self._sense_cost(pheno))
-        out_sense = dt * metab * M_eff * sense_cost
-    
+        out_sense  = dt * metab * M_eff * sense_cost
+
         out_loco = max(0.0, float(extra_drain))
     
         # ---------------------------------------------------------
         # (2B) Thermoregulation (ledger-consistent)
         # ---------------------------------------------------------
-        Tb = float(getattr(self, "Tb", float(getattr(self.AP, "Tb_set", 37.0))))
-        Tset = float(getattr(self.AP, "Tb_set", 37.0))
+        Tb   = float(self.Tb)
         Tenv = float(T_env)
-    
-        k0 = float(getattr(self.AP, "thermo_k_W_per_C", 0.0))
-        expA = float(getattr(self.AP, "thermo_mass_exp", 2.0 / 3.0))
-        K = k0 * (M_eff ** expA)
-    
-        c0 = float(getattr(self.AP, "heatcap_J_per_kgC", 0.0))
-        Cth = max(1e-9, c0 * M_eff)
-    
-        P_need = 0.0
-        if Tb < Tset:
-            P_need = max(0.0, K * (Tset - Tenv))
-    
-        Pmax = float(getattr(self.AP, "thermo_Pmax_per_kg", 0.0)) * M_eff
-        P_gen = min(P_need, Pmax)
-    
-        out_thermo = dt * P_gen  # J
-    
-        Qloss = K * (Tb - Tenv)
-        dTb = (P_gen - Qloss) * dt / Cth
+
+        K   = _thermo_k * (M_eff ** _thermo_exp)
+        Cth = max(1e-9, _heatcap * M_eff)
+
+        P_need = max(0.0, K * (_Tb_set - Tenv)) if Tb < _Tb_set else 0.0
+        P_gen  = min(P_need, _thermo_Pmax * M_eff)
+
+        out_thermo = dt * P_gen
+
+        Qloss   = K * (Tb - Tenv)
+        dTb     = (P_gen - Qloss) * dt / Cth
         self.Tb = Tb + dTb
     
         # ---------------------------------------------------------
@@ -614,27 +703,18 @@ class Body:
         dM_cat_gest = 0.0         # kg catabolized specifically to support gestation build
         E_from_M_gest = 0.0       # J injected via that catabolism (then spent)
 
-        # i Body.step() tidigt
-        if bool(getattr(self, "gestating", False)) and not hasattr(self, "_dbg_gest_started"):
-            self._dbg_gest_started = True
-            print(f"[DBG] gestating became true: agent_id={int(getattr(ctx,'agent_id',-1))} t={float(ctx.t):.2f}")
-            
         if bool(self.gestating):
-            # overhead power drain (optional)
-            Pg_over = max(0.0, float(getattr(self.AP, "gestation_P_overhead_per_kg", 0.0))) * M_eff
+            Pg_over = _gest_over * M_eff
             out_gest_overhead = dt * Pg_over
-    
-            # build toward target
+
             M_tgt = max(0.0, float(self.gest_M_target))
             M_cur = max(0.0, float(self.gest_M))
-    
+
             if M_tgt > 0.0 and M_cur < M_tgt:
-                rate = max(0.0, float(getattr(self.AP, "gestation_growth_kg_per_s", 0.0)))
-                dM_want = min(rate * dt, M_tgt - M_cur)
-    
+                dM_want = min(_gest_rate * dt, M_tgt - M_cur)
+
                 if dM_want > 0.0:
-                    E_body = max(1e-12, float(self.AP.E_body_J_per_kg))
-                    E_need = dM_want * E_body
+                    E_need = dM_want * _gest_E_kg
     
                     # pay from buffers
                     paid1 = float(self.take_energy(E_need))
@@ -642,40 +722,58 @@ class Body:
     
                     paid2 = 0.0
                     if deficit_g > 0.0:
-                        # catabolize above M_min to fund remaining gestation need
-                        Mmin = float(self.AP.M_min)
-                        free = max(0.0, float(self.M) - Mmin)
-    
-                        want_cat = deficit_g / E_body
+                        free = max(0.0, float(self.M) - _M_min)
+
+                        want_cat    = deficit_g / _E_body
                         dM_cat_gest = min(want_cat, free)
-    
+
                         if dM_cat_gest > 0.0:
                             self.M -= dM_cat_gest
-                            E_from_M_gest = dM_cat_gest * E_body
-                            # inject to fast buffer in same weighted convention, then immediately pay
+                            E_from_M_gest = dM_cat_gest * _E_body
                             self.E_fast += E_from_M_gest / WF
-    
+
                         paid2 = float(self.take_energy(deficit_g))
-    
+
                     paid_total = paid1 + paid2
                     out_gest_build = paid_total
-    
-                    dM_gest = paid_total / E_body
+
+                    # Massa byggd = betald energi / byggkostnad per kg.
+                    dM_gest = paid_total / _gest_E_kg
                     if dM_gest > 0.0:
                         self.gest_M = M_cur + dM_gest
                         self.gest_E_J = float(self.gest_E_J) + paid_total
     
         # ---------------------------------------------------------
-        # (2D) Pay drains ONCE (this is the critical fix)
+        # (2C.5) Aktiv tillväxt mot M_target
+        # Tillväxt är genetiskt programmerad — en ung agent försöker alltid växa.
+        # Energin tas ur budgeten precis som metabolism.
+        # Om energin inte räcker: tillväxten skalas proportionellt (svält = långsammare tillväxt).
+        # ---------------------------------------------------------
+        out_growth = 0.0
+        dM_growth_want = 0.0
+        if float(self.M) < _M_target:
+            M_deficit      = _M_target - float(self.M)
+            dM_growth_want = min(_growth_rate * dt, M_deficit)
+            out_growth     = dM_growth_want * _growth_E_kg  # anabolisk kostnad, ej energidensitet
+
+        # ---------------------------------------------------------
+        # (2D) Pay drains ONCE
         # ---------------------------------------------------------
         E_out_drain = (
             out_basal + out_compute + out_sense + out_loco + out_thermo
-            + out_gest_overhead + out_gest_build
+            + out_gest_overhead + out_gest_build + out_growth
         )
     
         paid = float(self.take_energy(E_out_drain))
         deficit = max(0.0, E_out_drain - paid)
         E_paid_drain = paid
+
+        # Applicera tillväxt proportionellt mot betald fraktion
+        if dM_growth_want > 0.0 and E_out_drain > 1e-12:
+            frac_paid  = paid / E_out_drain
+            dM_growth  = dM_growth_want * frac_paid
+            if dM_growth > 0.0:
+                self.M = float(self.M) + dM_growth
     
         # ---------------------------------------------------------
         # (3) Catabolism: cover remaining deficit (if any), above M_min
@@ -685,20 +783,17 @@ class Body:
         paid2 = 0.0
     
         if deficit > 0.0:
-            E_body = max(1e-12, float(self.AP.E_body_J_per_kg))
-            want_cat = deficit / E_body
-    
-            Mmin = float(self.AP.M_min)
-            free = max(0.0, float(self.M) - Mmin)
-            dM_cat = min(want_cat, free)
-    
+            want_cat = deficit / _E_body
+            free     = max(0.0, float(self.M) - _M_min)
+            dM_cat   = min(want_cat, free)
+
             if dM_cat > 0.0:
-                self.M -= dM_cat
-                E_from_M = dM_cat * E_body
+                self.M   -= dM_cat
+                E_from_M  = dM_cat * _E_body
                 self.E_fast += E_from_M / WF
-    
-            paid2 = float(self.take_energy(deficit))
-            deficit = max(0.0, deficit - paid2)
+
+            paid2      = float(self.take_energy(deficit))
+            deficit    = max(0.0, deficit - paid2)
             E_paid_drain += paid2
     
         # snapshot after drains/catabolism (for stress math)
@@ -709,63 +804,45 @@ class Body:
         # (4) Damage + repair + fatigue
         # ---------------------------------------------------------
         D_before = float(self.D)
-        D_max = float(self.AP.D_max)
-    
-        # (we no longer use dD_rep precomputed; repair handled in step_pain_and_repair)
-        E_out_repair = 0.0
-    
-        e_lack = clamp((Ecap - Et) / max(Ecap, 1e-9), 0.0, 1.0)
-        d_norm = clamp(D_before / max(D_max, 1e-9), 0.0, 1.0)
-    
-        speed_n = clamp(float(speed) / max(float(self.AP.v_max), 1e-9), 0.0, 1.0)
-        effort = speed_n + 0.6 * float(activity)
-        rest = max(0.0, 1.0 - speed_n) * max(0.0, 1.0 - float(activity))
-    
+
+        e_lack   = clamp((Ecap - Et) / max(Ecap, 1e-9), 0.0, 1.0)
+        d_norm   = clamp(D_before / max(_D_max, 1e-9), 0.0, 1.0)
+
+        speed_n = clamp(float(speed) / max(_v_max, 1e-9), 0.0, 1.0)
+        effort  = speed_n + 0.6 * float(activity)
+        rest    = max(0.0, 1.0 - speed_n) * max(0.0, 1.0 - float(activity))
+
         w = float(self.weakness())
-        starve_stress = 1.0 + float(self.AP.starve_stress_gain) * (1.0 - w)
-    
-        susc = float(getattr(pheno, "susceptibility", 1.0))
-        frailty_gain = float(getattr(pheno, "frailty_gain", 0.0))
-        frailty_gain_cap = float(getattr(self.AP, "frailty_gain_cap", 1.0))
-        frailty_gain = clamp(frailty_gain, 0.0, max(0.0, frailty_gain_cap))
-        frail = 1.0 + frailty_gain * d_norm
-    
-        # normalized drain rate (for stress_per_drain)
-        drain_rate = E_out_drain / max(dt, 1e-12)
-        drain_rate_n = drain_rate / max(Ecap, 1e-9)  # 1/s
-    
-        k_E = 1.2
-        k_eff = 0.02
-        dD_eff = dt * (k_eff * susc * (1.0 + k_E * e_lack) * frail * effort * starve_stress)
-        dD_met = dt * (float(getattr(pheno, "stress_per_drain", 0.0)) * drain_rate_n * starve_stress)
-    
-        # aging background (optional)
-        k_age0 = float(getattr(self.AP, "k_age0", 0.0))
-        k_age1 = float(getattr(self.AP, "k_age1", 0.0))
-        k_ageD = float(getattr(self.AP, "k_ageD", 0.4))
-        age_rate = max(0.0, k_age0 + k_age1 * float(age_s))
-        dD_age = dt * age_rate * (1.0 + k_ageD * d_norm) * (1.0 + frailty_gain)
-    
-        # cold stress
-        Tb_now = float(getattr(self, "Tb", float(getattr(self.AP, "Tb_set", 37.0))))
-        Tb_min = float(getattr(self.AP, "Tb_min", 35.0))
-        cold_damage_gain = float(getattr(self.AP, "cold_damage_gain", 0.0))
-        if Tb_now < Tb_min:
-            sev = clamp((Tb_min - Tb_now) / 10.0, 0.0, 1.0)
-            dD_cold = dt * cold_damage_gain * sev
+        starve_stress = 1.0 + _starve_gain * (1.0 - w)
+
+        susc         = float(pheno.susceptibility)
+        frailty_gain = clamp(float(pheno.frailty_gain), 0.0, max(0.0, _frailty_cap))
+        frail        = 1.0 + frailty_gain * d_norm
+
+        drain_rate   = E_out_drain / max(dt, 1e-12)
+        drain_rate_n = drain_rate / max(Ecap, 1e-9)
+
+        dD_eff = dt * (_k_damage * susc * (1.0 + 1.2 * e_lack) * frail * effort * starve_stress)
+        dD_met = dt * (float(pheno.stress_per_drain) * drain_rate_n * starve_stress)
+
+        age_rate = max(0.0, _k_age0 + _k_age1 * float(age_s))
+        dD_age   = dt * age_rate * (1.0 + _k_ageD * d_norm) * (1.0 + frailty_gain)
+
+        Tb_now = float(self.Tb)
+        if Tb_now < _Tb_min:
+            sev    = clamp((_Tb_min - Tb_now) / 10.0, 0.0, 1.0)
+            dD_cold = dt * _cold_dmg * sev
         else:
             dD_cold = 0.0
-    
-        dD_in = dD_eff + dD_met + dD_age + dD_cold
+
+        dD_in      = dD_eff + dD_met + dD_age + dD_cold
         dD_pos_rate = dD_in / max(dt, 1e-9)
-    
-        self.D = clamp(D_before + dD_in, 0.0, D_max)
-    
-        # repair/pain spend (separate)
+
+        self.D = clamp(D_before + dD_in, 0.0, _D_max)
+
         E_pain_repair = float(self.step_pain_and_repair(ctx, pheno, D_before=D_before))
-        E_out_repair = E_pain_repair
-    
-        # aging / wear accumulation
+        E_out_repair  = E_pain_repair
+
         E_spent_total = float(E_paid_drain) + float(E_out_repair)
         self.step_aging(
             ctx,
@@ -773,16 +850,14 @@ class Body:
             repro_cost_paid=0.0,
             dD_pos=float(dD_pos_rate),
         )
-    
-        # fatigue update
-        d_norm2 = clamp(float(self.D) / max(D_max, 1e-9), 0.0, 1.0)
-        fatigue_effort_eff = float(self.AP.fatigue_effort) * (1.0 + 0.4 * d_norm2)
-        fatigue_recover_eff = float(self.AP.fatigue_recover) * max(0.0, (1.0 - 0.05 * d_norm2))
-    
+
+        d_norm2 = clamp(float(self.D) / max(_D_max, 1e-9), 0.0, 1.0)
+        fatigue_effort_eff  = _fatigue_eff * (1.0 + 0.4 * d_norm2)
+        fatigue_recover_eff = _fatigue_rec * max(0.0, 1.0 - 0.05 * d_norm2)
+
         self.Fg = clamp(
             float(self.Fg) + dt * (fatigue_effort_eff * effort - fatigue_recover_eff * rest),
-            0.0,
-            1.0,
+            0.0, 1.0,
         )
     
         # enforce storage capacity
@@ -805,26 +880,20 @@ class Body:
         # ---------------------------------------------------------
         # (5) Deterministic death conditions
         # ---------------------------------------------------------
-        if float(self.D) >= D_max or float(self.M) <= float(self.AP.M_min):
+        if float(self.D) >= _D_max or float(self.M) <= _M_min:
             self.alive = False
             return
-    
+
         # ---------------------------------------------------------
-        # (6) Stochastic death (optional)
+        # (6) Stochastic death
         # ---------------------------------------------------------
         if rng is not None:
-            target_med = max(1e-6, float(getattr(self.AP, "median_age_s", 50.0)))
-            h_base_cfg = float(getattr(self.AP, "death_h_base", 0.0))
-            h_base = h_base_cfg if h_base_cfg > 0.0 else (math.log(2.0) / target_med)
-    
-            h_age = float(getattr(self.AP, "death_h_age", 0.0))
-            h_D = float(getattr(self.AP, "death_h_D", 0.0))
-    
-            hazard_rate = max(0.0, h_base + h_age * float(age_s) + h_D * d_norm2)
-            p = 1.0 - math.exp(-hazard_rate * dt)
-            if rng.random() < p:
-                self.alive = False
-                return
+            hazard_rate = max(0.0, _h_base + _h_age * float(age_s) + _h_D * d_norm2)
+            if hazard_rate > 0.0:
+                p = 1.0 - math.exp(-hazard_rate * dt)
+                if rng.random() < p:
+                    self.alive = False
+                    return
     
         # ---------------------------------------------------------
         # (7) Numerical guard (post)
@@ -842,7 +911,7 @@ class Body:
             clamped = True
     
         D0 = float(self.D)
-        self.D = clamp(D0, 0.0, D_max)
+        self.D = clamp(D0, 0.0, _D_max)
         if float(self.D) != D0:
             clamped = True
     
@@ -931,15 +1000,16 @@ class Body:
             "E_out_thermo": out_thermo,
             "E_out_gest_overhead": out_gest_overhead,
             "E_out_gest_build": out_gest_build,
+            "E_out_growth": out_growth,
             "E_out_drain": E_out_drain,
-    
+
             "E_out_repair": E_out_repair,
             "E_from_M": E_from_M_total,
             "deficit": deficit,
             "E_after": E_after,
-    
+
             "M_before": M_before,
-            "dM_grow": dM_grow,
+            "dM_growth": dM_growth_want,
             "dM_cat": dM_cat_total,
             "M_after": M_after,
     
@@ -1047,6 +1117,8 @@ class RaySensors:
             self._noiseB = z1()
             self._noiseC = z1()
             self._noise64 = z1(dtype=np.float64)
+            self._ixs = np.empty((0, 0), dtype=np.int32)
+            self._iys = np.empty((0, 0), dtype=np.int32)
             return
 
         self._ang_base = (
@@ -1079,6 +1151,10 @@ class RaySensors:
         self._noiseC = np.empty((self._n,), dtype=np.float32)
         self._noise64 = np.empty((self._n,), dtype=np.float64)
 
+        # Förallokerade int32-buffrar för see_agent_first_hit (undviker astype-allokering)
+        self._ixs = np.empty((self._n, self._m), dtype=np.int32)
+        self._iys = np.empty((self._n, self._m), dtype=np.int32)
+
     def sense(
         self,
         world: World,
@@ -1086,11 +1162,13 @@ class RaySensors:
         y: float,
         heading: float,
         rng: np.random.Generator | None = None,
+        m_eff: int = 0,
     ) -> tuple[tuple[float, float], np.ndarray, np.ndarray]:
         """
         Perception API (u-domain):
           - Returns (B0_u, C0_u)
           - Returns rays_B_u, rays_C_u
+        m_eff: effektivt antal avståndssteg (0 = använd alla).
         World sampling (new API):
           - world.sample(x,y) -> (B_kg, C_kg)
           - world.sample_many(xs,ys) -> (B_kg_array, C_kg_array)
@@ -1106,11 +1184,12 @@ class RaySensors:
         C0_u = self._sat1_u(float(C0_kg), Kc)
 
         n = int(self._n)
-        m = int(self._m)
+        m_full = int(self._m)
+        m = m_full if (m_eff <= 0 or m_eff >= m_full) else int(m_eff)
         if n <= 0 or m <= 0:
             return (float(B0_u), float(C0_u)), self._accB[:0], self._accC[:0]
 
-        # ---- (B) Ray geometry ----
+        # ---- (B) Ray geometry (bara upp till m steg) ----
         np.add(self._ang_base, np.float32(heading), out=self._ang)
         np.cos(self._ang, out=self._dx)
         np.sin(self._ang, out=self._dy)
@@ -1118,27 +1197,31 @@ class RaySensors:
         xx = np.float32(x)
         yy = np.float32(y)
 
-        np.multiply(self._dx[:, None], self._d[None, :], out=self._xs)
-        self._xs += xx
-        np.multiply(self._dy[:, None], self._d[None, :], out=self._ys)
-        self._ys += yy
+        np.multiply(self._dx[:, None], self._d[None, :m], out=self._xs[:, :m])
+        self._xs[:, :m] += xx
+        np.multiply(self._dy[:, None], self._d[None, :m], out=self._ys[:, :m])
+        self._ys[:, :m] += yy
 
         ws = np.float32(self.world_size)
-        np.mod(self._xs, ws, out=self._xs)
-        np.mod(self._ys, ws, out=self._ys)
+        np.mod(self._xs[:, :m], ws, out=self._xs[:, :m])
+        np.mod(self._ys[:, :m], ws, out=self._ys[:, :m])
 
         # ---- (C) Sample world fields along rays (kg) ----
-        Bkg, Ckg = world.sample_many(self._xs, self._ys, outB=self._Bp, outC=self._Cp)
+        Bkg, Ckg = world.sample_many(
+            self._xs[:, :m], self._ys[:, :m],
+            outB=self._Bp[:, :m], outC=self._Cp[:, :m],
+        )
 
-        # ---- (D) Convert kg -> u in-place, integrate in u-domain
+        # ---- (D) Convert kg -> u in-place, integrate med trunkerade vikter
         self._sat_u(Bkg, Kb)
         self._sat_u(Ckg, Kc)
 
-        np.matmul(Bkg, self._w, out=self._accB)
-        np.matmul(Ckg, self._w, out=self._accC)
-
-        self._accB *= self._inv_wsum
-        self._accC *= self._inv_wsum
+        w_trunc = self._w[:m]
+        wsum_trunc = float(np.sum(w_trunc)) + 1e-9
+        np.matmul(Bkg, w_trunc, out=self._accB)
+        np.matmul(Ckg, w_trunc, out=self._accC)
+        self._accB *= (1.0 / wsum_trunc)
+        self._accC *= (1.0 / wsum_trunc)
 
         # ---- (E) Noise in u-domain
         sig = float(self.AP.noise_sigma)
@@ -1170,16 +1253,20 @@ class RaySensors:
         y: float,
         heading: float,
         self_id: int,
-    ) -> tuple[float, float, float]:
+        m_eff: int = 0,
+    ) -> tuple[float, float, float, int]:
         """
-        Returns (present, bearing_u, dist_u)
-        First-hit semantics: scan distance outward; first encountered agent stops scan.
+        Returns (present, bearing_u, dist_u, j_hit).
+        j_hit: avståndssteg-index för träffen (-1 om ingen träff).
+        m_eff: effektivt antal avståndssteg att skanna (0 = alla).
         """
         n = int(self._n)
-        m = int(self._m)
+        m_full = int(self._m)
+        m = m_full if (m_eff <= 0 or m_eff >= m_full) else int(m_eff)
         if n <= 0 or m <= 0:
-            return 0.0, 0.0, 0.0
+            return 0.0, 0.0, 0.0, -1
 
+        # Strålegeometri — xs/ys redan beräknade i sense(), men heading kan skilja
         np.add(self._ang_base, np.float32(heading), out=self._ang)
         np.cos(self._ang, out=self._dx)
         np.sin(self._ang, out=self._dy)
@@ -1187,29 +1274,36 @@ class RaySensors:
         xx = np.float32(x)
         yy = np.float32(y)
 
-        np.multiply(self._dx[:, None], self._d[None, :], out=self._xs)
-        self._xs += xx
-        np.multiply(self._dy[:, None], self._d[None, :], out=self._ys)
-        self._ys += yy
+        np.multiply(self._dx[:, None], self._d[None, :m], out=self._xs[:, :m])
+        self._xs[:, :m] += xx
+        np.multiply(self._dy[:, None], self._d[None, :m], out=self._ys[:, :m])
+        self._ys[:, :m] += yy
 
         ws = np.float32(self.world_size)
-        np.mod(self._xs, ws, out=self._xs)
-        np.mod(self._ys, ws, out=self._ys)
-
-        A = world.A
         s = int(self.world_size)
+        np.mod(self._xs[:, :m], ws, out=self._xs[:, :m])
+        np.mod(self._ys[:, :m], ws, out=self._ys[:, :m])
 
-        for j in range(m):
-            for i in range(n):
-                ix = int(self._xs[i, j]) % s
-                iy = int(self._ys[i, j]) % s
-                aid = int(A[iy, ix])
-                if aid != 0 and aid != int(self_id):
-                    bearing_u = float(i) / float(n)
-                    dist_u = float(self._d[j] / max(float(self.AP.ray_len), 1e-9))
-                    return 1.0, bearing_u, dist_u
+        np.floor(self._xs[:, :m], out=self._xs[:, :m])
+        np.floor(self._ys[:, :m], out=self._ys[:, :m])
+        np.mod(self._xs[:, :m], s, out=self._xs[:, :m])
+        np.mod(self._ys[:, :m], s, out=self._ys[:, :m])
+        np.copyto(self._ixs[:, :m], self._xs[:, :m], casting="unsafe")
+        np.copyto(self._iys[:, :m], self._ys[:, :m], casting="unsafe")
 
-        return 0.0, 0.0, 0.0
+        aids = world.A[self._iys[:, :m], self._ixs[:, :m]]
+        mask = (aids != 0) & (aids != int(self_id))
+
+        hit_per_j = mask.any(axis=0)
+        if not hit_per_j.any():
+            return 0.0, 0.0, 0.0, -1
+
+        j_hit = int(np.argmax(hit_per_j))
+        i_hit = int(np.argmax(mask[:, j_hit]))
+
+        bearing_u = float(i_hit) / float(n)
+        dist_u = float(self._d[j_hit]) / max(float(self.AP.ray_len), 1e-9)
+        return 1.0, bearing_u, dist_u, j_hit
 
 
 # -------------------------
@@ -1255,11 +1349,19 @@ class Agent:
 
     sense_level: int = field(init=False, default=0)
 
+    # Adaptiv sensing-cache: lagrar senaste sensing-resultat och cooldown-räknare.
+    _sense_cd: int = field(init=False, default=0)        # steg kvar tills nästa skanning
+    _cached_B0: float = field(init=False, default=0.0)
+    _cached_C0: float = field(init=False, default=0.0)
+    _cached_x_in: np.ndarray = field(init=False)         # cachat obs-vektor
+    _last_detect_j: int = field(init=False, default=-1)  # avståndssteg för senaste träff (-1=ingen)
+    _sense_m_eff: int = field(init=False, default=0)     # effektivt stråldjup nästa skanning
+    _cached_agent_hit: tuple = field(init=False)         # (N, Nu, Nd) från senaste see_agent_first_hit
+
     def __post_init__(self) -> None:
         self.AP = replace(self.AP)
 
         self.body = Body(self.AP)
-        # OBS: dimension updated (see _build_obs)
         self.obs_trace = np.zeros((8,), dtype=np.float32)
 
         self.age_s = 0.0
@@ -1272,6 +1374,15 @@ class Agent:
         _apply_sense_to_AP(self.AP, self.sense_level)
 
         self._init_body_state_from_AP()
+
+        # Sense-cache: börja med noll-vektor; triggar full skanning vid första steget.
+        self._sense_cd = 0
+        self._cached_B0 = 0.0
+        self._cached_C0 = 0.0
+        self._cached_x_in = np.zeros((self.OBS_DIM,), dtype=np.float32)
+        self._last_detect_j = -1
+        self._sense_m_eff = 0
+        self._cached_agent_hit = (0.0, 0.0, 0.0)
 
     def _init_body_state_from_AP(self) -> None:
         self.body.M = max(0.0, float(self.AP.M0))
@@ -1345,8 +1456,74 @@ class Agent:
         if not self.body.alive:
             return None, 0.0, 0.0
 
-        (B0, C0), rays_B, rays_C = self.sensors.sense(world, self.x, self.y, self.heading, rng=rng)
+        m_full = int(self.sensors._m) if self.sensors is not None else 0
+
+        # Initialisera m_eff vid första anropet
+        if self._sense_m_eff <= 0:
+            self._sense_m_eff = m_full
+
+        # --- Adaptiv sensing: returnera cache om cooldown aktiv ---
+        if self._sense_cd > 0:
+            self._sense_cd -= 1
+
+            # Body-state uppdateras varje steg även vid cache
+            hunger = float(self.body.hunger())
+            fatigue = float(self.body.Fg)
+            D = float(self.body.D)
+            self._cached_x_in[6] = hunger
+            self._cached_x_in[7] = fatigue
+            self._cached_x_in[20] = D
+
+            a = 0.06
+            self.obs_trace = (1.0 - a) * self.obs_trace + a * self._cached_x_in[:8]
+            self._cached_x_in[8:16] = self.obs_trace
+
+            return self._cached_x_in.copy(), self._cached_B0, self._cached_C0
+
+        # --- Full sensing med adaptivt djup ---
+        m_eff = self._sense_m_eff
+
+        (B0, C0), rays_B, rays_C = self.sensors.sense(
+            world, self.x, self.y, self.heading, rng=rng, m_eff=m_eff,
+        )
         x_in = self._build_obs(B0, C0, rays_B, rays_C)
+
+        # Kontrollera om något detekterades (mat i rays eller lokalt)
+        thresh = float(self.AP.sense_alert_thresh)
+        food_near = (
+            float(B0) > thresh
+            or float(C0) > thresh
+            or (len(rays_B) > 0 and float(rays_B.max()) > thresh)
+            or (len(rays_C) > 0 and float(rays_C.max()) > thresh)
+        )
+
+        # Kontrollera grannar med adaptivt djup
+        N_ag, Nu_ag, Nd_ag, j_agent = self.sensors.see_agent_first_hit(
+            world, self.x, self.y, self.heading, self.id, m_eff=m_eff,
+        )
+        agent_near = j_agent >= 0
+
+        # Cacha för apply_outputs — eliminerar dubbelanropet där
+        self._cached_agent_hit = (N_ag, Nu_ag, Nd_ag)
+
+        if food_near or agent_near:
+            # ALERT: hög frekvens, tight djup (lite förbi senaste träffen)
+            j_det = j_agent if agent_near else 0
+            self._last_detect_j = j_det
+            # Nästa scan: bara så långt som behövs + 2 steg marginal, max m_full
+            self._sense_m_eff = min(m_full, max(2, j_det + 3))
+            self._sense_cd = max(0, int(self.AP.sense_alert_steps) - 1)
+        else:
+            # IDLE: låg frekvens, full räckvidd (fångar nya saker i periferin)
+            self._last_detect_j = -1
+            self._sense_m_eff = m_full
+            self._sense_cd = max(0, int(self.AP.sense_idle_steps) - 1)
+
+        # Uppdatera cache
+        self._cached_B0 = float(B0)
+        self._cached_C0 = float(C0)
+        self._cached_x_in[:] = x_in
+
         return x_in, float(B0), float(C0)
 
     def apply_outputs(
@@ -1406,12 +1583,12 @@ class Agent:
         v_prev = max(0.0, float(self.last_speed))
         M_pre = max(1e-9, float(self.body.M))
     
-        F0_cap = float(getattr(self.AP, "F0", 4.0))
-        alpha = float(getattr(self.AP, "force_mass_exp", 2.0 / 3.0))
+        F0_cap = float(self.AP.F0)
+        alpha  = float(self.AP.force_mass_exp)
         F_prop = u * F0_cap * (M_pre ** alpha)
-    
-        c1 = float(getattr(self.AP, "drag_lin", 0.8))
-        c2 = float(getattr(self.AP, "drag_quad", 0.2))
+
+        c1 = float(self.AP.drag_lin)
+        c2 = float(self.AP.drag_quad)
     
         F_drag_prev = c1 * v_prev + c2 * v_prev * v_prev
         a = (F_prop - F_drag_prev) / M_pre
@@ -1424,7 +1601,7 @@ class Agent:
         # ---------------------------------------------------------
         # 6) Locomotion energy (J)
         # ---------------------------------------------------------
-        eta = clamp(float(getattr(self.AP, "locomotion_eff", 0.25)), 1e-6, 1.0)
+        eta    = clamp(float(self.AP.locomotion_eff), 1e-6, 1.0)
         P_mech = max(0.0, F_prop * v_mid)
         E_move = (dt * P_mech) / eta
     
@@ -1455,21 +1632,37 @@ class Agent:
         activity = 0.03 + 0.45 * speed_n + 0.10 * ate
     
         # ---------------------------------------------------------
-        # 10) Social attraction (unchanged semantics)
+        # 10) Social interaktion: repulsion (nära) + attraktion/repulsion (långt)
         # ---------------------------------------------------------
+        # Systemet har två zoner:
+        #   Nära  (Nd < REP_ZONE): hård repulsion för alla agenter — undviker kollision.
+        #   Långt (Nd > REP_ZONE): soc > 0.5 → attraktion, soc < 0.5 → extra repulsion.
+        # Det ger emergent flockbeteende för högsociala och territoriellt beteende för lågsociala.
         soc = float(getattr(self.pheno, "sociability", 0.0))
-        SOC_TURN_GAIN = 0.55
-        SOC_DIST_GAIN = 1.00
+        SOC_TURN_GAIN  = 0.70
+        SOC_DIST_GAIN  = 1.00
         SOC_JITTER_DAMP = 0.60
-    
-        N, Nu, Nd = self.sensors.see_agent_first_hit(world, self.x, self.y, self.heading, self.id)
-        if N > 0.5 and soc > 1e-6:
-            a_hit = self.heading + (2.0 * math.pi * float(Nu))
-            errN = self._signed_angle(a_hit - self.heading)
-            biasN = clamp(errN / math.pi, -1.0, 1.0)
-            wdist = clamp(1.0 - SOC_DIST_GAIN * float(Nd), 0.0, 1.0)
-            turn = clamp(turn + SOC_TURN_GAIN * soc * wdist * biasN, -1.0, 1.0)
-            explore_drive = explore_drive * (1.0 - SOC_JITTER_DAMP * soc * wdist)
+        REP_ZONE       = 0.35   # Nd < detta → alltid repulsion
+
+        N, Nu, Nd = self._cached_agent_hit
+        if N > 0.5:
+            a_hit  = self.heading + (2.0 * math.pi * float(Nu))
+            errN   = self._signed_angle(a_hit - self.heading)
+            biasN  = clamp(errN / math.pi, -1.0, 1.0)   # +1 = granne till höger
+
+            Nd_f = float(Nd)
+            if Nd_f < REP_ZONE:
+                # Nära: repulsion alltid — sväng bort från grannen
+                rep_strength = 1.0 - (Nd_f / REP_ZONE)   # starkare ju närmare
+                turn = clamp(turn - SOC_TURN_GAIN * rep_strength * biasN, -1.0, 1.0)
+                explore_drive = explore_drive * (1.0 - 0.3 * rep_strength)
+            else:
+                # Långt: sociability styr riktning (soc=0→repulsion, soc=1→attraktion)
+                soc_bias = 2.0 * soc - 1.0   # -1..+1
+                if abs(soc_bias) > 1e-6:
+                    wdist = clamp(1.0 - SOC_DIST_GAIN * Nd_f, 0.0, 1.0)
+                    turn  = clamp(turn + SOC_TURN_GAIN * soc_bias * wdist * biasN, -1.0, 1.0)
+                    explore_drive = explore_drive * (1.0 - SOC_JITTER_DAMP * abs(soc_bias) * wdist)
     
         # ---------------------------------------------------------
         # 11) Body dynamics (includes gestation build model: "Väg 2")
@@ -1644,4 +1837,3 @@ class Agent:
         # newborn: start with cooldown so they can't instantly reproduce
         self.repro_cd_s = float(self.AP.repro_cooldown_s)
         self.age_s = 0.0
-        

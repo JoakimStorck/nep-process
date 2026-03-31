@@ -45,6 +45,9 @@ class Phenotype:
     child_Fg: float
     child_M: float   # NEW
 
+    # Genetiskt tillväxtprogram
+    M_target: float
+
     # Placeholders / later
     risk_aversion: float
     sociability: float
@@ -79,6 +82,7 @@ _T_SENSE           = 17
 
 _T_CHILD_M         = 18
 _T_M_REPRO_MIN     = 19
+_T_M_TARGET        = 20   # genetiskt bestämd vuxenmassa
 
 @dataclass(frozen=True)
 class PhenoRanges:
@@ -91,11 +95,11 @@ class PhenoRanges:
     repro_rate_max: float = 2.50
 
     # reproduction
-    E_repro_min_min: float = 0.05
-    E_repro_min_max: float = 0.35
+    E_repro_min_min: float = 0.10   # förälder måste ha minst 10% energi (var 0.05)
+    E_repro_min_max: float = 0.40   # upp till 40% krävs (var 0.35)
     
     repro_cost_min: float = 0.01
-    repro_cost_max: float = 0.08
+    repro_cost_max: float = 0.05    # sänkt tak — extra cost vid födseln (var 0.08)
 
     # metabolism + damage/repair
     metabolism_min: float = 0.85
@@ -107,8 +111,8 @@ class PhenoRanges:
     stress_per_drain_min: float = 0.01
     stress_per_drain_max: float = 0.05
 
-    repair_capacity_min: float = 0.01
-    repair_capacity_max: float = 0.10
+    repair_capacity_min: float = 0.002
+    repair_capacity_max: float = 0.030   # höjt — k_age1 ger lägre inflöde än k_age0=0.2
 
     frailty_gain_min: float = 0.0
     frailty_gain_max: float = 3.0
@@ -117,24 +121,30 @@ class PhenoRanges:
     E_rep_min_max: float = 0.35
 
     # children
-    child_E_fast_min: float = 0.10
-    child_E_fast_max: float = 0.70
-    child_E_slow_min: float = 0.10
-    child_E_slow_max: float = 0.70
+    # Energi till barnet: fraktion av barnets Ecap som föräldern betalar.
+    child_E_fast_min: float = 0.05   # var 0.10
+    child_E_fast_max: float = 0.40   # var 0.70 — sänkt tak
+    child_E_slow_min: float = 0.05   # var 0.10
+    child_E_slow_max: float = 0.40   # var 0.70 — sänkt tak
     child_Fg_min: float = 0.00
     child_Fg_max: float = 0.40
 
-    # NEW: child mass at birth
-    # OBS: välj intervall efter din mass-enhet. Här startar vi konservativt.
-    child_M_min: float = 0.1
-    child_M_max: float = 0.3
+    # Barnets massa vid födseln.
+    # Kompromiss: litet nog att kosta föräldern rimligt, stort nog att överleva.
+    child_M_min: float = 0.08   # var 0.10 → 0.05 (för litet gav utrotning)
+    child_M_max: float = 0.20   # var 0.30 → 0.15 (gav utrotning) → 0.20
 
     cold_aversion_min: float = 0.0
     cold_aversion_max: float = 1.0
 
-    # reproduction mass gate (absolute M units)
-    M_repro_min_min: float = 0.15
-    M_repro_min_max: float = 0.35
+    # Reproduktions-mass-tröskel.
+    # Genetiskt bestämd vuxenmassa
+    # Brett intervall — evolution hittar r- och K-strateger
+    M_target_min: float = 0.10
+    M_target_max: float = 2.00
+
+    M_repro_min_min: float = 0.15   # var 0.20 — lite lägre för att hinna reproducera
+    M_repro_min_max: float = 0.45   # var 0.45
 
 def derive_pheno(traits: np.ndarray | None, R: PhenoRanges = PhenoRanges()) -> Phenotype:
     u_mature   = _sigmoid(_get_trait(traits, _T_A_MATURE))
@@ -163,7 +173,8 @@ def derive_pheno(traits: np.ndarray | None, R: PhenoRanges = PhenoRanges()) -> P
     # NEW
     u_childM   = _sigmoid(_get_trait(traits, _T_CHILD_M))
 
-    u_mrepro = _sigmoid(_get_trait(traits, _T_M_REPRO_MIN))
+    u_mrepro   = _sigmoid(_get_trait(traits, _T_M_REPRO_MIN))
+    u_Mtarget  = _sigmoid(_get_trait(traits, _T_M_TARGET))
     
     return Phenotype(
         A_mature=float(_lerp(R.A_mature_min, R.A_mature_max, u_mature)),
@@ -173,6 +184,7 @@ def derive_pheno(traits: np.ndarray | None, R: PhenoRanges = PhenoRanges()) -> P
     
         # NEW
         M_repro_min=float(_lerp(R.M_repro_min_min, R.M_repro_min_max, u_mrepro)),
+        M_target=float(_lerp(R.M_target_min, R.M_target_max, u_Mtarget)),
     
         metabolism_scale=float(_lerp(R.metabolism_min, R.metabolism_max, u_metab)),
         susceptibility=float(_lerp(R.susceptibility_min, R.susceptibility_max, u_susc)),
@@ -200,7 +212,8 @@ def phenotype_summary(p: Phenotype) -> dict[str, float]:
         "repro_rate": float(p.repro_rate),
         "E_repro_min": float(p.E_repro_min),
         "repro_cost": float(p.repro_cost),
-        "M_repro_min": float(p.M_repro_min),   # NEW
+        "M_repro_min": float(p.M_repro_min),
+        "M_target": float(p.M_target),
         "E_rep_min": float(p.E_rep_min),
 
         "metabolism_scale": float(p.metabolism_scale),

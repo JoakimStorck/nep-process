@@ -47,8 +47,8 @@ class WorldParams:
     # -------------------------
     # Plant biomass field B [kg per cell]
     # -------------------------
-    B_K: float = 1e-3          # kg/cell at carrying capacity (tune later)
-    B_regen: float = 0.025     # 1/time (logistic rate)
+    B_K: float = 5e-4          # kg/cell — sänkt från 1e-3, ger naturlig jämvikt ~77 agenter
+    B_regen: float = 0.020     # 1/time — sänkt från 0.025, långsammare regenerering
     B_diff: float = 0.006      # diffusion coefficient
     B_wither_base: float = 0.005  # 1/time
 

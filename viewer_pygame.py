@@ -47,7 +47,61 @@ def _is_alive(agent) -> bool:
     return bool(alive)
 
 
-# ---------- Viewer ----------
+def _hsv_to_rgb(h: float, s: float, v: float) -> Tuple[int, int, int]:
+    """HSV (0-1 each) → RGB tuple (0-255 each)."""
+    if s == 0.0:
+        c = int(v * 255)
+        return c, c, c
+    h6 = (h % 1.0) * 6.0
+    i = int(h6)
+    f = h6 - i
+    p = v * (1.0 - s)
+    q = v * (1.0 - s * f)
+    t = v * (1.0 - s * (1.0 - f))
+    r, g, b = [
+        (v, t, p), (q, v, p), (p, v, t),
+        (p, q, v), (t, p, v), (v, p, q),
+    ][i % 6]
+    return int(r * 255), int(g * 255), int(b * 255)
+
+
+def _agent_visuals(agent) -> Tuple[Tuple[int,int,int], int]:
+    """
+    Returnerar (rgb_color, radius_px) baserat på agentens fysiologi:
+      - Färg (hue): skada D  → grön (frisk/ung) till röd (döende)
+      - Ljusstyrka (value):  energireserv → mörk (svält) till ljus (välmådd)
+      - Storlek (radius):    massa M → liten (nyfödd) till stor (vuxen)
+    """
+    body = getattr(agent, "body", None)
+    if body is None:
+        return (200, 200, 200), 3
+
+    # --- Färg: hue från D (0=grön, 0.33→gul vid D=0.5, röd vid D=1) ---
+    D     = float(getattr(body, "D",   0.0))
+    D_max = float(getattr(getattr(agent, "AP", None), "D_max", 1.0) or 1.0)
+    d_norm = max(0.0, min(1.0, D / max(D_max, 1e-9)))
+    hue = 0.33 * (1.0 - d_norm)   # 0.33=grön → 0.0=röd
+
+    # --- Ljusstyrka: energireserv ---
+    try:
+        Et   = float(body.E_total())
+        Ecap = float(body.E_cap())
+        e_frac = max(0.0, min(1.0, Et / max(Ecap, 1e-9)))
+    except Exception:
+        e_frac = 0.5
+    value = 0.35 + 0.65 * e_frac   # 0.35 (svält) → 1.0 (full)
+
+    saturation = 0.85
+
+    rgb = _hsv_to_rgb(hue, saturation, value)
+
+    # --- Storlek: massa M (klammad till 2–8 px) ---
+    M    = float(getattr(body, "M", 0.2))
+    M0   = float(getattr(getattr(agent, "AP", None), "M0", 1.0) or 1.0)
+    m_n  = max(0.0, min(1.0, M / max(M0, 1e-9)))
+    radius = max(2, min(8, int(2 + 6 * m_n)))
+
+    return rgb, radius
 @dataclass
 class ViewerConfig:
     title: str = "NEP World"
@@ -57,6 +111,7 @@ class ViewerConfig:
 
     draw_agents: bool = True
     draw_heading: bool = True
+    draw_rays: bool = False        # visa sensing-strålar (tangent R)
     agent_radius_px: int = 3
     agent_heading_len_px: int = 6
 
@@ -112,6 +167,8 @@ class WorldViewer:
 
                 if ev.key == pygame.K_a:
                     self.cfg.draw_agents = not self.cfg.draw_agents
+                if ev.key == pygame.K_r:
+                    self.cfg.draw_rays = not self.cfg.draw_rays
                 if ev.key == pygame.K_h:
                     self.cfg.show_hud = not self.cfg.show_hud
 
@@ -255,6 +312,84 @@ class WorldViewer:
             surf = pygame.transform.scale(surf, (s * self.cfg.scale, s * self.cfg.scale))
         self._screen.blit(surf, (0, 0))
 
+    def _draw_rays(self, pop) -> None:
+        """
+        Visualiserar sensing-strålarna för varje levande agent.
+        Strålarna ritas som linjer från agenten ut till ray_len-avståndet.
+        Intensitet och färg kodas efter signalstyrka:
+          - Grön kanal: mat (B-fält)
+          - Cyan kanal: kadaver (C-fält)
+          - Svag grå: stråle utan signal (visar skanningsgeometrin)
+        """
+        pygame = self.pg
+        s     = int(pop.world.WP.size)
+        scale = int(self.cfg.scale)
+
+        # Ray-ytan ritas med alpha-blending på en separat yta
+        W_px = s * scale
+        ray_surf = pygame.Surface((W_px, W_px), pygame.SRCALPHA)
+
+        for a in pop.agents:
+            if not _is_alive(a):
+                continue
+
+            sensors = getattr(a, "sensors", None)
+            if sensors is None:
+                continue
+
+            n   = int(getattr(sensors, "_n", 0))
+            m   = int(getattr(sensors, "_m", 0))
+            if n <= 0 or m <= 0:
+                continue
+
+            accB = getattr(sensors, "_accB", None)
+            accC = getattr(sensors, "_accC", None)
+            ang  = getattr(sensors, "_ang_base", None)
+            d    = getattr(sensors, "_d",        None)
+            if accB is None or ang is None or d is None:
+                continue
+
+            ax, ay, heading = _get_xy_heading(a)
+            px = int(ax * scale) % W_px
+            py = int(ay * scale) % W_px
+
+            # Effektivt skanningsdjup: använd _sense_m_eff om tillgängligt
+            m_eff = int(getattr(a, "_sense_m_eff", 0)) or m
+            m_eff = min(m_eff, m)
+            if m_eff <= 0:
+                continue
+            ray_len_px = float(d[m_eff - 1]) * scale
+
+            for i in range(n):
+                angle = float(ang[i]) + heading
+                ex = px + ray_len_px * math.cos(angle)
+                ey = py + ray_len_px * math.sin(angle)
+
+                # Hoppa över strålar som wrappas runt toruset —
+                # de skapar visuella linjer tvärs över hela skärmen.
+                if ex < 0 or ex >= W_px or ey < 0 or ey >= W_px:
+                    continue
+
+                # Signalstyrka för denna stråle
+                sig_B = float(accB[i]) if accB is not None else 0.0
+                sig_C = float(accC[i]) if accC is not None else 0.0
+                sig   = max(sig_B, sig_C)
+
+                if sig < 0.02:
+                    color = (60, 80, 60, 25)
+                else:
+                    alpha = int(40 + 160 * min(sig, 1.0))
+                    if sig_B >= sig_C:
+                        g = int(80 + 175 * sig_B)
+                        color = (20, min(255, g), 30, alpha)
+                    else:
+                        gb = int(80 + 175 * sig_C)
+                        color = (20, min(255, gb), min(255, gb), alpha)
+
+                pygame.draw.line(ray_surf, color, (px, py), (int(ex), int(ey)), 1)
+
+        pop.world._viewer_ray_surf = ray_surf   # cache för blit
+
     def _draw_agents(self, pop) -> None:
         if not self.cfg.draw_agents:
             return
@@ -265,12 +400,18 @@ class WorldViewer:
             return
 
         scale = int(self.cfg.scale)
-        r = int(self.cfg.agent_radius_px)
-        hl = int(self.cfg.agent_heading_len_px)
+        hl    = int(self.cfg.agent_heading_len_px)
 
         agents = getattr(pop, "agents", None)
         if agents is None:
             return
+
+        # Rita strålar först (under agenterna)
+        if self.cfg.draw_rays:
+            self._draw_rays(pop)
+            ray_surf = getattr(getattr(pop, "world", None), "_viewer_ray_surf", None)
+            if ray_surf is not None:
+                self._screen.blit(ray_surf, (0, 0))
 
         for a in agents:
             if not _is_alive(a):
@@ -280,12 +421,17 @@ class WorldViewer:
             px = int(x * scale) % (s * scale)
             py = int(y * scale) % (s * scale)
 
-            pygame.draw.circle(self._screen, (255, 255, 255), (px, py), r)
+            color, radius = _agent_visuals(a)
 
-            if self.cfg.draw_heading:
-                ex = int(px + hl * math.cos(h))
-                ey = int(py + hl * math.sin(h))
-                pygame.draw.line(self._screen, (220, 220, 220), (px, py), (ex, ey), 1)
+            # Fyllda cirklar med biologisk färg
+            pygame.draw.circle(self._screen, color, (px, py), radius)
+
+            # Riktningslinje i samma färg men lite mörkare
+            if self.cfg.draw_heading and hl > 0:
+                dim = tuple(max(0, int(c * 0.6)) for c in color)
+                ex = int(px + (radius + hl * 0.5) * math.cos(h))
+                ey = int(py + (radius + hl * 0.5) * math.sin(h))
+                pygame.draw.line(self._screen, dim, (px, py), (ex, ey), 1)
 
     def _draw_hud(self, pop, births_total: int, deaths_total: int) -> None:
         if not self.cfg.show_hud:
@@ -334,10 +480,13 @@ class WorldViewer:
         else:
             line2 = "T(mean/min/max)=NA"
 
+        rays_str = "strålar:PÅ" if self.cfg.draw_rays else "strålar:av"
+        line3 = f"agents: storlek=massa  grön=frisk→röd=döende  ljus=energi  [{rays_str} R]"
+
         x0, y0 = 5, 5
         dy = 18
 
-        for i, text in enumerate([line1, line2]):
+        for i, text in enumerate([line1, line2, line3]):
             y = y0 + i * dy
             surf_shadow = self._font.render(text, True, (0, 0, 0))
             self._screen.blit(surf_shadow, (x0 + 1, y + 1))

@@ -21,3 +21,5 @@ Figure_*.png
 
 # --- OS / editor ---
 .DS_Store
+.repo-agent/
+.venv/
