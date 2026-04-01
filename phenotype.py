@@ -51,6 +51,9 @@ class Phenotype:
     # Kostpreferens: 0=herbivore, 0.5=generalist, 1=scavenger
     diet: float
 
+    # Predation: benägenhet att attackera levande byten (0=fredsam, 1=rovdjur)
+    predation: float
+
     # Placeholders / later
     risk_aversion: float
     sociability: float
@@ -87,6 +90,7 @@ _T_CHILD_M         = 18
 _T_M_REPRO_MIN     = 19
 _T_M_TARGET        = 20   # genetiskt bestämd vuxenmassa
 _T_DIET            = 21   # 0=ren herbivore, 1=ren scavenger
+_T_PREDATION       = 22   # benägenhet att attackera levande byten
 
 @dataclass(frozen=True)
 class PhenoRanges:
@@ -151,6 +155,10 @@ class PhenoRanges:
     diet_min: float = 0.0
     diet_max: float = 1.0
 
+    # Predation — brett för att ge evolution chans att hitta rovdjur
+    predation_min: float = 0.0
+    predation_max: float = 1.0
+
     M_repro_min_min: float = 0.15   # var 0.20 — lite lägre för att hinna reproducera
     M_repro_min_max: float = 0.45   # var 0.45
 
@@ -183,7 +191,8 @@ def derive_pheno(traits: np.ndarray | None, R: PhenoRanges = PhenoRanges()) -> P
 
     u_mrepro   = _sigmoid(_get_trait(traits, _T_M_REPRO_MIN))
     u_Mtarget  = _sigmoid(_get_trait(traits, _T_M_TARGET))
-    u_diet     = _sigmoid(_get_trait(traits, _T_DIET))
+    u_diet       = _sigmoid(_get_trait(traits, _T_DIET))
+    u_predation  = _sigmoid(_get_trait(traits, _T_PREDATION))
     
     return Phenotype(
         A_mature=float(_lerp(R.A_mature_min, R.A_mature_max, u_mature)),
@@ -213,6 +222,7 @@ def derive_pheno(traits: np.ndarray | None, R: PhenoRanges = PhenoRanges()) -> P
         cold_aversion=float(_lerp(R.cold_aversion_min, R.cold_aversion_max, u_cold)),
         sense_strength=float(u_sense),
         diet=float(_lerp(R.diet_min, R.diet_max, u_diet)),
+        predation=float(_lerp(R.predation_min, R.predation_max, u_predation)),
     )
 
 
@@ -225,6 +235,7 @@ def phenotype_summary(p: Phenotype) -> dict[str, float]:
         "M_repro_min": float(p.M_repro_min),
         "M_target": float(p.M_target),
         "diet": float(p.diet),
+        "predation": float(p.predation),
         "E_rep_min": float(p.E_rep_min),
 
         "metabolism_scale": float(p.metabolism_scale),

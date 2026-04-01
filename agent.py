@@ -258,6 +258,14 @@ class AgentParams:
     M_repro_soft: float = 0.03
     E_repro_soft: float = 0.05
 
+    # ------------------------
+    # Predation
+    # ------------------------
+    attack_range: float = 1.5        # rutnätsenheter — max avstånd för attack
+    attack_damage_per_s: float = 0.3 # D-inflöde per sekund på bytet vid attack
+    attack_energy_gain: float = 0.5  # fraktion av bytets förlorade energi som predatorn får
+    attack_cost_per_s: float = 0.05  # fraktion av predatorns Ecap per sekund som attacken kostar
+
     birth_E0: float = 0.0
     birth_k_E_per_M: float = 7.0e4
     birth_energy_eff: float = 0.70
@@ -1354,7 +1362,7 @@ class Agent:
 
     id: int = field(default_factory=_new_agent_id)
 
-    OBS_DIM: ClassVar[int] = 21
+    OBS_DIM: ClassVar[int] = 23   # +2: predator_bearing (cos/sin), predator_dist
     OUT_DIM: ClassVar[int] = 5
     
     body: Body = field(init=False)
@@ -1385,6 +1393,7 @@ class Agent:
     _last_detect_j: int = field(init=False, default=-1)  # avståndssteg för senaste träff (-1=ingen)
     _sense_m_eff: int = field(init=False, default=0)     # effektivt stråldjup nästa skanning
     _cached_agent_hit: tuple = field(init=False)         # (N, Nu, Nd) från senaste see_agent_first_hit
+    _cached_predator_hit: tuple = field(init=False)      # (pred_bearing, pred_dist) — närmaste hotande predator
 
     def __post_init__(self) -> None:
         self.AP = replace(self.AP)
@@ -1411,6 +1420,7 @@ class Agent:
         self._last_detect_j = -1
         self._sense_m_eff = 0
         self._cached_agent_hit = (0.0, 0.0, 0.0)
+        self._cached_predator_hit = (0.0, 0.0)
 
     def _init_body_state_from_AP(self) -> None:
         self.body.M = max(0.0, float(self.AP.M0))
@@ -1441,7 +1451,8 @@ class Agent:
     def phenotype_summary(self) -> dict:
         return phenotype_summary(self.pheno)
 
-    def _build_obs(self, B0: float, C0: float, rays_B, rays_C) -> np.ndarray:
+    def _build_obs(self, B0: float, C0: float, rays_B, rays_C,
+                   pred_bearing: float = 0.0, pred_dist: float = 0.0) -> np.ndarray:
         rb = np.asarray(rays_B, dtype=np.float32)
         rc = np.asarray(rays_C, dtype=np.float32)
 
@@ -1475,7 +1486,8 @@ class Agent:
             [
                 obs,
                 self.obs_trace,
-                np.array([math.cos(aB), math.sin(aB), math.cos(aC), math.sin(aC), D], dtype=np.float32),
+                np.array([math.cos(aB), math.sin(aB), math.cos(aC), math.sin(aC), D,
+                          float(pred_bearing), float(pred_dist)], dtype=np.float32),
             ]
         )
         return x
@@ -1519,7 +1531,6 @@ class Agent:
         (B0, C0), rays_B, rays_C = self.sensors.sense(
             world, self.x, self.y, self.heading, rng=rng, m_eff=m_eff,
         )
-        x_in = self._build_obs(B0, C0, rays_B, rays_C)
 
         # Kontrollera om något detekterades (mat i rays eller lokalt)
         thresh = float(self.AP.sense_alert_thresh)
@@ -1538,6 +1549,13 @@ class Agent:
 
         # Cacha för apply_outputs — eliminerar dubbelanropet där
         self._cached_agent_hit = (N_ag, Nu_ag, Nd_ag)
+
+        # Predator-proxy: närmaste agent-riktning ger nätverket flykt-signal
+        pred_bearing = float(Nu_ag) * 2.0 * math.pi if N_ag > 0.5 else 0.0
+        pred_dist    = float(Nd_ag) if N_ag > 0.5 else 1.0
+
+        x_in = self._build_obs(B0, C0, rays_B, rays_C,
+                               pred_bearing=pred_bearing, pred_dist=pred_dist)
 
         if food_near or agent_near:
             # ALERT: hög frekvens, tight djup (lite förbi senaste träffen)
@@ -1665,50 +1683,74 @@ class Agent:
         activity = 0.03 + 0.45 * speed_n + 0.10 * ate
     
         # ---------------------------------------------------------
-        # 10) Social interaktion + parningsattraktion
+        # 10) Reflexiva drivkrafter: parning, predation, flykt, matsökning
         # ---------------------------------------------------------
-        soc   = float(getattr(self.pheno, "sociability", 0.0))
+        soc  = float(getattr(self.pheno, "sociability", 0.0))
+        pred = float(getattr(self.pheno, "predation",   0.0))
         N, Nu, Nd = self._cached_agent_hit
         in_mating_mode = self.ready_to_reproduce()
 
         if in_mating_mode and N > 0.5:
-            # PARNINGSATTRAKTION: åsidosätter nätverkets output helt.
-            # En redo individ som ser en annan agent styr rakt mot dem
-            # med full kraft — ingen jitter, ingen explore_drive.
-            # Det biologiska motivet: parrningsdrift är starkare än matdrift.
-            a_hit   = self.heading + (2.0 * math.pi * float(Nu))
-            errN    = self._signed_angle(a_hit - self.heading)
-            biasN   = clamp(errN / math.pi, -1.0, 1.0)
+            # A. PARNINGSATTRAKTION — åsidosätter allt
+            a_hit = self.heading + (2.0 * math.pi * float(Nu))
+            errN  = self._signed_angle(a_hit - self.heading)
+            biasN = clamp(errN / math.pi, -1.0, 1.0)
+            if float(Nd) > 0.05:
+                turn          = clamp(0.95 * biasN, -1.0, 1.0)
+                thrust        = 1.0
+                explore_drive = 0.0
 
-            Nd_f    = float(Nd)
+        elif pred > 0.3 and N > 0.5:
+            # B. PREDATIONSATTRAKTION — rovdjur jagar närmaste agent
+            a_hit = self.heading + (2.0 * math.pi * float(Nu))
+            errN  = self._signed_angle(a_hit - self.heading)
+            biasN = clamp(errN / math.pi, -1.0, 1.0)
+            Nd_f  = float(Nd)
             if Nd_f > 0.05:
-                # Inte i direktkontakt: sväng hårt mot grannen, full gas
-                MATE_TURN = 0.95
-                turn          = clamp(MATE_TURN * biasN, -1.0, 1.0)
-                thrust        = 1.0          # full fart
-                explore_drive = 0.0          # noll jitter
-            # Vid Nd < 0.05: de är i princip på varandra — parning sker
-            # via population._try_mating(), rör sig inte mer
+                hs            = clamp(pred, 0.0, 1.0)
+                turn          = clamp(turn + 0.90 * hs * biasN, -1.0, 1.0)
+                thrust        = clamp(thrust + 0.5 * hs, 0.0, 1.0)
+                explore_drive = explore_drive * (1.0 - 0.7 * hs)
 
         elif N > 0.5:
-            # Normal social interaktion (ej parningsläge)
-            a_hit  = self.heading + (2.0 * math.pi * float(Nu))
-            errN   = self._signed_angle(a_hit - self.heading)
-            biasN  = clamp(errN / math.pi, -1.0, 1.0)
-            Nd_f   = float(Nd)
-
+            # C. SOCIAL INTERAKTION (repulsion nära, soc-styrd på avstånd)
+            a_hit = self.heading + (2.0 * math.pi * float(Nu))
+            errN  = self._signed_angle(a_hit - self.heading)
+            biasN = clamp(errN / math.pi, -1.0, 1.0)
+            Nd_f  = float(Nd)
             REP_ZONE = 0.35
             if Nd_f < REP_ZONE:
-                rep_strength  = 1.0 - (Nd_f / REP_ZONE)
-                turn          = clamp(turn - 0.70 * rep_strength * biasN, -1.0, 1.0)
-                explore_drive = explore_drive * (1.0 - 0.3 * rep_strength)
+                rs            = 1.0 - (Nd_f / REP_ZONE)
+                turn          = clamp(turn - 0.70 * rs * biasN, -1.0, 1.0)
+                explore_drive = explore_drive * (1.0 - 0.3 * rs)
             else:
                 soc_bias = 2.0 * soc - 1.0
                 if abs(soc_bias) > 1e-6:
                     wdist         = clamp(1.0 - Nd_f, 0.0, 1.0)
                     turn          = clamp(turn + 0.70 * soc_bias * wdist * biasN, -1.0, 1.0)
                     explore_drive = explore_drive * (1.0 - 0.60 * abs(soc_bias) * wdist)
-    
+
+        # D. MATSÖKNINGSREFLEX — sväng mot starkaste matråle när hungrig
+        hunger_now = float(self.body.hunger())
+        if hunger_now > 0.4:
+            sensors = getattr(self, "sensors", None)
+            if sensors is not None:
+                accB = getattr(sensors, "_accB", None)
+                accC = getattr(sensors, "_accC", None)
+                ang  = getattr(sensors, "_ang_base", None)
+                if accB is not None and ang is not None and len(accB) > 0:
+                    _diet  = float(getattr(self.pheno, "diet", 0.5))
+                    combo  = accB * (1.0 - _diet) + accC * _diet
+                    i_best = int(np.argmax(combo))
+                    sig    = float(combo[i_best])
+                    if sig > 0.05:
+                        food_angle = float(ang[i_best]) + float(self.heading)
+                        err_food   = self._signed_angle(food_angle - self.heading)
+                        bias_food  = clamp(err_food / math.pi, -1.0, 1.0)
+                        fd         = clamp(hunger_now - 0.4, 0.0, 0.6) * sig
+                        turn       = clamp(turn + 0.60 * fd * bias_food, -1.0, 1.0)
+                        thrust     = clamp(thrust + 0.3 * fd, 0.0, 1.0)
+
         # ---------------------------------------------------------
         # 11) Body dynamics (includes gestation build model: "Väg 2")
         # ---------------------------------------------------------

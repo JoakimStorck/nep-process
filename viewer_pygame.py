@@ -436,6 +436,21 @@ class WorldViewer:
                                    (ring_r+1, ring_r+1), ring_r, 2)
                 self._screen.blit(ring_surf, (px - ring_r - 1, py - ring_r - 1))
 
+            # --- Predation: röd yttre ring proportionell mot predation-trait ---
+            pred_trait = 0.0
+            try:
+                pred_trait = float(getattr(getattr(a, "pheno", None), "predation", 0.0))
+            except Exception:
+                pass
+            if pred_trait > 0.15:
+                pred_r     = radius + 1
+                pred_alpha = int(60 + 180 * pred_trait)
+                pred_color = (220, 30, 30, pred_alpha)
+                pred_surf  = pygame.Surface((pred_r*2+2, pred_r*2+2), pygame.SRCALPHA)
+                pygame.draw.circle(pred_surf, pred_color,
+                                   (pred_r+1, pred_r+1), pred_r, max(1, int(pred_trait*3)))
+                self._screen.blit(pred_surf, (px - pred_r - 1, py - pred_r - 1))
+
             # --- Graviditet: liten inre prick för fostret ---
             body = getattr(a, "body", None)
             if body is not None and getattr(body, "gestating", False):

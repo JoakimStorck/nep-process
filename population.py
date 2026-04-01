@@ -58,7 +58,7 @@ class PopParams:
     init_pop: int = 12
     max_pop: int = 500   # höjt — naturlig matbrist sätter taket nu, inte detta
 
-    n_traits: int = 22   # DIET (index 21) tillagt
+    n_traits: int = 23   # PREDATION (index 22) tillagt
 
     spawn_jitter_r: float = 1.5
 
@@ -598,6 +598,52 @@ class Population:
             for i, a in enumerate(alive):
                 B0, C0 = BC_list[i]
                 _ = a.apply_outputs(self.world, ctx, Y[i], B0, C0)
+
+        # (C2) Predation: rovdjur attackerar levande byten inom attack_range
+        attack_range = float(self.AP.attack_range)
+        dmg_per_s    = float(self.AP.attack_damage_per_s)
+        E_gain_frac  = float(self.AP.attack_energy_gain)
+        cost_frac    = float(self.AP.attack_cost_per_s)
+        size_f       = float(self.WP.size)
+        dt_val       = float(self.WP.dt)
+
+        alive_now = [a for a in self.agents if a.body.alive]
+        for predator in alive_now:
+            pred_trait = float(getattr(predator.pheno, "predation", 0.0))
+            if pred_trait < 0.2 or not predator.body.alive:
+                continue
+
+            # Betala attackkostnad
+            predator.body.take_energy(
+                cost_frac * pred_trait * float(predator.body.E_cap()) * dt_val
+            )
+
+            px, py = float(predator.x), float(predator.y)
+            for prey in alive_now:
+                if prey is predator or not prey.body.alive:
+                    continue
+                dx = min(abs(float(prey.x) - px), size_f - abs(float(prey.x) - px))
+                dy = min(abs(float(prey.y) - py), size_f - abs(float(prey.y) - py))
+                if math.sqrt(dx*dx + dy*dy) > attack_range:
+                    continue
+
+                # Skada proportionell mot predatorns massa och predation-trait
+                dD = dmg_per_s * pred_trait * (float(predator.body.M) ** 0.5) * dt_val
+                prey.body.D = min(float(prey.body.D) + dD, float(prey.body.AP.D_max))
+
+                # Predatorn stjäl energi från bytet
+                E_stolen = min(
+                    E_gain_frac * dD * float(prey.body.E_cap()),
+                    float(prey.body.E_total()),
+                )
+                if E_stolen > 0.0:
+                    prey.body.take_energy(E_stolen)
+                    room = max(0.0, float(predator.body.E_cap()) - float(predator.body.E_total()))
+                    predator.body.E_fast += min(E_stolen, room) / 0.6
+
+                if not prey.body.alive:
+                    break
+
     
         # (D) deaths -> carcass (kg) + release bank slot + emit death
         deaths = 0
