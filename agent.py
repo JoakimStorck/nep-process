@@ -637,7 +637,18 @@ class Body:
         m_bio = max(0.0, float(food_bio_kg))
         m_car = max(0.0, float(food_carcass_kg))
 
-        E_in = m_bio * _E_bio + m_car * _E_carcass
+        # Kostpreferens (diet-trait): 0=herbivore, 1=scavenger.
+        # herb_eff och scav_eff är negativt korrelerade — generalisten (0.5)
+        # är sämre på båda än en specialist.
+        # herb_eff(d) = (1-d)^0.7,  scav_eff(d) = d^0.7
+        # Vid d=0: herb=1.00, scav=0.00
+        # Vid d=0.5: herb=0.62, scav=0.62  (generalisten förlorar ~38%)
+        # Vid d=1: herb=0.00, scav=1.00
+        _diet     = float(getattr(pheno, "diet", 0.5))
+        herb_eff  = (1.0 - _diet) ** 0.7
+        scav_eff  = _diet ** 0.7
+
+        E_in = m_bio * _E_bio * herb_eff + m_car * _E_carcass * scav_eff
 
         Et0 = float(self.E_total())
         Ecap0 = _E_cap_per_M * max(1e-9, float(self.M))

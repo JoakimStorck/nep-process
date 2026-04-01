@@ -58,7 +58,7 @@ class PopParams:
     init_pop: int = 12
     max_pop: int = 500   # höjt — naturlig matbrist sätter taket nu, inte detta
 
-    n_traits: int = 21   # M_TARGET (index 20) tillagt
+    n_traits: int = 22   # DIET (index 21) tillagt
 
     spawn_jitter_r: float = 1.5
 

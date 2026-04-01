@@ -315,18 +315,14 @@ class WorldViewer:
     def _draw_rays(self, pop) -> None:
         """
         Visualiserar sensing-strålarna för varje levande agent.
-        Strålarna ritas som linjer från agenten ut till ray_len-avståndet.
-        Intensitet och färg kodas efter signalstyrka:
-          - Grön kanal: mat (B-fält)
-          - Cyan kanal: kadaver (C-fält)
-          - Svag grå: stråle utan signal (visar skanningsgeometrin)
+        Strållängden per stråle reflekterar ellipsmodellen via sensors._ray_m.
+        Grönt = mat (B), cyan = kadaver (C), svag grå = ingen signal.
         """
         pygame = self.pg
         s     = int(pop.world.WP.size)
         scale = int(self.cfg.scale)
+        W_px  = s * scale
 
-        # Ray-ytan ritas med alpha-blending på en separat yta
-        W_px = s * scale
         ray_surf = pygame.Surface((W_px, W_px), pygame.SRCALPHA)
 
         for a in pop.agents:
@@ -337,40 +333,38 @@ class WorldViewer:
             if sensors is None:
                 continue
 
-            n   = int(getattr(sensors, "_n", 0))
-            m   = int(getattr(sensors, "_m", 0))
+            n    = int(getattr(sensors, "_n", 0))
+            m    = int(getattr(sensors, "_m", 0))
             if n <= 0 or m <= 0:
                 continue
 
-            accB = getattr(sensors, "_accB", None)
-            accC = getattr(sensors, "_accC", None)
-            ang  = getattr(sensors, "_ang_base", None)
-            d    = getattr(sensors, "_d",        None)
-            if accB is None or ang is None or d is None:
+            accB  = getattr(sensors, "_accB",    None)
+            accC  = getattr(sensors, "_accC",    None)
+            ang   = getattr(sensors, "_ang_base", None)
+            d     = getattr(sensors, "_d",        None)
+            ray_m = getattr(sensors, "_ray_m",    None)
+            if ang is None or d is None:
                 continue
 
             ax, ay, heading = _get_xy_heading(a)
             px = int(ax * scale) % W_px
             py = int(ay * scale) % W_px
 
-            # Effektivt skanningsdjup: använd _sense_m_eff om tillgängligt
-            m_eff = int(getattr(a, "_sense_m_eff", 0)) or m
-            m_eff = min(m_eff, m)
-            if m_eff <= 0:
-                continue
-            ray_len_px = float(d[m_eff - 1]) * scale
-
             for i in range(n):
+                # Per-stråle räckvidd från ellipsmodellen
+                if ray_m is not None and i < len(ray_m):
+                    depth = max(1, min(int(ray_m[i]), m))
+                else:
+                    depth = m
+                ray_len_px = float(d[depth - 1]) * scale
+
                 angle = float(ang[i]) + heading
                 ex = px + ray_len_px * math.cos(angle)
                 ey = py + ray_len_px * math.sin(angle)
 
-                # Hoppa över strålar som wrappas runt toruset —
-                # de skapar visuella linjer tvärs över hela skärmen.
                 if ex < 0 or ex >= W_px or ey < 0 or ey >= W_px:
                     continue
 
-                # Signalstyrka för denna stråle
                 sig_B = float(accB[i]) if accB is not None else 0.0
                 sig_C = float(accC[i]) if accC is not None else 0.0
                 sig   = max(sig_B, sig_C)
@@ -388,7 +382,7 @@ class WorldViewer:
 
                 pygame.draw.line(ray_surf, color, (px, py), (int(ex), int(ey)), 1)
 
-        pop.world._viewer_ray_surf = ray_surf   # cache för blit
+        pop.world._viewer_ray_surf = ray_surf
 
     def _draw_agents(self, pop) -> None:
         if not self.cfg.draw_agents:

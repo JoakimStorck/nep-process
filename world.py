@@ -79,7 +79,7 @@ class WorldParams:
     # Carcass field C [kg per cell]
     # -------------------------
     C_K: float = 1e-3        # kg/cell "practical cap" for numerics (optional)
-    C_decay: float = 0.005   # 1/time
+    C_decay: float = 0.03    # var 0.005 — halveringstid ~23s, försvinner om ingen asätare är nära
     C_diff: float = 0.00     # diffusion coefficient
 
     # --- Perception scaling ---
