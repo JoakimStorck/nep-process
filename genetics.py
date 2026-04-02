@@ -119,6 +119,43 @@ def recombine(
     return child
 
 
+def genetic_compatibility(g1: MLPGenome, g2: MLPGenome, sigma: float = 2.0) -> float:
+    """
+    Beräknar parningssannolikhet (0–1) baserad på genetiskt avstånd i trait-rymden.
+
+    Modell: Gaussisk avtagning med normaliserat kvadratiskt avstånd.
+
+        P = exp( −d²_norm / (2·σ²) )
+
+    där d²_norm = (1/n) · Σ(t1_i − t2_i)² är medel-kvadratavståndet per trait.
+
+    Traits klipps till [−2, 2] via MutationConfig — maximalt avstånd per trait = 4,
+    d²_norm_max ≈ 4.0.
+
+    Intuition för σ-val (vid random-initialiserade traits, ej ännu divergerade):
+        σ = 3.0 → permissiv  — P(max_dist) ≈ 0.80   (nästan alla kan para sig)
+        σ = 2.0 → balanserad — P(max_dist) ≈ 0.61
+        σ = 1.0 → moderat    — P(max_dist) ≈ 0.14   (tydlig preferens för likhet)
+        σ = 0.5 → strikt     — P(max_dist) ≈ 0.0003 (hård artgräns)
+
+    Rekommendation: starta med σ=2.0 tills populationen stabiliseras,
+    sänk sedan gradvis mot 0.5–1.0 för att driva artbildning.
+
+    Returnerar 1.0 om traits saknas (permissivt fallback).
+    """
+    t1, t2 = g1.traits, g2.traits
+    if t1 is None or t2 is None:
+        return 1.0
+    n = min(int(t1.shape[0]), int(t2.shape[0]))
+    if n == 0:
+        return 1.0
+
+    diff = t1[:n].astype(np.float64) - t2[:n].astype(np.float64)
+    d_sq_norm = float(np.dot(diff, diff)) / n          # normaliserat per trait
+    sigma_sq = max(float(sigma), 1e-9) ** 2
+    return float(np.exp(-d_sq_norm / (2.0 * sigma_sq)))
+
+
 def _mutate_weights(g: MLPGenome, rng: np.random.Generator, sigma: float, p: float) -> None:
     assert g.weights is not None and g.biases is not None
     for i in range(len(g.weights)):

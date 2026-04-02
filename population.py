@@ -10,7 +10,7 @@ import numpy as np
 from world import World, WorldParams
 from mlp import MLPGenome
 from agent import Agent, AgentParams, torus_wrap
-from genetics import child_genome_from_parent, recombine, MutationConfig
+from genetics import child_genome_from_parent, recombine, MutationConfig, genetic_compatibility
 
 # new logging
 from simlog.events import Event, EventName
@@ -73,6 +73,15 @@ class PopParams:
     warm_cd_max_s: float = 8.0
 
     mating_radius: float = 1.5   # direktkontakt — dragkraften tar dem dit
+
+    # --- Genetisk kompatibilitet (reproduktiv isolering) ---
+    # Parningssannolikhet P = exp(-d2_norm / 2*sigma2) dar d ar normaliserat
+    # avstand i trait-rymden. Se genetics.genetic_compatibility() for detaljer.
+    #
+    # Rekommenderat flode: borja med compat_sigma=2.0 (permissivt) tills
+    # populationen ar stabil, sank sedan mot 0.5-1.0 for artbildning.
+    compat_sigma: float = 2.0    # bredden pa kompatibilitetsklockan
+    compat_enabled: bool = True  # False = alla kan para sig med alla (debug)
 
 
 @dataclass
@@ -447,7 +456,16 @@ class Population:
         if best is None:
             return   # ingen lämplig partner hittad
 
-        # Den tyngste bär fostret — mer resurser → bättre förälder
+        # Genetisk kompatibilitet: P(parning lyckas) = exp(-d2_norm / 2*sigma2)
+        # Ger reproduktiv isolering — grunden för artbildning.
+        if self.PP.compat_enabled:
+            compat = genetic_compatibility(
+                agent.genome, best.genome, sigma=float(self.PP.compat_sigma)
+            )
+            if self.rng.random() > compat:
+                return  # genetiskt inkompatibla denna omgang — forsok igen senare
+
+        # Den tyngste bar fostret — mer resurser -> battre foralder
         if float(best.body.M) > float(agent.body.M):
             bearer, partner = best, agent
         else:
@@ -613,12 +631,11 @@ class Population:
             if pred_trait < 0.2 or not predator.body.alive:
                 continue
 
-            # Betala attackkostnad
-            predator.body.take_energy(
-                cost_frac * pred_trait * float(predator.body.E_cap()) * dt_val
-            )
-
+            # Attackkostnaden betalas ENDAST vid faktiskt angrepp (bytet inom räckhåll).
+            # Tidigare betalades den alltid, oavsett om byte fanns i närheten —
+            # det tömde energin på ~20s för agenter med hög predation-trait.
             px, py = float(predator.x), float(predator.y)
+            attacked_this_step = False
             for prey in alive_now:
                 if prey is predator or not prey.body.alive:
                     continue
@@ -626,6 +643,13 @@ class Population:
                 dy = min(abs(float(prey.y) - py), size_f - abs(float(prey.y) - py))
                 if math.sqrt(dx*dx + dy*dy) > attack_range:
                     continue
+
+                # Betala attackkostnad — en gång per steg oavsett antal byten
+                if not attacked_this_step:
+                    predator.body.take_energy(
+                        cost_frac * pred_trait * float(predator.body.E_cap()) * dt_val
+                    )
+                    attacked_this_step = True
 
                 # Skada proportionell mot predatorns massa och predation-trait
                 dD = dmg_per_s * pred_trait * (float(predator.body.M) ** 0.5) * dt_val

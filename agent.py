@@ -207,9 +207,7 @@ class AgentParams:
     # k_age0=0 → ingen konstant bakgrund (var 0.200 — dödade unga för snabbt).
     # k_age1=0.001 → dD/dt = 0.001×age_s: vid 250s ger 0.25 D/s → döden.
     k_age0: float = 0.000
-    k_age1: float = 0.001      # D/s per sekund ålder (var 0.0)
-    k_ageD: float = 0.4
-    k_age1: float = 0.0
+    k_age1: float = 0.001      # D/s per sekund ålder — dD/dt = 0.001×age_s → vid 250s ger 0.25 D/s → biologisk åldersdöd
     k_ageD: float = 0.4
 
     # Skadehastighet — grundterm i dD_eff.
