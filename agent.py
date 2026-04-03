@@ -156,7 +156,13 @@ class AgentParams:
     k_basal: float = 30.0  # [W]
 
     # Activity-related metabolic costs (non-locomotor)
-    compute_cost: float = 5.0  # [W/kg]
+    compute_cost: float = 5.0  # [W/kg] — skalas upp proportionellt mot n_params vid agentens start
+
+    # Referens-nätverksstorlek för compute_cost-skalning.
+    # Baseline = 23-24-24-5 = 1301 parametrar.
+    # En agent med ett bredare/djupare nätverk betalar mer metabolt per sekund.
+    # compute_cost_eff = compute_cost × (n_params / compute_cost_ref_params)
+    compute_cost_ref_params: int = 1301
 
     # ------------------------
     # Thermoregulation (simple)
@@ -207,7 +213,9 @@ class AgentParams:
     # k_age0=0 → ingen konstant bakgrund (var 0.200 — dödade unga för snabbt).
     # k_age1=0.001 → dD/dt = 0.001×age_s: vid 250s ger 0.25 D/s → döden.
     k_age0: float = 0.000
-    k_age1: float = 0.001      # D/s per sekund ålder — dD/dt = 0.001×age_s → vid 250s ger 0.25 D/s → biologisk åldersdöd
+    k_age1: float = 0.0002     # var 0.001 → sänkt: 0.001 gav 0.25 D/s vid ålder 250s vilket är för aggressivt.
+                                # 0.0002 → ren åldringsdöd vid t≈100s, kombinerat med aktivitetsskada ger
+                                # realistisk livslängd 300-500s och ett bredare reproduktivt fönster.
     k_ageD: float = 0.4
 
     # Skadehastighet — grundterm i dD_eff.
@@ -215,7 +223,7 @@ class AgentParams:
     # men gammal agent (W ≈ 12-15) får D att stiga mot 1.0 → biologisk åldersdöd.
     # Analytisk kalibrering (normal aktivitet, repair_capacity = 0.055, wear_a0 = 0.04):
     #   dD_eff ≈ 0.00130/steg  →  kritisk W ≈ 12  →  naturlig livslängd ≈ 300s
-    k_damage: float = 0.15     # var hardkodad 0.02 i Body.step
+    k_damage: float = 0.06     # var 0.15 → sänkt: grundskadehastigheten var för dominant mot reparation
 
     # ------------------------
     # Repair / pain homeostasis
@@ -228,7 +236,7 @@ class AgentParams:
 
     # repair (energy -> D reduction)
     repair_gain: float = 1.0
-    repair_E_per_D: float = 0.02
+    repair_E_per_D: float = 0.005  # var 0.02 → sänkt: billigare reparation gör det evolutionärt lönsamt
     repair_W_decay: float = 0.15   # var 0.3 — mjukare degradering av reparation med ålder
     repair_eta0: float = 1.0
     repair_eta_W: float = 0.1     # var 0.2
@@ -244,7 +252,7 @@ class AgentParams:
     # Mål: W-systemet ska verka på MÅNGA generationers tidsskala.
     #   wear_a0=0.004 → W=0.4 vid t=100s, W=4 vid t=1000s (10 generationer)
     #   repair_W_decay=0.15 → mjukare degradering (var 0.3)
-    wear_a0: float = 0.035     # D börjar stiga vid t≈200s, död ~250s
+    wear_a0: float = 0.008     # var 0.035 → sänkt: W=2.8 vid t=350s istf 12.25, reparation degraderas långsammare
     wear_aE: float = 0.0
     wear_aR: float = 0.0
     wear_aD: float = 0.002
@@ -344,15 +352,17 @@ class Body:
     gest_M_target: float = 0.0   # target fetal mass
     
     def E_total(self) -> float:
-        return 0.6 * float(self.E_fast) + 0.4 * float(self.E_slow)
+        return 0.6 * self.E_fast + 0.4 * self.E_slow
 
     def E_cap(self) -> float:
-        return float(self.AP.E_cap_per_M) * max(1e-9, float(self.M))
+        M = self.M
+        return self.AP.E_cap_per_M * (M if M > 1e-9 else 1e-9)
 
     def hunger(self) -> float:
-        Et = float(self.E_total())
-        Ecap = float(self.E_cap())
-        return clamp((Ecap - Et) / max(Ecap, 1e-9), 0.0, 1.0)
+        Et   = self.E_total()
+        Ecap = self.E_cap()
+        h    = (Ecap - Et) / (Ecap if Ecap > 1e-9 else 1e-9)
+        return 0.0 if h < 0.0 else 1.0 if h > 1.0 else h
 
     def weakness(self) -> float:
         m = float(self.M)
@@ -427,6 +437,7 @@ class Body:
         return float(self.AP.rep_weak_min + (1.0 - float(self.AP.rep_weak_min)) * w)
 
     def _finite(self, x: float) -> bool:
+        # Behålls för bakåtkompatibilitet men används ej internt längre.
         return math.isfinite(float(x))
 
     def _guard_snapshot(self, where: str) -> dict:
@@ -547,14 +558,14 @@ class Body:
         WS = 0.4
     
         # ---------------------------------------------------------
-        # (0) Numerical guards (pre)
+        # (0) Numerical guards (pre) — inlineat för att undvika metod-overhead
         # ---------------------------------------------------------
         if not (
-            self._finite(self.E_fast)
-            and self._finite(self.E_slow)
-            and self._finite(self.M)
-            and self._finite(self.D)
-            and self._finite(self.Fg)
+            math.isfinite(self.E_fast)
+            and math.isfinite(self.E_slow)
+            and math.isfinite(self.M)
+            and math.isfinite(self.D)
+            and math.isfinite(self.Fg)
         ):
             self.guard_steps += 1
             self.guard_killed += 1
@@ -563,12 +574,12 @@ class Body:
             return
     
         if not (
-            self._finite(speed)
-            and self._finite(activity)
-            and self._finite(food_bio_kg)
-            and self._finite(food_carcass_kg)
-            and self._finite(extra_drain)
-            and self._finite(age_s)
+            math.isfinite(speed)
+            and math.isfinite(activity)
+            and math.isfinite(food_bio_kg)
+            and math.isfinite(food_carcass_kg)
+            and math.isfinite(extra_drain)
+            and math.isfinite(age_s)
         ):
             self.guard_steps += 1
             self.guard_killed += 1
@@ -946,11 +957,11 @@ class Body:
             self.guard_last = self._guard_snapshot("post_clamp")
     
         if not (
-            self._finite(self.E_fast)
-            and self._finite(self.E_slow)
-            and self._finite(self.M)
-            and self._finite(self.D)
-            and self._finite(self.Fg)
+            math.isfinite(self.E_fast)
+            and math.isfinite(self.E_slow)
+            and math.isfinite(self.M)
+            and math.isfinite(self.D)
+            and math.isfinite(self.Fg)
         ):
             self.guard_steps += 1
             self.guard_killed += 1
@@ -1408,13 +1419,26 @@ class Agent:
         self.sense_level = _sense_level(float(self.pheno.sense_strength))
         _apply_sense_to_AP(self.AP, self.sense_level)
 
+        # --- Rekurrent minnestillstånd ---
+        # h bärs av agenten mellan stegen; nollställs vid födseln.
+        # Nätverkets input = concat(obs, h), output = concat(y, h_raw).
+        _h_dim = max(0, int(getattr(self.genome, "h_dim", 0)))
+        self._h: np.ndarray = np.zeros((_h_dim,), dtype=np.float32)
+
+        # --- compute_cost skalas med nätverksstorlek ---
+        # Agenter med bredare/djupare nätverk betalar mer metabolt per sekund.
+        _n_params = int(self.genome.n_params())
+        _ref_params = max(1, int(self.AP.compute_cost_ref_params))
+        if _n_params > 0 and _ref_params > 0:
+            self.AP.compute_cost = float(self.AP.compute_cost) * (_n_params / _ref_params)
+
         self._init_body_state_from_AP()
 
         # Sense-cache: börja med noll-vektor; triggar full skanning vid första steget.
         self._sense_cd = 0
         self._cached_B0 = 0.0
         self._cached_C0 = 0.0
-        self._cached_x_in = np.zeros((self.OBS_DIM,), dtype=np.float32)
+        self._cached_x_in = np.zeros((self.OBS_DIM + _h_dim,), dtype=np.float32)
         self._last_detect_j = -1
         self._sense_m_eff = 0
         self._cached_agent_hit = (0.0, 0.0, 0.0)
@@ -1516,6 +1540,11 @@ class Agent:
             self.obs_trace = (1.0 - a) * self.obs_trace + a * self._cached_x_in[:8]
             self._cached_x_in[8:16] = self.obs_trace
 
+            # h uppdateras alltid — cachat obs + färskt h → korrekt nätverksinput
+            _h_dim = int(self._h.shape[0])
+            if _h_dim > 0:
+                self._cached_x_in[self.OBS_DIM:] = self._h
+
             return self._cached_x_in.copy(), self._cached_B0, self._cached_C0
 
         # --- Full sensing med adaptivt djup ---
@@ -1568,6 +1597,14 @@ class Agent:
             self._sense_m_eff = m_full
             self._sense_cd = max(0, int(self.AP.sense_idle_steps) - 1)
 
+        # Konkatenera rekurrent h till observationsvektorn
+        _h_dim = int(self._h.shape[0])
+        if _h_dim > 0:
+            x_full = np.empty(self.OBS_DIM + _h_dim, dtype=np.float32)
+            x_full[:self.OBS_DIM] = x_in
+            x_full[self.OBS_DIM:] = self._h
+            x_in = x_full
+
         # Uppdatera cache
         self._cached_B0 = float(B0)
         self._cached_C0 = float(C0)
@@ -1591,7 +1628,18 @@ class Agent:
         # --- bookkeeping (agent-level clocks) ---
         self.age_s += dt
         self.repro_cd_s = max(0.0, float(self.repro_cd_s) - dt)
-    
+
+        # ---------------------------------------------------------
+        # 0) Splitta policy-output i aktioner (y) och nytt minnestillstånd (h)
+        # Nätverket producerar concat(y, h_raw); h_new = tanh(h_raw) ∈ (−1,+1).
+        # ---------------------------------------------------------
+        _h_dim = int(self._h.shape[0])
+        _out_dim = int(self.OUT_DIM)
+        if _h_dim > 0:
+            h_raw = y[_out_dim : _out_dim + _h_dim]
+            self._h = np.tanh(h_raw).astype(np.float32)
+            y = y[:_out_dim]          # rena aktioner, identiskt med tidigare API
+
         # ---------------------------------------------------------
         # 1) Decode policy outputs
         # ---------------------------------------------------------
@@ -1809,10 +1857,12 @@ class Agent:
         if not self.ready_to_reproduce():
             return False
     
-        # Pain / regulation gates
-        if float(self.body.hunger()) > 0.7:
+        # Pain / regulation gates — lösgjorda från föregående körning:
+        # hunger > 0.7 blockerade 83% av populationen (kronisk svält, mean hunger=0.84)
+        # D > 0.25 blockerade ytterligare 32% — för aggressivt givet att D stiger normalt
+        if float(self.body.hunger()) > 0.85:
             return False
-        if float(self.body.D) > 0.25:
+        if float(self.body.D) > 0.50:
             return False
         if float(self.body.Fg) > 0.85:
             return False
@@ -1918,7 +1968,10 @@ class Agent:
         self.body._D_prev = 0.0
     
         self.body.alive = True
-    
+
+        # Nollställ rekurrent minnestillstånd — nyfödd börjar utan minne
+        self._h.fill(0.0)
+
         # newborn: start with cooldown so they can't instantly reproduce
         self.repro_cd_s = float(self.AP.repro_cooldown_s)
         self.age_s = 0.0

@@ -5,6 +5,23 @@ from dataclasses import dataclass
 import numpy as np
 
 from mlp import MLPGenome
+from phenotype import derive_pheno
+
+
+def _arch_from_traits(
+    traits: np.ndarray | None,
+    obs_dim: int,
+    act_dim: int,
+    h_dim: int,
+) -> tuple[int, int]:
+    """
+    Härleder de dolda lagernas bredder från traits via fenotypen.
+    Returnerar (hidden_1, hidden_2).
+    """
+    if traits is None:
+        return 24, 24
+    p = derive_pheno(traits)
+    return int(p.hidden_1), int(p.hidden_2)
 
 
 @dataclass(frozen=True)
@@ -48,25 +65,45 @@ def ensure_initialized(g: MLPGenome, rng: np.random.Generator, cfg: MutationConf
 
 def child_genome_from_parent(parent: MLPGenome, rng: np.random.Generator, cfg: MutationConfig) -> MLPGenome:
     """
-    A: asexual inheritance with mutation.
-    Returns a new MLPGenome (parent is not modified).
+    Asexuell ärftlighet med mutation.
+    Returnerar nytt MLPGenome (parent rörs ej).
+
+    Arkitekturmutation:
+      Traits muteras först. Om de muterade traits ger en annan nätverksform
+      initieras vikterna slumpmässigt — kapaciteten ärvs, inte kopplingsmönstret.
+      Biologisk motivering: hjärnans storlek är genetisk, men synapskopplingar
+      bildas från grunden under individens liv.
     """
     g = parent.copy()
-
-    # Ensure child genome is initialized (do NOT touch parent)
     ensure_initialized(g, rng, cfg)
 
-    # optional B-hook: architecture mutation (off)
     if cfg.allow_arch_mutation and cfg.arch_p > 0.0 and rng.random() < cfg.arch_p:
         g = g.mutate_architecture(rng)
-        # new architecture => random init of policy; preserve traits by design
         ensure_initialized(g, rng, cfg)
 
-    # mutate policy parameters
+    # Mutera vikter och traits
     _mutate_weights(g, rng, sigma=cfg.weights_sigma, p=cfg.weights_p)
-
-    # mutate traits
     _mutate_traits(g, rng, sigma=cfg.traits_sigma, p=cfg.traits_p, clip=cfg.traits_clip)
+
+    # Kontrollera om arkitekturen förändrats via trait-mutation
+    h_dim = max(0, int(g.h_dim))
+    obs   = int(g.layer_sizes[0]) - h_dim
+    act   = int(g.layer_sizes[-1]) - h_dim
+    h1_new, h2_new = _arch_from_traits(g.traits, obs, act, h_dim)
+    h1_old, h2_old = int(g.layer_sizes[1]), int(g.layer_sizes[2])
+
+    if h1_new != h1_old or h2_new != h2_old:
+        # Arkitektur har driftat — ny form med slumpmässiga vikter
+        in_dim  = obs + h_dim
+        out_dim = act + h_dim
+        new_g   = MLPGenome(
+            layer_sizes=[in_dim, h1_new, h2_new, out_dim],
+            act=g.act,
+            h_dim=h_dim,
+        )
+        new_g.traits = g.traits.copy()
+        new_g.init_random(rng, init_traits_if_missing=False)
+        return new_g
 
     return g
 
@@ -82,7 +119,12 @@ def recombine(
     Traits: uniform crossover — varje trait väljs oberoende från g1 eller g2.
     MLP-vikter: per-parameter uniform crossover (inte 50/50-medelvärde,
                 vilket komprimerar viktrymden och hämmar evolution).
-    Mutation appliceras efteråt, precis som vid asexuell reproduktion.
+    Mutation appliceras efteråt.
+
+    Arkitekturmutation: om de rekombinerade traits ger en ny nätverksform
+    initieras vikterna slumpmässigt (se child_genome_from_parent för motivering).
+    Om båda föräldrarna har samma arkitektur och traits inte förändrar formen
+    ärvs vikterna via crossover som tidigare.
     """
     ensure_initialized(g1, rng, cfg)
     ensure_initialized(g2, rng, cfg)
@@ -97,9 +139,10 @@ def recombine(
         child.traits = t1.copy()
         child.traits[:n] = np.where(mask, t1[:n], t2[:n]).astype(np.float32)
 
-    # --- MLP-vikter: uniform crossover per parameter ---
+    # --- MLP-vikter: uniform crossover (bara om arkitekturerna matchar) ---
     if (g1.weights is not None and g2.weights is not None and
-            len(g1.weights) == len(g2.weights)):
+            len(g1.weights) == len(g2.weights) and
+            g1.layer_sizes == g2.layer_sizes):
         child.weights = [w.copy() for w in g1.weights]
         child.biases  = [b.copy() for b in g1.biases]
         for i in range(len(g1.weights)):
@@ -112,9 +155,28 @@ def recombine(
                 mB = rng.random(B1.shape) < 0.5
                 child.biases[i]  = np.where(mB, B1, B2).astype(np.float32)
 
-    # Mutation efteråt
+    # Mutation
     _mutate_weights(child, rng, sigma=cfg.weights_sigma, p=cfg.weights_p)
     _mutate_traits(child, rng, sigma=cfg.traits_sigma, p=cfg.traits_p, clip=cfg.traits_clip)
+
+    # Kontrollera om arkitekturen förändrats efter mutation
+    h_dim   = max(0, int(child.h_dim))
+    obs     = int(child.layer_sizes[0]) - h_dim
+    act     = int(child.layer_sizes[-1]) - h_dim
+    h1_new, h2_new = _arch_from_traits(child.traits, obs, act, h_dim)
+    h1_old, h2_old = int(child.layer_sizes[1]), int(child.layer_sizes[2])
+
+    if h1_new != h1_old or h2_new != h2_old:
+        in_dim  = obs + h_dim
+        out_dim = act + h_dim
+        new_child = MLPGenome(
+            layer_sizes=[in_dim, h1_new, h2_new, out_dim],
+            act=child.act,
+            h_dim=h_dim,
+        )
+        new_child.traits = child.traits.copy()
+        new_child.init_random(rng, init_traits_if_missing=False)
+        return new_child
 
     return child
 

@@ -54,6 +54,11 @@ class Phenotype:
     # Predation: benägenhet att attackera levande byten (0=fredsam, 1=rovdjur)
     predation: float
 
+    # Nätverksarkitektur — dolda lagrets bredder (diskreta steg, genetiskt bestämda)
+    # Evolution väljer kapacitet mot energikostnad: small=billig+snabb, large=dyr+kraftfull
+    hidden_1: int   # bredd på lager 1
+    hidden_2: int   # bredd på lager 2
+
     # Placeholders / later
     risk_aversion: float
     sociability: float
@@ -91,6 +96,8 @@ _T_M_REPRO_MIN     = 19
 _T_M_TARGET        = 20   # genetiskt bestämd vuxenmassa
 _T_DIET            = 21   # 0=ren herbivore, 1=ren scavenger
 _T_PREDATION       = 22   # benägenhet att attackera levande byten
+_T_HIDDEN_1        = 23   # bredd på första dolda lagret
+_T_HIDDEN_2        = 24   # bredd på andra dolda lagret
 
 @dataclass(frozen=True)
 class PhenoRanges:
@@ -162,6 +169,14 @@ class PhenoRanges:
     M_repro_min_min: float = 0.15   # var 0.20 — lite lägre för att hinna reproducera
     M_repro_min_max: float = 0.45   # var 0.45
 
+    # Nätverksarkitektur — tillåtna bredder för dolda lager.
+    # Diskreta steg via snap-funktion i derive_pheno.
+    # sigmoid(0)=0.5 → lerp(8,40)=24 → snap=24 (logisk default/mittenvärde).
+    # Med logit-initialisering täcks hela spannet 8-40 uniformt.
+    # Min 8 → mycket litet och billigt; max 40 → kraftfullt men metabolt dyrt.
+    hidden_min: int = 8
+    hidden_max: int = 40
+
 def derive_pheno(traits: np.ndarray | None, R: PhenoRanges = PhenoRanges()) -> Phenotype:
     u_mature   = _sigmoid(_get_trait(traits, _T_A_MATURE))
     u_prepro   = _sigmoid(_get_trait(traits, _T_P_REPRO))
@@ -193,7 +208,21 @@ def derive_pheno(traits: np.ndarray | None, R: PhenoRanges = PhenoRanges()) -> P
     u_Mtarget  = _sigmoid(_get_trait(traits, _T_M_TARGET))
     u_diet       = _sigmoid(_get_trait(traits, _T_DIET))
     u_predation  = _sigmoid(_get_trait(traits, _T_PREDATION))
-    
+
+    # Arkitektur-traits: kontinuerligt u → diskret bredd med steg om 4.
+    # round-till-närmaste-4 ger jämna storlekar och begränsar antalet
+    # unika ParamBank-nycklar (viktigt för batch-prestanda).
+    u_h1 = _sigmoid(_get_trait(traits, _T_HIDDEN_1, default=0.0))
+    u_h2 = _sigmoid(_get_trait(traits, _T_HIDDEN_2, default=0.0))
+
+    def _snap_hidden(u: float, lo: int, hi: int) -> int:
+        raw = _lerp(float(lo), float(hi), u)
+        snapped = int(round(raw / 4.0)) * 4
+        return max(lo, min(hi, snapped))
+
+    hidden_1 = _snap_hidden(u_h1, int(R.hidden_min), int(R.hidden_max))
+    hidden_2 = _snap_hidden(u_h2, int(R.hidden_min), int(R.hidden_max))
+
     return Phenotype(
         A_mature=float(_lerp(R.A_mature_min, R.A_mature_max, u_mature)),
         repro_rate=float(_lerp(R.repro_rate_min, R.repro_rate_max, u_prepro)),
@@ -223,6 +252,8 @@ def derive_pheno(traits: np.ndarray | None, R: PhenoRanges = PhenoRanges()) -> P
         sense_strength=float(u_sense),
         diet=float(_lerp(R.diet_min, R.diet_max, u_diet)),
         predation=float(_lerp(R.predation_min, R.predation_max, u_predation)),
+        hidden_1=int(hidden_1),
+        hidden_2=int(hidden_2),
     )
 
 
@@ -254,4 +285,6 @@ def phenotype_summary(p: Phenotype) -> dict[str, float]:
         "mobility": float(p.mobility),
         "cold_aversion": float(p.cold_aversion),
         "sense_strength": float(p.sense_strength),
+        "hidden_1": int(p.hidden_1),
+        "hidden_2": int(p.hidden_2),
     }

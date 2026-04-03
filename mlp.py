@@ -24,26 +24,64 @@ _ACTS: dict[str, Callable[[np.ndarray], np.ndarray]] = {
 @dataclass
 class MLPGenome:
     """
-    Genotype = policy network + traits.
+    Genotype = policy network + traits + recurrent state spec.
 
-    - Policy: (layer_sizes, act, weights, biases)
-    - Traits: real-valued vector (float32), interpreted elsewhere (phenotype.py)
+    - Policy:  (layer_sizes, act, weights, biases)
+    - Traits:  real-valued vector (float32), interpreted in phenotype.py
+    - Recurrence: h_dim > 0 aktiverar rekurrent minne.
 
-    NOTE:
-      * This module does NOT define how traits affect behavior/life history.
-      * That mapping is centralized in phenotype.py.
+    Rekurrent design ("split output"):
+      input  = concat(obs, h)          shape: (obs_dim + h_dim,)
+      output = net(input)              shape: (act_dim + h_dim,)
+      y      = output[:act_dim]        policy actions
+      h_new  = tanh(output[act_dim:])  nytt minnestillstånd ∈ (−1,+1)
+
+    layer_sizes lagrar de FAKTISKA nätverksdimensionerna inklusive h:
+      layer_sizes[0]  = obs_dim + h_dim
+      layer_sizes[-1] = act_dim + h_dim
+
+    obs_dim() och act_dim() returnerar de rena bio-dimensionerna.
+
+    Energikostnad:
+      n_params() returnerar totalt antal vikter+biaser.
+      Population skalar compute_cost proportionellt mot n_params / ref_params,
+      så bredare hjärnor kostar mer metabolt per sekund.
     """
 
     layer_sizes: List[int]
     act: str = "tanh"
+    h_dim: int = 0          # rekurrent minnesdimension; 0 = ingen rekurrens
 
     weights: List[np.ndarray] | None = None
-    biases: List[np.ndarray] | None = None
-
-    traits: np.ndarray | None = None  # shape [n_traits], float32
+    biases:  List[np.ndarray] | None = None
+    traits:  np.ndarray | None = None  # shape (n_traits,), float32
 
     # -------------------------
-    # init/copy
+    # Dimensionshjälpare
+    # -------------------------
+
+    def obs_dim(self) -> int:
+        """Ren observationsdimension (layer_sizes[0] minus h_dim)."""
+        return int(self.layer_sizes[0]) - max(0, int(self.h_dim))
+
+    def act_dim(self) -> int:
+        """Ren aktionsdimension (layer_sizes[-1] minus h_dim)."""
+        return int(self.layer_sizes[-1]) - max(0, int(self.h_dim))
+
+    def n_params(self) -> int:
+        """
+        Totalt antal träningsbara parametrar (vikter + biaser).
+        Används för att skala compute_cost proportionellt mot hjärnstorlek.
+        """
+        if self.weights is None or self.biases is None:
+            return 0
+        return (
+            sum(int(w.size) for w in self.weights) +
+            sum(int(b.size) for b in self.biases)
+        )
+
+    # -------------------------
+    # Init / copy
     # -------------------------
 
     def init_traits(
@@ -64,39 +102,54 @@ class MLPGenome:
         init_traits_if_missing: bool = True,
     ) -> "MLPGenome":
         """
-        Initialize policy weights/biases (uniform fan-in scaled).
-        Traits are only created if missing (unless init_traits_if_missing=False).
+        Initialiserar vikter/biaser med uniform fan-in-skalning.
+
+        Rekurrenta outputvikter (sista lagrets h_dim rader) dämpas med
+        faktor 0.1 vid initialisering — undviker kaotisk h-dynamik i
+        början av körningen innan evolution stabiliserat nätverket.
         """
         self.weights = []
-        self.biases = []
+        self.biases  = []
         for a, b in zip(self.layer_sizes[:-1], self.layer_sizes[1:]):
             lim = float(scale) / max(1.0, float(np.sqrt(a)))
-            W = rng.uniform(-lim, lim, size=(b, a)).astype(np.float32)
+            W    = rng.uniform(-lim, lim, size=(b, a)).astype(np.float32)
             bias = rng.uniform(-lim, lim, size=(b,)).astype(np.float32)
             self.weights.append(W)
             self.biases.append(bias)
+
+        # Dämpa rekurrenta outputvikter i sista lagret
+        h = max(0, int(self.h_dim))
+        if h > 0 and self.weights:
+            self.weights[-1][-h:] *= np.float32(0.1)
+            self.biases[-1][-h:]  *= np.float32(0.1)
 
         if init_traits_if_missing and self.traits is None:
             if n_traits is None:
                 raise ValueError("init_random: n_traits måste anges när traits saknas.")
             self.init_traits(rng, n_traits=int(n_traits))
-            
+
         return self
 
     def copy(self) -> "MLPGenome":
-        g = MLPGenome(layer_sizes=list(self.layer_sizes), act=str(self.act))
+        g = MLPGenome(
+            layer_sizes=list(self.layer_sizes),
+            act=str(self.act),
+            h_dim=int(self.h_dim),
+        )
         g.weights = [w.copy() for w in (self.weights or [])]
-        g.biases = [b.copy() for b in (self.biases or [])]
-        g.traits = None if self.traits is None else self.traits.copy()
+        g.biases  = [b.copy() for b in (self.biases  or [])]
+        g.traits  = None if self.traits is None else self.traits.copy()
         return g
 
     # -------------------------
-    # forward
+    # Forward pass
     # -------------------------
 
     def forward(self, x: np.ndarray) -> np.ndarray:
         """
-        Forward pass. Returns raw output (no output activation).
+        Forward-pass. Returnerar rå output utan outputaktivering.
+        Vid rekurrens: x = concat(obs, h), output = concat(y, h_raw).
+        Agenten ansvarar för att splitta och applicera tanh på h-delen.
         """
         assert self.weights is not None and self.biases is not None
         h = x.astype(np.float32, copy=False)
@@ -109,7 +162,7 @@ class MLPGenome:
         return h
 
     # -------------------------
-    # lightweight introspection
+    # Introspection
     # -------------------------
 
     def n_traits(self) -> int:

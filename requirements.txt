@@ -4,4 +4,4 @@ scipy
 pyyaml
 matplotlib
 pygame
-
+numba
