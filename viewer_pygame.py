@@ -244,19 +244,23 @@ class WorldViewer:
         """Returns (H,W,3) uint8."""
         B = np.asarray(world.B, dtype=np.float32)
         C = np.asarray(world.C, dtype=np.float32)
-
+    
         WP = getattr(world, "WP", None)
         BK = float(getattr(WP, "B_K", 1.0)) if WP is not None else 1.0
+        CK = float(getattr(WP, "C_K", 1.0)) if WP is not None else 1.0
+    
         B01 = np.clip(B / max(BK, 1e-12), 0.0, 1.0).astype(np.float32, copy=False)
-
+        C01 = np.clip(C / max(CK, 1e-12), 0.0, 1.0).astype(np.float32, copy=False)
+        C01 = np.sqrt(C01, dtype=np.float32)   # valfri men ofta bra för synlighet
+    
         mode = self.cfg.mode.upper().strip()
-
+    
         if mode == "B":
             img = np.dstack([B01, B01, B01])
-
+    
         elif mode == "C":
-            img = np.dstack([C, C, C])
-
+            img = np.dstack([C01, C01, C01])
+    
         elif mode == "TEMP":
             # stable normalization span for readability
             T = self._temp_field(world, B)
@@ -297,7 +301,7 @@ class WorldViewer:
         else:
             # default "CB": R=C, G=B, B=0
             Z = np.zeros_like(B01, dtype=np.float32)
-            img = np.dstack([C, B01, Z])
+            img = np.dstack([C01, B01, Z])
 
         img = self._gamma(img)
         return _as_u8_rgb(img)

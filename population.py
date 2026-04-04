@@ -72,7 +72,7 @@ class PopParams:
     spawn_jitter_r: float = 1.5
 
     carcass_yield: float = 0.65  # currently unused (carcass mass = remaining M)
-    carcass_rad: int = 3
+    carcass_rad: int = 2
 
     # sampling
     sample_dt: float = 1.0
@@ -514,55 +514,36 @@ class Population:
 
     def _try_mating(self, agent: Agent, ctx: StepCtx, candidates: list | None = None) -> None:
         """
-        Sexuell reproduktion: agent maste mota en annan redo individ inom mating_radius.
-        Den tyngste bararen startar gestation med rekombinerat barnets genom.
-        Den andre betalar en liten parningskostnad och far cooldown.
-
-        candidates: foerfiltrerad lista av verkligt redo agenter fran population.step().
-                    Listan ar redan filtrerad pa alla ready_to_reproduce-villkor, sa
-                    inre loopen bara behoever kolla distans och kompatibilitet.
-                    Om None anvands self.agents (fallback med full kontroll).
+        Sexuell reproduktion: verkställer parning med den agent som apply_outputs()
+        lokalt detekterade och markerade via _desired_mate_id.
+        Ingen global sökning — agenten kan bara para sig med någon den uppfattat via sensing.
         """
         if not agent.body.alive or agent.body.gestating:
             return
-
-        # Om candidates ar None (fallback): kolla full gate
-        if candidates is None and not agent.ready_to_reproduce():
+        if not agent.ready_to_reproduce():
             return
 
-        r_max     = float(self.PP.mating_radius)
-        size_f    = float(self.WP.size)
-        half_size = size_f * 0.5
-        r_sq      = r_max * r_max
-        best      = None
-        best_d_sq = r_sq
+        desired_id = int(getattr(agent, '_desired_mate_id', 0))
+        if desired_id <= 0:
+            return
 
-        px = float(agent.x)
-        py = float(agent.y)
+        best = self.world._agent_by_id.get(desired_id)
+        if best is None or not best.body.alive or best is agent:
+            return
+        if not best.ready_to_reproduce():
+            return
 
-        search = candidates if candidates is not None else self.agents
-        for other in search:
-            if other is agent or not other.body.alive:
-                continue
-            # candidates ar foer-filtrerade: hoppa over ready_to_reproduce() haer
-            if candidates is None and not other.ready_to_reproduce():
-                continue
-
-            # Torus-distans utan abs()/min()/sqrt() — snabbare med halvstorlek-jämförelse
-            ddx = float(other.x) - px
-            ddy = float(other.y) - py
-            if ddx >  half_size: ddx -= size_f
-            elif ddx < -half_size: ddx += size_f
-            if ddy >  half_size: ddy -= size_f
-            elif ddy < -half_size: ddy += size_f
-            d_sq = ddx * ddx + ddy * ddy
-
-            if d_sq < best_d_sq:
-                best_d_sq = d_sq
-                best      = other
-
-        if best is None:
-            return   # ingen lämplig partner hittad
+        # Avståndskontroll: måste fortfarande vara inom parningsradien
+        size_f = float(self.WP.size)
+        half   = size_f * 0.5
+        ddx = float(best.x) - float(agent.x)
+        ddy = float(best.y) - float(agent.y)
+        if ddx >  half: ddx -= size_f
+        elif ddx < -half: ddx += size_f
+        if ddy >  half: ddy -= size_f
+        elif ddy < -half: ddy += size_f
+        if ddx * ddx + ddy * ddy > float(self.PP.mating_radius) ** 2:
+            return
 
         # Genetisk kompatibilitet: P(parning lyckas) = exp(-d2_norm / 2*sigma2)
         if self.PP.compat_enabled:
@@ -725,49 +706,62 @@ class Population:
                 B0, C0 = BC_list[i]
                 _ = a.apply_outputs(self.world, ctx, Y[i], B0, C0)
 
-        # (C2) Predation: verklig jakt = attack på levande byte.
-        # Energi stjäls inte längre direkt ur levande byte.
-        # Predatorn orsakar skada; om bytet dör blir kroppen carcass i (D),
-        # och energiutbytet sker senare via vanlig konsumtion av carcass.
+        # (C2) Predation: verkställ bara lokalt uppfattade mål.
+        # Populationen väljer inte byte globalt; den validerar bara den
+        # granne agenten faktiskt detekterade via sensing i samma tick.
         attack_range = float(self.AP.attack_range)
         dmg_per_s    = float(self.AP.attack_damage_per_s)
         cost_frac    = float(self.AP.attack_cost_per_s)
         size_f       = float(self.WP.size)
         dt_val       = float(self.WP.dt)
+        attack_score_min = float(getattr(self.AP, 'attack_score_min', 0.18))
+        predator_trait_min = float(getattr(self.AP, 'predator_trait_min', 0.20))
 
-        alive_now = [a for a in self.agents if a.body.alive]
-        for predator in alive_now:
-            pred_trait = float(getattr(predator.pheno, "predation", 0.0))
-            if pred_trait < float(getattr(self.AP, 'predator_trait_min', 0.20)) or not predator.body.alive:
+        by_id = getattr(self.world, "_agent_by_id", {})
+        for predator in self.agents:
+            if not predator.body.alive:
                 continue
 
-            best_prey = None
-            best_score = -1e9
-            for prey in alive_now:
-                if prey is predator or not prey.body.alive:
-                    continue
-                _, _, dist = predator._torus_delta_to(prey, size_f)
-                if dist > attack_range:
-                    continue
-                sc = predator.attack_score(prey, dist)
-                if sc > best_score:
-                    best_score = sc
-                    best_prey = prey
+            pred_trait = float(getattr(predator.pheno, "predation", 0.0))
+            pred_diet  = float(getattr(predator.pheno, "diet",      0.5))
+            hunt_diet_exp = float(getattr(predator.AP, 'hunt_diet_exp', 1.5))
+            hunt_eff   = pred_trait * (pred_diet ** hunt_diet_exp)
+            if hunt_eff < predator_trait_min:
+                continue
 
-            if best_prey is None or best_score <= float(getattr(self.AP, 'attack_score_min', 0.18)):
+            # build_inputs() cachear (N, Nu, Nd, hit_id) för faktiskt detekterad granne.
+            hit = getattr(predator, "_cached_agent_hit", None)
+            if not isinstance(hit, tuple) or len(hit) < 4:
+                continue
+            _, _, _, hit_id = hit[:4]
+            if int(hit_id) < 0:
+                continue
+
+            prey = by_id.get(int(hit_id))
+            if prey is None or prey is predator or (not prey.body.alive):
+                continue
+
+            _, _, dist = predator._torus_delta_to(prey, size_f)
+            if dist > attack_range:
+                continue
+
+            score = predator.attack_score(prey, dist)
+            if score <= attack_score_min:
                 continue
 
             # Jakt kostar energi oavsett utfall.
+            # Mismatch-kostnad: herbivorer med hög predation betalar extra för otillräcklig utrustning.
+            mismatch_cost = float(getattr(predator.AP, 'hunt_mismatch_cost', 2.0))
+            cost_mult = 1.0 + (mismatch_cost - 1.0) * max(0.0, 1.0 - pred_diet)
             predator.body.take_energy(
-                cost_frac * pred_trait * float(predator.body.E_cap()) * dt_val
+                cost_frac * hunt_eff * cost_mult * float(predator.body.E_cap()) * dt_val
             )
 
-            prey = best_prey
-            dD = dmg_per_s * max(0.25, best_score) * pred_trait * (float(predator.body.M) ** 0.5) * dt_val
+            dD = dmg_per_s * max(0.25, score) * hunt_eff * (float(predator.body.M) ** 0.5) * dt_val
             prey.body.D = min(float(prey.body.D) + dD, float(prey.body.AP.D_max))
 
             # Om attacken driver bytet till dödströskeln dör det direkt.
-            # Själva energiutbytet kommer inte här utan via carcass-steget nedan.
+            # Energiutbytet sker via carcass-konsumtion efter död — inte direkttransfer.
             if float(prey.body.D) >= float(prey.body.AP.D_max):
                 prey.body.alive = False
 
@@ -823,26 +817,20 @@ class Population:
             children: List[Agent] = []
             cap = int(self.PP.max_pop)
 
-            # En enda auktoritet för reproduktiv readiness.
-            _mating_candidates = [a for a in self.agents if a.ready_to_reproduce()]
-
-            _cand_ids = {id(a) for a in _mating_candidates}
-
             for a in self.agents:
                 if len(self.agents) + len(children) >= cap:
                     break
                 if not a.body.alive:
                     continue
 
-                # (1) om gravid och klar -> foerd
+                # (1) om gravid och klar -> föd
                 child = self._try_birth(a, ctx)
                 if child is not None:
                     children.append(child)
                     continue
 
-                # (2) foersoek para sig -- bara foer verkligt redo kandidater
-                if id(a) in _cand_ids:
-                    self._try_mating(a, ctx, candidates=_mating_candidates)
+                # (2) försök para sig — bygger på lokalt detekterad partner
+                self._try_mating(a, ctx)
 
             if children:
                 self.agents.extend(children)

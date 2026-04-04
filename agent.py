@@ -221,9 +221,7 @@ class AgentParams:
     # k_age0=0 → ingen konstant bakgrund (var 0.200 — dödade unga för snabbt).
     # k_age1=0.001 → dD/dt = 0.001×age_s: vid 250s ger 0.25 D/s → döden.
     k_age0: float = 0.000
-    k_age1: float = 0.0002     # var 0.001 → sänkt: 0.001 gav 0.25 D/s vid ålder 250s vilket är för aggressivt.
-                                # 0.0002 → ren åldringsdöd vid t≈100s, kombinerat med aktivitetsskada ger
-                                # realistisk livslängd 300-500s och ett bredare reproduktivt fönster.
+    k_age1: float = 0.0003     # 0.0002 gav för lång livslängd; 0.0003 ger tipping ~400-500s.
     k_ageD: float = 0.4
 
     # Skadehastighet — grundterm i dD_eff.
@@ -282,6 +280,15 @@ class AgentParams:
 
     # Selektiv predator-prey-logik
     predator_trait_min: float = 0.20
+
+    # Diet/predation-koppling: jaktförmåga kräver animalisk diet.
+    # hunt_eff = predation × diet^hunt_diet_exp
+    # En herbivore (diet=0) får hunt_eff=0 oavsett predation-trait.
+    # En generalist (diet=0.5) får hunt_eff = predation × 0.5^1.5 ≈ 0.35×predation.
+    # En karnivor (diet=1.0) får hunt_eff = predation (fullt utbyte).
+    # Mismatch-kostnad: predation utan diet ger extra attackkostnad (kJ slösas).
+    hunt_diet_exp: float = 1.5       # exponent för diet-skalning av jaktförmåga
+    hunt_mismatch_cost: float = 2.0  # multiplikator på attackkostnad vid låg diet
     threat_predation_min: float = 0.35
     hunt_score_min: float = 0.12
     attack_score_min: float = 0.18
@@ -316,19 +323,16 @@ class AgentParams:
     growth_E_per_kg:    float = 10_000.0  # J/kg somatisk tillväxt (samma princip som gestation)
     k_cat_dmg:          float = 1.0       # skada per relativ massförlust via katabolism
 
-    # Svält/undervikt som kroppsligt sönderfall (utvecklingsrelaterad depletion).
-    # Kroppen jämförs mot en förväntad massa för åldern:
-    #   M_expected(age) = child_M + u_age * (M_target - child_M)
-    # där u_age = clamp(age / A_mature, 0, 1).
-    # Extra damage byggs bara upp om både strukturell undervikt och låg energireserv
-    # föreligger. Det gör att normalt små juveniler inte straffas, medan svältande
-    # ungar och utmärglade vuxna kan kollapsa.
-    starve_mass_ok_frac: float = 0.85    # ingen extra svältskada om M >= 85% av M_expected
-    starve_mass_crit_frac: float = 0.55  # maximal mass-severity vid M <= 55% av M_expected
-    starve_damage_gain: float = 0.08     # max extra damage/s vid full deprivation
-    starve_adult_boost: float = 1.35     # vuxna straffas hårdare än juveniler vid samma underskott
-    starve_reserve_full: float = 0.30    # ingen starvation-depletion ovanför denna reservgrad
-    starve_reserve_min: float = 0.05     # maximal starvation-depletion under denna reservgrad
+    # Svältskada baserad på individens massa relativt förväntad massa för åldern.
+    # M_expected(age) = child_M  vid age=0
+    #                 = M_target  vid age=A_mature (sedan konstant)
+    # Massunderskott i relation till åldersnormen är i sig bevis på svält —
+    # en agent under kurvan har per definition inte haft tillräcklig energi att växa.
+    # Reservvillkor är därför överflödigt: reserven styr om agenten kan *komma ur*
+    # svältläget (via tillväxt), men massunderskottet är det direkta skadesignalet.
+    starve_mass_ok_frac:   float = 0.85   # ingen svältskada om M >= 85% av M_expected
+    starve_mass_crit_frac: float = 0.55   # maximal svältskada om M <= 55% av M_expected
+    starve_damage_gain:    float = 0.025  # max extra D/s vid full svält (var 0.08 — för aggressivt)
 
     # Stokastisk dödsrisk — liten och tillståndsberoende ("olyckor").
     # Biologisk princip: friska agenter har låg olycksrisk; skadade har hög.
@@ -944,32 +948,20 @@ class Body:
         age_rate = max(0.0, _k_age0 + _k_age1 * float(age_s))
         dD_age   = dt * age_rate * (1.0 + _k_ageD * d_norm) * (1.0 + frailty_gain)
 
-        # Utvecklingsrelaterad svältskada: kroppen ligger för långt under den massa
-        # som är rimlig för ålder/stadium, samtidigt som energireserven är låg.
+        # Svältskada: individens massa relativt förväntad massa för åldern.
+        # M_expected är linjär från child_M (age=0) till M_target (age=A_mature),
+        # sedan konstant. En agent under kurvan har inte kunnat växa i takt — svälter.
         M_expected = self.expected_mass(pheno, age_s)
         m_rel = float(self.M) / max(M_expected, 1e-9)
-        m_ok = float(getattr(AP, "starve_mass_ok_frac", 0.85))
-        m_crit = float(getattr(AP, "starve_mass_crit_frac", 0.55))
+        m_ok   = float(getattr(AP, 'starve_mass_ok_frac',   0.85))
+        m_crit = float(getattr(AP, 'starve_mass_crit_frac', 0.55))
         if m_rel >= m_ok:
             mass_severity = 0.0
         elif m_rel <= m_crit:
             mass_severity = 1.0
         else:
             mass_severity = (m_ok - m_rel) / max(m_ok - m_crit, 1e-9)
-
-        r_full = float(getattr(AP, "starve_reserve_full", 0.30))
-        r_min = float(getattr(AP, "starve_reserve_min", 0.05))
-        if r_now >= r_full:
-            reserve_severity = 0.0
-        elif r_now <= r_min:
-            reserve_severity = 1.0
-        else:
-            reserve_severity = (r_full - r_now) / max(r_full - r_min, 1e-9)
-
-        A_mature = max(1e-9, float(getattr(pheno, "A_mature", 1.0)))
-        adult_u = clamp(float(age_s) / A_mature, 0.0, 1.0)
-        adult_factor = 1.0 + (float(getattr(AP, "starve_adult_boost", 1.35)) - 1.0) * adult_u
-        dD_starve = dt * float(getattr(AP, "starve_damage_gain", 0.08)) * mass_severity * reserve_severity * adult_factor
+        dD_starve = dt * float(getattr(AP, 'starve_damage_gain', 0.025)) * mass_severity
 
         Tb_now = float(self.Tb)
         if Tb_now < _Tb_min:
@@ -1193,16 +1185,12 @@ class Body:
             "E_loss_repair": float(E_out_repair),
             "E_from_catabolism": float(E_from_M_total),
             "E_loss_catabolism": float(max(0.0, dM_cat_total * _E_body - E_from_M_total)),
-            "dM_growth": float(dM_growth_want if 'dM_growth_want' in locals() else 0.0),
-            "M_expected": float(M_expected if 'M_expected' in locals() else 0.0),
-            "m_rel_expected": float(m_rel if 'm_rel' in locals() else 1.0),
-            "dD_starve": float(dD_starve if 'dD_starve' in locals() else 0.0),
-            "reserve_frac": float(r_now if 'r_now' in locals() else self.reserve_frac()),
-            "growth_gate": float(growth_gate if 'growth_gate' in locals() else 0.0),
-            "hunt_state": float(hunt_state if 'hunt_state' in locals() else 0.0),
-            "flee_state": float(flee_state if 'flee_state' in locals() else 0.0),
-            "best_prey_score": float(best_prey_score if 'best_prey_score' in locals() else 0.0),
-            "best_threat_score": float(best_threat_score if 'best_threat_score' in locals() else 0.0),
+            "dM_growth": float(dM_growth_want),
+            "M_expected": float(M_expected),
+            "m_rel_expected": float(m_rel),
+            "dD_starve": float(dD_starve),
+            "reserve_frac": float(r_now),
+            "growth_gate": float(growth_gate),
             "dM_gestation": float(dM_gest),
             "dM_catabolism": float(dM_cat_total),
         }
@@ -1447,16 +1435,17 @@ class RaySensors:
         heading: float,
         self_id: int,
         m_eff: int = 0,
-    ) -> tuple[float, float, float, int]:
+    ) -> tuple[float, float, float, int, int]:
         """
-        Returns (present, bearing_u, dist_u, j_hit).
+        Returns (present, bearing_u, dist_u, j_hit, hit_agent_id).
         j_hit: avståndssteg-index för träffen (-1 om ingen träff).
+        hit_agent_id: agent-ID vid träffpunkten (0 om ingen träff).
         m_eff: effektivt antal avståndssteg att skanna (0 = alla).
         """
         n = int(self._n)
         m_full = int(self._m)
         if n <= 0 or m_full <= 0:
-            return 0.0, 0.0, 0.0, -1
+            return 0.0, 0.0, 0.0, -1, 0
 
         np.add(self._ang_base, np.float32(heading), out=self._ang)
         np.cos(self._ang, out=self._dx)
@@ -1496,13 +1485,14 @@ class RaySensors:
 
         hit_per_j = mask.any(axis=0)
         if not hit_per_j.any():
-            return 0.0, 0.0, 0.0, -1
+            return 0.0, 0.0, 0.0, -1, 0
 
-        j_hit     = int(np.argmax(hit_per_j))
-        i_hit     = int(np.argmax(mask[:, j_hit]))
-        bearing_u = float(i_hit) / float(n)
-        dist_u    = float(self._d[j_hit]) / max(float(self.AP.ray_len_front), 1e-9)
-        return 1.0, bearing_u, dist_u, j_hit
+        j_hit        = int(np.argmax(hit_per_j))
+        i_hit        = int(np.argmax(mask[:, j_hit]))
+        bearing_u    = float(i_hit) / float(n)
+        dist_u       = float(self._d[j_hit]) / max(float(self.AP.ray_len_front), 1e-9)
+        hit_agent_id = int(aids[i_hit, j_hit])
+        return 1.0, bearing_u, dist_u, j_hit, hit_agent_id
 
 
 # -------------------------
@@ -1555,8 +1545,9 @@ class Agent:
     _cached_x_in: np.ndarray = field(init=False)         # cachat obs-vektor
     _last_detect_j: int = field(init=False, default=-1)  # avståndssteg för senaste träff (-1=ingen)
     _sense_m_eff: int = field(init=False, default=0)     # effektivt stråldjup nästa skanning
-    _cached_agent_hit: tuple = field(init=False)         # (N, Nu, Nd) från senaste see_agent_first_hit
+    _cached_agent_hit: tuple = field(init=False)         # (N, Nu, Nd, hit_id) från senaste see_agent_first_hit
     _cached_predator_hit: tuple = field(init=False)      # (pred_bearing, pred_dist) — närmaste hotande predator
+    _desired_mate_id: int = field(init=False, default=0) # ID för lokalt detekterad potentiell partner (0=ingen)
 
     def __post_init__(self) -> None:
         self.AP = replace(self.AP)
@@ -1595,8 +1586,9 @@ class Agent:
         self._cached_x_in = np.zeros((self.OBS_DIM + _h_dim,), dtype=np.float32)
         self._last_detect_j = -1
         self._sense_m_eff = 0
-        self._cached_agent_hit = (0.0, 0.0, 0.0)
+        self._cached_agent_hit = (0.0, 0.0, 0.0, 0)
         self._cached_predator_hit = (0.0, 0.0)
+        self._desired_mate_id = 0
 
     def _init_body_state_from_AP(self) -> None:
         self.body.M = max(0.0, float(self.AP.M0))
@@ -1764,13 +1756,13 @@ class Agent:
         )
 
         # Kontrollera grannar med adaptivt djup
-        N_ag, Nu_ag, Nd_ag, j_agent = self.sensors.see_agent_first_hit(
+        N_ag, Nu_ag, Nd_ag, j_agent, hit_id = self.sensors.see_agent_first_hit(
             world, self.x, self.y, self.heading, self.id, m_eff=m_eff,
         )
         agent_near = j_agent >= 0
 
-        # Cacha för apply_outputs — eliminerar dubbelanropet där
-        self._cached_agent_hit = (N_ag, Nu_ag, Nd_ag)
+        # Cacha för apply_outputs — inkluderar hit_id för lokal agent-lookup
+        self._cached_agent_hit = (N_ag, Nu_ag, Nd_ag, hit_id)
 
         # Predator-proxy: närmaste agent-riktning ger nätverket flykt-signal
         pred_bearing = float(Nu_ag) * 2.0 * math.pi if N_ag > 0.5 else 0.0
@@ -1842,48 +1834,7 @@ class Agent:
     def attack_score(self, target: "Agent", dist: float) -> float:
         return float(self.attack_value(target, dist) - self.attack_risk(target, dist))
 
-    def _local_social_targets(self, world: World):
-        agents = getattr(world, "_agents", None)
-        if not agents:
-            return None, None, None, None, None
-        size = float(world.WP.size)
-        prey_r = float(self.AP.prey_search_radius)
-        flee_r = float(self.AP.flee_radius)
-        mate_r = float(self.AP.mate_search_radius)
-        pred_self = float(getattr(self.pheno, "predation", 0.0))
-
-        best_prey = None
-        best_prey_score = -1e9
-        best_threat = None
-        best_threat_score = -1e9
-        best_mate = None
-        best_mate_dist = mate_r
-
-        for other in agents:
-            if other is self or not other.body.alive:
-                continue
-            dx, dy, dist = self._torus_delta_to(other, size)
-            if dist <= 1e-9:
-                continue
-
-            if self.ready_to_reproduce() and other.ready_to_reproduce() and dist <= best_mate_dist:
-                best_mate = (other, dx, dy, dist)
-                best_mate_dist = dist
-
-            if dist <= prey_r and pred_self >= float(self.AP.predator_trait_min):
-                sc = self.attack_score(other, dist)
-                if sc > best_prey_score:
-                    best_prey = (other, dx, dy, dist)
-                    best_prey_score = sc
-
-            other_pred = float(getattr(other.pheno, "predation", 0.0))
-            if dist <= flee_r and other_pred >= float(self.AP.threat_predation_min):
-                sc_th = other.attack_score(self, dist)
-                if sc_th > best_threat_score:
-                    best_threat = (other, dx, dy, dist)
-                    best_threat_score = sc_th
-
-        return best_prey, best_prey_score, best_threat, best_threat_score, best_mate
+    # _local_social_targets() avvecklad — social interaktion är nu perceptionsbunden via hit_id.
 
     def apply_outputs(
         self,
@@ -1932,18 +1883,52 @@ class Agent:
 
         soc = float(getattr(self.pheno, "sociability", 0.0))
         pred = float(getattr(self.pheno, "predation", 0.0))
-        N, Nu, Nd = self._cached_agent_hit
+        N, Nu, Nd, hit_id = self._cached_agent_hit
         in_mating_mode = self.ready_to_reproduce()
 
-        best_prey, best_prey_score, best_threat, best_threat_score, best_mate = self._local_social_targets(world)
-        hunt_state = 0.0
-        flee_state = 0.0
+        # Lokal agent-utvärdering: bara den agent som faktiskt detekterades via sensing.
+        best_prey        = None
+        best_prey_score  = -1e9
+        best_threat      = None
+        best_threat_score = -1e9
+        best_mate        = None
+        hunt_state       = 0.0
+        flee_state       = 0.0
+        self._desired_mate_id = 0
+
+        # hunt_eff: jaktförmåga skalas med dietanpassning.
+        # En herbivore (diet≈0) kan inte jaga lönsamt oavsett predation-trait.
+        _hunt_diet_exp = float(getattr(self.AP, 'hunt_diet_exp', 1.5))
+        _diet_val      = float(getattr(self.pheno, 'diet', 0.5))
+        hunt_eff       = pred * (_diet_val ** _hunt_diet_exp)
+
+        if N > 0.5 and hit_id > 0:
+            detected = world._agent_by_id.get(int(hit_id))
+            if detected is not None and detected.body.alive and detected is not self:
+                dx, dy, dist = self._torus_delta_to(detected, float(world.WP.size))
+                other_pred = float(getattr(detected.pheno, "predation", 0.0))
+                other_diet = float(getattr(detected.pheno, "diet", 0.5))
+                other_hunt_eff = other_pred * (other_diet ** _hunt_diet_exp)
+                if other_hunt_eff >= float(self.AP.threat_predation_min):
+                    sc_th = detected.attack_score(self, dist)
+                    if sc_th > float(self.AP.hunt_score_min):
+                        best_threat = (detected, dx, dy, dist)
+                        best_threat_score = sc_th
+                if hunt_eff >= float(self.AP.predator_trait_min):
+                    sc = self.attack_score(detected, dist)
+                    if sc > float(self.AP.hunt_score_min):
+                        best_prey = (detected, dx, dy, dist)
+                        best_prey_score = sc
+                if in_mating_mode and detected.ready_to_reproduce():
+                    best_mate = (detected, dx, dy, dist)
+                    self._desired_mate_id = int(hit_id)
+
 
         # ---------------------------------------------------------
         # 3) Reflexiva drivkrafter: flykt, jakt, parning, socialt, föda
         # PRIORITET: flee > hunt > mating > social > food > explore
         # ---------------------------------------------------------
-        if best_threat is not None and pred < float(self.AP.threat_predation_min) and best_threat_score > float(self.AP.hunt_score_min):
+        if best_threat is not None and hunt_eff < float(self.AP.threat_predation_min) and best_threat_score > float(self.AP.hunt_score_min):
             other, dx, dy, dist = best_threat
             a_th = math.atan2(dy, dx)
             err = self._signed_angle(a_th - self.heading)
@@ -1953,12 +1938,12 @@ class Agent:
             explore_drive *= 0.10
             flee_state = 1.0
 
-        elif best_prey is not None and pred >= float(self.AP.predator_trait_min) and best_prey_score > float(self.AP.hunt_score_min):
+        elif best_prey is not None and hunt_eff >= float(self.AP.predator_trait_min) and best_prey_score > float(self.AP.hunt_score_min):
             other, dx, dy, dist = best_prey
             a_hit = math.atan2(dy, dx)
             errN = self._signed_angle(a_hit - self.heading)
             biasN = clamp(errN / math.pi, -1.0, 1.0)
-            hs = clamp(pred, 0.0, 1.0)
+            hs = clamp(hunt_eff, 0.0, 1.0)
             turn = clamp(turn + 0.90 * hs * biasN, -1.0, 1.0)
             thrust = clamp(max(thrust, 0.85), 0.0, 1.0)
             explore_drive *= 0.25
@@ -1998,8 +1983,12 @@ class Agent:
                 accC = getattr(sensors, "_accC", None)
                 ang = getattr(sensors, "_ang_base", None)
                 if accB is not None and ang is not None and len(accB) > 0:
-                    _diet = float(getattr(self.pheno, "diet", 0.5))
-                    combo = accB * (1.0 - _diet) + accC * _diet
+                    _diet    = float(getattr(self.pheno, "diet", 0.5))
+                    herb_eff = (1.0 - _diet) ** 0.7
+                    scav_eff = _diet ** 0.7
+                    # combo viktas med faktiskt energiutbyte per diettyp —
+                    # en scavenger reagerar starkare på carcass-signal än en generalist.
+                    combo = accB * herb_eff + accC * scav_eff
                     i_best = int(np.argmax(combo))
                     sig = float(combo[i_best])
                     if sig > 0.05:
@@ -2009,6 +1998,19 @@ class Agent:
                         fd = clamp(hunger_now - 0.4, 0.0, 0.6) * sig
                         turn = clamp(turn + 0.60 * fd * bias_food, -1.0, 1.0)
                         thrust = clamp(thrust + 0.3 * fd, 0.0, 1.0)
+
+        # ---------------------------------------------------------
+        # Lokal mat dämpar utforskning: hungrig agent stannar vid mat.
+        # food_local: dietviktat lokalt matutbud direkt under agenten (B0/C0).
+        # hunger_now=1, food_local=1 → explore_drive → 0  (svältande, stå kvar)
+        # hunger_now=1, food_local=0 → ingen dämpning     (svältande, ingen mat här)
+        # hunger_now=0, food_local=1 → ingen dämpning     (mätt, utforska fritt)
+        _diet_local  = float(getattr(self.pheno, "diet", 0.5))
+        _herb_local  = (1.0 - _diet_local) ** 0.7
+        _scav_local  = _diet_local ** 0.7
+        food_local   = clamp(float(B0) * _herb_local + float(C0) * _scav_local, 0.0, 1.0)
+        explore_drive *= 1.0 - hunger_now * food_local
+
 
         # ---------------------------------------------------------
         # 4) Heading integration (turn + exploration jitter)
@@ -2170,24 +2172,6 @@ class Agent:
         want_J = max(0.0, float(cost_E_J))
         paid_J = float(self.body.take_energy(want_J))
         return paid_J
-    
-    
-    def provide_child_mass(self, child_M: float) -> float:
-        """
-        Flytta massa från parent till barn utan att gå under M_min.
-        Returnerar faktiskt given massa.
-        """
-        want = max(0.0, float(child_M))
-        M = float(self.body.M)
-        Mmin = float(self.AP.M_min)
-    
-        free = max(0.0, M - Mmin)
-        got = min(want, free)
-    
-        if got > 0.0:
-            self.body.M = M - got
-    
-        return float(got)
     
     
     def init_newborn_state(

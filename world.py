@@ -86,7 +86,7 @@ class WorldParams:
     # Carcass field C [kg per cell]
     # -------------------------
     C_K: float = 1e-3        # kg/cell "practical cap" for numerics (optional)
-    C_decay: float = 0.03    # var 0.005 — halveringstid ~23s, försvinner om ingen asätare är nära
+    C_decay: float = 0.077   # 1% kvar efter 60s: ln(100)/60 ≈ 0.077 (var 0.03 → halveringstid 23s)
     C_diff: float = 0.00     # diffusion coefficient
 
     # --- Perception scaling ---
@@ -109,6 +109,7 @@ class World:
 
         # occupancy (0=empty else agent_id)
         self.A = np.zeros((s, s), dtype=np.int32)
+        self._agent_by_id: dict[int, object] = {}
 
         # ecology fields (kg/cell)
         self.B = np.zeros((s, s), dtype=np.float32)  # plant biomass
@@ -209,12 +210,16 @@ class World:
         A = self.A
         A.fill(0)
         s = int(self.WP.size)
+        by_id: dict[int, object] = {}
         for ag in agents:
             if not ag.body.alive:
                 continue
+            aid = int(ag.id)
+            by_id[aid] = ag
             ix = int(ag.x) % s
             iy = int(ag.y) % s
-            A[iy, ix] = int(ag.id)
+            A[iy, ix] = aid
+        self._agent_by_id = by_id
 
     # -------------------------
     # Ecology kernels
