@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from mlp import MLPGenome
-from phenotype import derive_pheno
+from phenotype import derive_pheno, _T_DIET, _T_PREDATION
 
 
 def _arch_from_traits(
@@ -42,6 +42,13 @@ class MutationConfig:
     traits_sigma: float = 0.02
     traits_p: float = 0.05
     traits_clip: float = 2.0  # clip to [-clip, clip]
+
+    # trophic traits mutation (diet/predation)
+    # Dessa traits representerar en djupare livsformsdisposition och ska därför
+    # driva långsammare än övriga traits. Avkommor ska normalt likna föräldrarna
+    # i trophic bias; större skiften ska kräva många generationer.
+    trophic_sigma: float = 0.005
+    trophic_p: float = 0.02
 
     # weights mutation
     weights_sigma: float = 0.08
@@ -83,7 +90,15 @@ def child_genome_from_parent(parent: MLPGenome, rng: np.random.Generator, cfg: M
 
     # Mutera vikter och traits
     _mutate_weights(g, rng, sigma=cfg.weights_sigma, p=cfg.weights_p)
-    _mutate_traits(g, rng, sigma=cfg.traits_sigma, p=cfg.traits_p, clip=cfg.traits_clip)
+    _mutate_traits(
+        g,
+        rng,
+        sigma=cfg.traits_sigma,
+        p=cfg.traits_p,
+        clip=cfg.traits_clip,
+        trophic_sigma=cfg.trophic_sigma,
+        trophic_p=cfg.trophic_p,
+    )
 
     # Kontrollera om arkitekturen förändrats via trait-mutation
     h_dim = max(0, int(g.h_dim))
@@ -157,7 +172,15 @@ def recombine(
 
     # Mutation
     _mutate_weights(child, rng, sigma=cfg.weights_sigma, p=cfg.weights_p)
-    _mutate_traits(child, rng, sigma=cfg.traits_sigma, p=cfg.traits_p, clip=cfg.traits_clip)
+    _mutate_traits(
+        child,
+        rng,
+        sigma=cfg.traits_sigma,
+        p=cfg.traits_p,
+        clip=cfg.traits_clip,
+        trophic_sigma=cfg.trophic_sigma,
+        trophic_p=cfg.trophic_p,
+    )
 
     # Kontrollera om arkitekturen förändrats efter mutation
     h_dim   = max(0, int(child.h_dim))
@@ -231,13 +254,46 @@ def _mutate_weights(g: MLPGenome, rng: np.random.Generator, sigma: float, p: flo
             B[mB] += rng.normal(0.0, float(sigma), size=int(mB.sum())).astype(np.float32)
 
 
-def _mutate_traits(g: MLPGenome, rng: np.random.Generator, sigma: float, p: float, clip: float) -> None:
+def _mutate_traits(
+    g: MLPGenome,
+    rng: np.random.Generator,
+    sigma: float,
+    p: float,
+    clip: float,
+    trophic_sigma: float,
+    trophic_p: float,
+) -> None:
     if g.traits is None:
         return
     t = g.traits
+
+    # Basmutation för de flesta traits
     mt = rng.random(t.shape) < float(p)
-    if mt.any():
-        t[mt] += rng.normal(0.0, float(sigma), size=int(mt.sum())).astype(np.float32)
-        if clip is not None and float(clip) > 0.0:
-            t[:] = np.clip(t, -float(clip), float(clip)).astype(np.float32)
+
+    # Trophic traits (diet/predation) ska vara mer ärftliga och ändras långsammare.
+    # Överskriv därför deras mutationsregim med separata, lägre nivåer.
+    if t.shape[0] > _T_DIET:
+        mt[_T_DIET] = bool(rng.random() < float(trophic_p))
+    if t.shape[0] > _T_PREDATION:
+        mt[_T_PREDATION] = bool(rng.random() < float(trophic_p))
+
+    # Basmutation för icke-trophiska traits
+    non_trophic = mt.copy()
+    if t.shape[0] > _T_DIET:
+        non_trophic[_T_DIET] = False
+    if t.shape[0] > _T_PREDATION:
+        non_trophic[_T_PREDATION] = False
+
+    if non_trophic.any():
+        t[non_trophic] += rng.normal(0.0, float(sigma), size=int(non_trophic.sum())).astype(np.float32)
+
+    if t.shape[0] > _T_DIET and mt[_T_DIET]:
+        t[_T_DIET] += np.float32(rng.normal(0.0, float(trophic_sigma)))
+
+    if t.shape[0] > _T_PREDATION and mt[_T_PREDATION]:
+        t[_T_PREDATION] += np.float32(rng.normal(0.0, float(trophic_sigma)))
+
+    if clip is not None and float(clip) > 0.0:
+        t[:] = np.clip(t, -float(clip), float(clip)).astype(np.float32)
+
     g.traits = t

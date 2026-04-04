@@ -12,6 +12,7 @@ import queue
 import threading
 
 import numpy as np
+import matplotlib.pyplot as plt
 
 
 # ============================================================
@@ -28,8 +29,8 @@ class PhenoSeries:
     p50: Dict[str, List[float]] = field(default_factory=dict)
     p90: Dict[str, List[float]] = field(default_factory=dict)
 
-    recompute_every: int = 25   # recompute percentiles every N samples
-    window: int = 2000          # percentile window over last W samples; 0 => full history
+    recompute_every: int = 25
+    window: int = 2000  # rolling window over last W samples; 0 => full history
 
     _n_seen: int = 0
 
@@ -93,10 +94,7 @@ class PhenoSeries:
 
 
 # ============================================================
-# Tail thread: JSONL -> queue
-#   - reads full file once (batch)
-#   - then tails by readline() + poll on EOF
-#   - on rotation/truncate: emits reset + re-batch
+# Tail thread
 # ============================================================
 
 def start_tail_thread(fp: str, q: "queue.Queue[dict]", *, poll_s: float = 0.25) -> threading.Thread:
@@ -126,7 +124,6 @@ def start_tail_thread(fp: str, q: "queue.Queue[dict]", *, poll_s: float = 0.25) 
                         q.put(obj)
                 q.put({"_event": "batch_done"})
 
-            # initial batch
             read_all_open()
 
             while True:
@@ -137,7 +134,6 @@ def start_tail_thread(fp: str, q: "queue.Queue[dict]", *, poll_s: float = 0.25) 
                         q.put(obj)
                     continue
 
-                # EOF: poll
                 time.sleep(max(0.05, float(poll_s)))
 
                 try:
@@ -145,7 +141,6 @@ def start_tail_thread(fp: str, q: "queue.Queue[dict]", *, poll_s: float = 0.25) 
                 except FileNotFoundError:
                     continue
 
-                # rotation
                 if st.st_ino != inode:
                     try:
                         f.close()
@@ -157,7 +152,6 @@ def start_tail_thread(fp: str, q: "queue.Queue[dict]", *, poll_s: float = 0.25) 
                     read_all_open()
                     continue
 
-                # truncate
                 cur = f.tell()
                 if st.st_size < cur:
                     q.put({"_event": "reset"})
@@ -175,69 +169,139 @@ def start_tail_thread(fp: str, q: "queue.Queue[dict]", *, poll_s: float = 0.25) 
 
 
 # ============================================================
-# Plot/UI
+# Plot helpers
 # ============================================================
 
-def _status(series: PhenoSeries, keys: List[str]) -> str:
+DEFAULT_GROUPS = {
+    "body_life": ["M_target", "child_M", "A_mature"],
+    "reproduction": ["M_repro_min", "E_repro_min", "repro_rate"],
+    "trophic": ["diet", "predation"],
+}
+
+
+def _parse_key_list(s: str) -> List[str]:
+    return [k.strip() for k in s.split(",") if k.strip()]
+
+
+def _status(series: PhenoSeries, groups: Dict[str, List[str]]) -> str:
     if not series.t:
         return "no samples yet"
+
     i = -1
     t = series.t[i]
     aid = series.agent_id[i]
     n = len(series.t)
+
     lines = [f"t={t:.2f}  samples={n}  last_agent_id={aid}"]
-    for k in keys[:8]:
+
+    focus_keys = (
+        groups.get("body_life", [])[:2]
+        + groups.get("reproduction", [])[:2]
+        + groups.get("trophic", [])[:2]
+    )
+
+    seen = set()
+    for k in focus_keys:
+        if k in seen:
+            continue
+        seen.add(k)
         v = series.p50.get(k, [float("nan")])[-1]
         lines.append(f"{k}: p50={v:.3f}" if np.isfinite(v) else f"{k}: p50=nan")
+
     return "\n".join(lines)
 
 
-def run_ui_loop(fig, ax, series: PhenoSeries, keys: List[str], args, Q: "queue.Queue[dict]"):
-    last_redraw = 0.0
-    redraw_min_dt = 0.20
-    max_items_per_tick = 2000
+def _available_numeric_keys(ph: Dict[str, Any]) -> List[str]:
+    kk: List[str] = []
+    for k, v in ph.items():
+        try:
+            float(v)
+            kk.append(k)
+        except Exception:
+            pass
+    return kk
 
-    def pick_keys_from_ph(ph: Dict[str, Any]) -> List[str]:
-        if args.keys.strip():
-            return [k.strip() for k in args.keys.split(",") if k.strip()]
-        kk: List[str] = []
-        for k, v in ph.items():
-            try:
-                float(v)
-                kk.append(k)
-            except Exception:
-                pass
-        if int(args.max_keys) > 0:
-            kk = kk[: int(args.max_keys)]
-        return kk
+
+def _filter_existing(keys: List[str], available: List[str]) -> List[str]:
+    avail = set(available)
+    return [k for k in keys if k in avail]
+
+
+def _plot_group(ax, t: List[float], series: PhenoSeries, keys: List[str], title: str) -> None:
+    ax.clear()
+
+    if not t or not keys:
+        ax.set_title(title)
+        return
+
+    for k in keys:
+        ax.plot(t, series.p50[k], label=f"{k} (p50)")
+        ax.fill_between(t, series.p10[k], series.p90[k], alpha=0.10)
+
+    ax.set_title(title)
+    ax.legend(loc="upper left", fontsize="small", ncol=2)
+
+
+# ============================================================
+# UI
+# ============================================================
+
+def run_ui_loop(fig, axes, series: PhenoSeries, groups: Dict[str, List[str]], args, Q: "queue.Queue[dict]"):
+    ax_body, ax_repr, ax_trophic = axes
+    last_redraw = 0.0
+    redraw_min_dt = float(args.redraw_min_dt)
+    max_items_per_tick = int(args.max_items_per_tick)
+
+    def init_groups_from_ph(ph: Dict[str, Any]) -> None:
+        available = _available_numeric_keys(ph)
+
+        if args.body_keys.strip():
+            groups["body_life"] = _filter_existing(_parse_key_list(args.body_keys), available)
+        else:
+            groups["body_life"] = _filter_existing(DEFAULT_GROUPS["body_life"], available)
+
+        if args.repro_keys.strip():
+            groups["reproduction"] = _filter_existing(_parse_key_list(args.repro_keys), available)
+        else:
+            groups["reproduction"] = _filter_existing(DEFAULT_GROUPS["reproduction"], available)
+
+        if args.trophic_keys.strip():
+            groups["trophic"] = _filter_existing(_parse_key_list(args.trophic_keys), available)
+        else:
+            groups["trophic"] = _filter_existing(DEFAULT_GROUPS["trophic"], available)
 
     def redraw() -> None:
-        ax.clear()
-
         if not series.t:
-            ax.set_title("Live phenotype cross-section (waiting for samples)")
+            ax_body.clear()
+            ax_repr.clear()
+            ax_trophic.clear()
+            ax_body.set_title("Live phenotype trends (waiting for samples)")
             fig.canvas.draw_idle()
             return
 
         t = series.t
-        for k in keys:
-            ax.plot(t, series.p50[k], label=f"{k} (p50)")
-            ax.fill_between(t, series.p10[k], series.p90[k], alpha=0.10)
 
-        ax.set_xlabel("t")
-        ax.set_ylabel("phenotype (rolling percentiles over samples)")
-        ax.legend(loc="upper left", fontsize="small", ncol=2)
+        _plot_group(ax_body, t, series, groups.get("body_life", []), "Body / life history")
+        _plot_group(ax_repr, t, series, groups.get("reproduction", []), "Reproduction strategy")
+        _plot_group(ax_trophic, t, series, groups.get("trophic", []), "Trophic strategy")
 
-        ax.text(
-            0.01, 0.02, _status(series, keys),
-            transform=ax.transAxes,
+        ax_trophic.set_xlabel("t")
+        ax_body.set_ylabel("value")
+        ax_repr.set_ylabel("value")
+        ax_trophic.set_ylabel("value")
+
+        ax_body.text(
+            0.01,
+            0.02,
+            _status(series, groups),
+            transform=ax_body.transAxes,
             fontsize="small",
             va="bottom",
             ha="left",
             bbox=dict(boxstyle="round", alpha=float(args.alpha_box)),
         )
 
-        fig.suptitle("Live phenotype cross-section (sample.jsonl)")
+        fig.suptitle("Live phenotype trends from sampled agents")
         fig.canvas.draw_idle()
 
     def on_timer() -> None:
@@ -246,6 +310,12 @@ def run_ui_loop(fig, ax, series: PhenoSeries, keys: List[str], args, Q: "queue.Q
         changed = False
         batch_done = False
         did_reset = False
+
+        all_keys = (
+            groups.get("body_life", [])
+            + groups.get("reproduction", [])
+            + groups.get("trophic", [])
+        )
 
         for _ in range(max_items_per_tick):
             try:
@@ -256,9 +326,10 @@ def run_ui_loop(fig, ax, series: PhenoSeries, keys: List[str], args, Q: "queue.Q
             ev = obj.get("_event")
             if ev == "reset":
                 series.reset()
+                groups["body_life"] = []
+                groups["reproduction"] = []
+                groups["trophic"] = []
                 did_reset = True
-                # Om du vill auto-picka keys igen efter reset: keys.clear()
-                # keys.clear()
                 continue
             if ev == "batch_done":
                 batch_done = True
@@ -271,41 +342,40 @@ def run_ui_loop(fig, ax, series: PhenoSeries, keys: List[str], args, Q: "queue.Q
             if not isinstance(ph, dict):
                 continue
 
-            if not keys:
-                keys[:] = pick_keys_from_ph(ph)
-                for k in keys:
+            if not any(groups.values()):
+                init_groups_from_ph(ph)
+                all_keys = (
+                    groups.get("body_life", [])
+                    + groups.get("reproduction", [])
+                    + groups.get("trophic", [])
+                )
+                for k in all_keys:
                     series.ensure_key(k)
 
-            if not keys:
+            if not all_keys:
                 continue
 
-            series.append_sample(obj, keys)
+            series.append_sample(obj, all_keys)
             changed = True
 
         now = time.time()
 
-        # Vid reset vill man ofta uppdatera direkt (även om batch inte är klar)
         if did_reset:
             redraw()
             last_redraw = now
             return
 
-        # Efter batch: rita direkt en gång
         if batch_done:
             redraw()
             last_redraw = now
             return
 
-        # Live: throttla redraw
         if changed and (now - last_redraw) >= redraw_min_dt:
             redraw()
             last_redraw = now
 
-    # initial paint (så du ser att fönstret finns)
     redraw()
-
-    # Viktigt: behåll referensen till timern (annars GC på macOS är vanligt)
-    tmr = fig.canvas.new_timer(interval=50)  # 20 Hz tick
+    tmr = fig.canvas.new_timer(interval=int(args.timer_ms))
     tmr.add_callback(on_timer)
     tmr.start()
     return tmr
@@ -319,40 +389,50 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--fp", default="sample.jsonl")
     ap.add_argument("--poll", type=float, default=0.25)
-    ap.add_argument("--keys", default="")
-    ap.add_argument("--max_keys", type=int, default=6)
+
+    ap.add_argument("--body_keys", default="")
+    ap.add_argument("--repro_keys", default="")
+    ap.add_argument("--trophic_keys", default="")
+
     ap.add_argument("--alpha_box", type=float, default=1.0)
     ap.add_argument("--recompute_every", type=int, default=25)
-    ap.add_argument("--window", type=int, default=2000)  # 0 => full history
+    ap.add_argument("--window", type=int, default=2000)
+    ap.add_argument("--timer_ms", type=int, default=50)
+    ap.add_argument("--redraw_min_dt", type=float, default=0.20)
+    ap.add_argument("--max_items_per_tick", type=int, default=2000)
     args = ap.parse_args()
 
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots(figsize=(11, 6))
+    fig, (ax_body, ax_repr, ax_trophic) = plt.subplots(
+        3, 1, figsize=(11, 9), sharex=True
+    )
 
     series = PhenoSeries(
         recompute_every=int(args.recompute_every),
         window=int(args.window),
     )
-    keys: List[str] = []
+
+    groups: Dict[str, List[str]] = {
+        "body_life": [],
+        "reproduction": [],
+        "trophic": [],
+    }
+
     Q: "queue.Queue[dict]" = queue.Queue()
 
     th = start_tail_thread(str(args.fp), Q, poll_s=float(args.poll))
-    tmr = run_ui_loop(fig, ax, series, keys, args, Q)
+    tmr = run_ui_loop(fig, (ax_body, ax_repr, ax_trophic), series, groups, args, Q)
 
-    # håll starka referenser på fig (för att undvika GC)
-    fig._tail_thread = th         # type: ignore[attr-defined]
-    fig._live_timer = tmr         # type: ignore[attr-defined]
-    fig._series = series          # type: ignore[attr-defined]
-    fig._keys = keys              # type: ignore[attr-defined]
-    fig._queue = Q                # type: ignore[attr-defined]
+    fig._tail_thread = th
+    fig._live_timer = tmr
+    fig._series = series
+    fig._groups = groups
+    fig._queue = Q
 
-    # Set window title
     try:
         fig.canvas.manager.set_window_title("NEP – Pheno Plot")
     except Exception:
         pass
-        
+
     plt.show()
 
 

@@ -1,4 +1,3 @@
-# live_pop_plot_threaded.py
 from __future__ import annotations
 
 import argparse
@@ -11,16 +10,15 @@ from typing import Any, Dict, List, Optional
 
 import queue
 import threading
-
 import math
+
+import numpy as np
+import matplotlib.pyplot as plt
 
 
 # ============================================================
 # Data model
 # ============================================================
-
-PCTS = (10, 25, 75, 90)
-
 
 def _get_first(d: Dict[str, Any], *keys: str, default=float("nan")):
     for k in keys:
@@ -33,6 +31,13 @@ def _get_first(d: Dict[str, Any], *keys: str, default=float("nan")):
 class PopSeries:
     t: List[float] = field(default_factory=list)
     pop: List[int] = field(default_factory=list)
+
+    births_total: List[float] = field(default_factory=list)
+    deaths_total: List[float] = field(default_factory=list)
+
+    births_rate: List[float] = field(default_factory=list)
+    deaths_rate: List[float] = field(default_factory=list)
+    net_rate: List[float] = field(default_factory=list)
 
     # damage (D)
     mean_D: List[float] = field(default_factory=list)
@@ -58,11 +63,20 @@ class PopSeries:
     p75_E: List[float] = field(default_factory=list)
     p90_E: List[float] = field(default_factory=list)
 
-    window: int = 4000  # 0 => keep all
+    # reserve fraction if present
+    mean_R: List[float] = field(default_factory=list)
+
+    window: int = 4000
 
     def reset(self) -> None:
         self.t.clear()
         self.pop.clear()
+
+        self.births_total.clear()
+        self.deaths_total.clear()
+        self.births_rate.clear()
+        self.deaths_rate.clear()
+        self.net_rate.clear()
 
         self.mean_D.clear()
         self.median_D.clear()
@@ -85,22 +99,25 @@ class PopSeries:
         self.p75_E.clear()
         self.p90_E.clear()
 
-    def _append_window(self) -> None:
-        if int(self.window) <= 0:
-            return
+        self.mean_R.clear()
+
+    def _trim(self) -> None:
         w = int(self.window)
-        if len(self.t) <= w:
+        if w <= 0 or len(self.t) <= w:
             return
 
         def trim(xs: List[Any]) -> None:
             xs[:] = xs[-w:]
 
-        trim(self.t)
-        trim(self.pop)
-
-        trim(self.mean_D); trim(self.median_D); trim(self.p10_D); trim(self.p25_D); trim(self.p75_D); trim(self.p90_D)
-        trim(self.mean_M); trim(self.median_M); trim(self.p10_M); trim(self.p25_M); trim(self.p75_M); trim(self.p90_M)
-        trim(self.mean_E); trim(self.median_E); trim(self.p10_E); trim(self.p25_E); trim(self.p75_E); trim(self.p90_E)
+        for xs in [
+            self.t, self.pop,
+            self.births_total, self.deaths_total, self.births_rate, self.deaths_rate, self.net_rate,
+            self.mean_D, self.median_D, self.p10_D, self.p25_D, self.p75_D, self.p90_D,
+            self.mean_M, self.median_M, self.p10_M, self.p25_M, self.p75_M, self.p90_M,
+            self.mean_E, self.median_E, self.p10_E, self.p25_E, self.p75_E, self.p90_E,
+            self.mean_R,
+        ]:
+            trim(xs)
 
     def append_population_event(self, obj: Dict[str, Any]) -> bool:
         if obj.get("event") != "population":
@@ -116,10 +133,34 @@ class PopSeries:
         except Exception:
             return False
 
+        births_tot = float(_get_first(s, "births", "births_total", default=float("nan")))
+        deaths_tot = float(_get_first(s, "deaths", "deaths_total", default=float("nan")))
+
         self.t.append(tt)
         self.pop.append(pp)
+        self.births_total.append(births_tot)
+        self.deaths_total.append(deaths_tot)
 
-        # ---- D ----
+        # rates from cumulative totals
+        if len(self.t) < 2:
+            self.births_rate.append(float("nan"))
+            self.deaths_rate.append(float("nan"))
+            self.net_rate.append(float("nan"))
+        else:
+            dt = self.t[-1] - self.t[-2]
+            if dt > 1e-12 and np.isfinite(births_tot) and np.isfinite(deaths_tot):
+                db = births_tot - self.births_total[-2]
+                dd = deaths_tot - self.deaths_total[-2]
+                br = db / dt
+                dr = dd / dt
+                nr = (db - dd) / dt
+            else:
+                br = dr = nr = float("nan")
+            self.births_rate.append(float(br))
+            self.deaths_rate.append(float(dr))
+            self.net_rate.append(float(nr))
+
+        # D
         self.mean_D.append(float(_get_first(s, "mean_D", default=float("nan"))))
         self.median_D.append(float(_get_first(s, "median_D", "med_D", default=float("nan"))))
         self.p10_D.append(float(_get_first(s, "p10_D", "pct10_D", default=float("nan"))))
@@ -127,7 +168,7 @@ class PopSeries:
         self.p75_D.append(float(_get_first(s, "p75_D", "pct75_D", default=float("nan"))))
         self.p90_D.append(float(_get_first(s, "p90_D", "pct90_D", default=float("nan"))))
 
-        # ---- M ----
+        # M
         self.mean_M.append(float(_get_first(s, "mean_M", default=float("nan"))))
         self.median_M.append(float(_get_first(s, "median_M", "med_M", default=float("nan"))))
         self.p10_M.append(float(_get_first(s, "p10_M", "pct10_M", default=float("nan"))))
@@ -135,7 +176,7 @@ class PopSeries:
         self.p75_M.append(float(_get_first(s, "p75_M", "pct75_M", default=float("nan"))))
         self.p90_M.append(float(_get_first(s, "p90_M", "pct90_M", default=float("nan"))))
 
-        # ---- E ----
+        # E
         self.mean_E.append(float(_get_first(s, "mean_E", default=float("nan"))))
         self.median_E.append(float(_get_first(s, "median_E", "med_E", default=float("nan"))))
         self.p10_E.append(float(_get_first(s, "p10_E", "pct10_E", default=float("nan"))))
@@ -143,7 +184,10 @@ class PopSeries:
         self.p75_E.append(float(_get_first(s, "p75_E", "pct75_E", default=float("nan"))))
         self.p90_E.append(float(_get_first(s, "p90_E", "pct90_E", default=float("nan"))))
 
-        self._append_window()
+        # reserve fraction
+        self.mean_R.append(float(_get_first(s, "mean_R", default=float("nan"))))
+
+        self._trim()
         return True
 
 
@@ -220,7 +264,7 @@ def start_tail_thread(fp: str, q: "queue.Queue[dict]", *, poll_s: float = 0.25) 
 
 
 # ============================================================
-# Plot/UI
+# Plot helpers
 # ============================================================
 
 def _fmt(x: float) -> str:
@@ -236,100 +280,89 @@ def _status(series: PopSeries) -> str:
     return (
         f"t={series.t[i]:.2f}  n={len(series.t)}\n"
         f"pop={series.pop[i]}\n"
-        f"D mean/med={_fmt(series.mean_D[i])}/{_fmt(series.median_D[i])}\n"
-        f"M mean/med={_fmt(series.mean_M[i])}/{_fmt(series.median_M[i])}\n"
-        f"E mean/med={_fmt(series.mean_E[i])}/{_fmt(series.median_E[i])}"
+        f"birth_rate={_fmt(series.births_rate[i])}  death_rate={_fmt(series.deaths_rate[i])}\n"
+        f"D med={_fmt(series.median_D[i])}  M med={_fmt(series.median_M[i])}\n"
+        f"E med={_fmt(series.median_E[i])}  mean_R={_fmt(series.mean_R[i])}"
     )
 
 
-def _plot_stats(ax, t, mean, med, p10, p25, p75, p90, *, label_prefix: str, color: str, mean_lw=2.6, other_lw=1.1, ls="-"):
-    ax.plot(t, mean, label=f"{label_prefix} mean", linewidth=mean_lw, color=color, linestyle=ls)
-    ax.plot(t, med,  label=f"{label_prefix} median", linewidth=other_lw, color=color, linestyle=ls)
-
-    ax.plot(t, p25, label=f"{label_prefix} p25", linewidth=other_lw, color=color, linestyle="--")
-    ax.plot(t, p75, label=f"{label_prefix} p75", linewidth=other_lw, color=color, linestyle="--")
-
-    ax.plot(t, p10, label=f"{label_prefix} p10", linewidth=other_lw, color=color, linestyle=":")
-    ax.plot(t, p90, label=f"{label_prefix} p90", linewidth=other_lw, color=color, linestyle=":")
+def _plot_band(ax, t, p10, p25, p50, p75, p90, *, label: str, color: str):
+    ax.plot(t, p50, label=f"{label} median", linewidth=2.2, color=color)
+    ax.fill_between(t, p25, p75, alpha=0.18, color=color, label=f"{label} p25–p75")
+    ax.fill_between(t, p10, p90, alpha=0.08, color=color, label=f"{label} p10–p90")
 
 
-def run_ui_loop(fig, ax_top, ax_top2, ax_bot, ax_bot2, series: PopSeries, args, Q: "queue.Queue[dict]"):
+# ============================================================
+# UI
+# ============================================================
+
+def run_ui_loop(fig, ax_demo, ax_state, ax_energy, series: PopSeries, args, Q: "queue.Queue[dict]"):
     last_redraw = 0.0
     redraw_min_dt = float(args.redraw_min_dt)
     max_items_per_tick = int(args.max_items_per_tick)
 
-    # user-requested: separate palettes for primary/secondary axes
-    col_primary = getattr(args, "color_primary", "#1f77b4")    # blue-ish
-    col_secondary = getattr(args, "color_secondary", "#d62728") # red-ish
-
     def redraw() -> None:
-        ax_top.clear()
-        ax_top2.clear()
-        ax_bot.clear()
-        ax_bot2.clear()
+        ax_demo.clear()
+        ax_state.clear()
+        ax_energy.clear()
 
         if not series.t:
-            ax_top.set_title("Population (waiting for events)")
+            ax_demo.set_title("Population (waiting for events)")
             fig.canvas.draw_idle()
             return
 
         t = series.t
 
-        # -------------------------
-        # TOP: pop (primary) + damage (secondary)
-        # -------------------------
-        ax_top.plot(t, series.pop, label="pop", linewidth=2.6, color=col_primary)
-        ax_top.set_ylabel("population")
-        ax_top.set_title("Population + Damage")
+        # Panel 1: demography / flow
+        ax_demo.plot(t, series.pop, label="pop", linewidth=2.4)
+        ax_demo.plot(t, series.births_rate, label="births / dt", linestyle="--")
+        ax_demo.plot(t, series.deaths_rate, label="deaths / dt", linestyle="--")
+        ax_demo.plot(t, series.net_rate, label="net / dt", linestyle=":")
+        ax_demo.set_ylabel("population / rate")
+        ax_demo.set_title("Demography and turnover")
+        ax_demo.legend(loc="upper left", fontsize="small")
 
-        _plot_stats(
-            ax_top2, t,
-            series.mean_D, series.median_D,
-            series.p10_D, series.p25_D, series.p75_D, series.p90_D,
-            label_prefix="D", color=col_secondary,
-        )
-        ax_top2.set_ylabel("damage (D)")
-
-        # legends (separate)
-        ax_top.legend(loc="upper left", fontsize="small")
-        ax_top2.legend(loc="upper right", fontsize="small")
-
-        ax_top.text(
+        ax_demo.text(
             0.01,
             0.02,
             _status(series),
-            transform=ax_top.transAxes,
+            transform=ax_demo.transAxes,
             fontsize="small",
             va="bottom",
             ha="left",
             bbox=dict(boxstyle="round", alpha=float(args.alpha_box)),
         )
 
-        # -------------------------
-        # BOTTOM: mass (primary) + energy (secondary)
-        # -------------------------
-        _plot_stats(
-            ax_bot, t,
-            series.mean_M, series.median_M,
-            series.p10_M, series.p25_M, series.p75_M, series.p90_M,
-            label_prefix="M", color=col_primary,
+        # Panel 2: body state
+        _plot_band(
+            ax_state, t,
+            series.p10_D, series.p25_D, series.median_D, series.p75_D, series.p90_D,
+            label="D", color="#d62728"
         )
-        ax_bot.set_ylabel("mass (M)")
-
-        _plot_stats(
-            ax_bot2, t,
-            series.mean_E, series.median_E,
-            series.p10_E, series.p25_E, series.p75_E, series.p90_E,
-            label_prefix="E", color=col_secondary,
+        _plot_band(
+            ax_state, t,
+            series.p10_M, series.p25_M, series.median_M, series.p75_M, series.p90_M,
+            label="M", color="#1f77b4"
         )
-        ax_bot2.set_ylabel("energy (E)")
+        ax_state.set_ylabel("state")
+        ax_state.set_title("Damage and mass")
+        ax_state.legend(loc="upper left", fontsize="small", ncol=2)
 
-        ax_bot.set_xlabel("t")
+        # Panel 3: energy / reserve
+        _plot_band(
+            ax_energy, t,
+            series.p10_E, series.p25_E, series.median_E, series.p75_E, series.p90_E,
+            label="E", color="#2ca02c"
+        )
+        if any(np.isfinite(x) for x in series.mean_R):
+            ax_energy.plot(t, series.mean_R, label="mean_R", color="#9467bd", linestyle="--", linewidth=2.0)
 
-        ax_bot.legend(loc="upper left", fontsize="small")
-        ax_bot2.legend(loc="upper right", fontsize="small")
+        ax_energy.set_ylabel("energy / reserve")
+        ax_energy.set_xlabel("t")
+        ax_energy.set_title("Energy and reserve")
+        ax_energy.legend(loc="upper left", fontsize="small", ncol=2)
 
-        fig.suptitle(f"Live pop plot ({args.fp})")
+        fig.suptitle(f"Live population plot ({args.fp})")
         fig.canvas.draw_idle()
 
     def on_timer() -> None:
@@ -388,29 +421,16 @@ def main() -> None:
     ap.add_argument("--timer_ms", type=int, default=50)
     ap.add_argument("--redraw_min_dt", type=float, default=0.20)
     ap.add_argument("--max_items_per_tick", type=int, default=5000)
-
-    # user: separate primary/secondary palettes
-    ap.add_argument("--color_primary", default="#1f77b4")
-    ap.add_argument("--color_secondary", default="#d62728")
-
     args = ap.parse_args()
 
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots(2, 1, sharex=True, figsize=(11, 7.5))
-    ax_top, ax_bot = ax
-
-    # secondary axes
-    ax_top2 = ax_top.twinx()
-    ax_bot2 = ax_bot.twinx()
+    fig, (ax_demo, ax_state, ax_energy) = plt.subplots(3, 1, sharex=True, figsize=(11, 9))
 
     series = PopSeries(window=int(args.window))
     Q: "queue.Queue[dict]" = queue.Queue()
 
     th = start_tail_thread(str(args.fp), Q, poll_s=float(args.poll))
-    tmr = run_ui_loop(fig, ax_top, ax_top2, ax_bot, ax_bot2, series, args, Q)
+    tmr = run_ui_loop(fig, ax_demo, ax_state, ax_energy, series, args, Q)
 
-    # keep refs alive
     fig._tail_thread = th
     fig._live_timer = tmr
     fig._series = series

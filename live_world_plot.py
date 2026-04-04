@@ -1,4 +1,3 @@
-# live_world_plot.py
 from __future__ import annotations
 
 import argparse
@@ -59,17 +58,19 @@ class WorldSeries:
     # time
     t: List[float] = field(default_factory=list)
 
-    # densities (0..1)
+    # means
     B_mean: List[float] = field(default_factory=list)
-    F_mean: List[float] = field(default_factory=list)
     C_mean: List[float] = field(default_factory=list)
 
     # totals
     B_sum: List[float] = field(default_factory=list)
-    F_sum: List[float] = field(default_factory=list)
     C_sum: List[float] = field(default_factory=list)
+    BC_sum: List[float] = field(default_factory=list)
 
-    # percentiles (B + C only; F percentiles not used)
+    # mix
+    carrion_share: List[float] = field(default_factory=list)
+
+    # percentiles
     B_p10: List[float] = field(default_factory=list)
     B_p50: List[float] = field(default_factory=list)
     B_p90: List[float] = field(default_factory=list)
@@ -78,18 +79,22 @@ class WorldSeries:
     C_p50: List[float] = field(default_factory=list)
     C_p90: List[float] = field(default_factory=list)
 
-    # hazard coverage
-    hazard_frac_0p35: List[float] = field(default_factory=list)
-
     window: int = 4000  # 0 => keep all
 
     def reset(self) -> None:
         self.t.clear()
-        self.B_mean.clear(); self.F_mean.clear(); self.C_mean.clear()
-        self.B_sum.clear();  self.F_sum.clear();  self.C_sum.clear()
-        self.B_p10.clear();  self.B_p50.clear();  self.B_p90.clear()
-        self.C_p10.clear();  self.C_p50.clear();  self.C_p90.clear()
-        self.hazard_frac_0p35.clear()
+        self.B_mean.clear()
+        self.C_mean.clear()
+        self.B_sum.clear()
+        self.C_sum.clear()
+        self.BC_sum.clear()
+        self.carrion_share.clear()
+        self.B_p10.clear()
+        self.B_p50.clear()
+        self.B_p90.clear()
+        self.C_p10.clear()
+        self.C_p50.clear()
+        self.C_p90.clear()
 
     def _trim(self) -> None:
         w = int(self.window)
@@ -100,11 +105,18 @@ class WorldSeries:
             return
         sl = slice(n - w, n)
         self.t[:] = self.t[sl]
-        self.B_mean[:] = self.B_mean[sl]; self.F_mean[:] = self.F_mean[sl]; self.C_mean[:] = self.C_mean[sl]
-        self.B_sum[:]  = self.B_sum[sl];  self.F_sum[:]  = self.F_sum[sl];  self.C_sum[:]  = self.C_sum[sl]
-        self.B_p10[:]  = self.B_p10[sl];  self.B_p50[:]  = self.B_p50[sl];  self.B_p90[:]  = self.B_p90[sl]
-        self.C_p10[:]  = self.C_p10[sl];  self.C_p50[:]  = self.C_p50[sl];  self.C_p90[:]  = self.C_p90[sl]
-        self.hazard_frac_0p35[:] = self.hazard_frac_0p35[sl]
+        self.B_mean[:] = self.B_mean[sl]
+        self.C_mean[:] = self.C_mean[sl]
+        self.B_sum[:] = self.B_sum[sl]
+        self.C_sum[:] = self.C_sum[sl]
+        self.BC_sum[:] = self.BC_sum[sl]
+        self.carrion_share[:] = self.carrion_share[sl]
+        self.B_p10[:] = self.B_p10[sl]
+        self.B_p50[:] = self.B_p50[sl]
+        self.B_p90[:] = self.B_p90[sl]
+        self.C_p10[:] = self.C_p10[sl]
+        self.C_p50[:] = self.C_p50[sl]
+        self.C_p90[:] = self.C_p90[sl]
 
     def append_summary(self, s: Dict[str, Any]) -> bool:
         try:
@@ -112,30 +124,46 @@ class WorldSeries:
         except Exception:
             return False
 
+        B_mean = _f(s, "B", "mean")
+        B_sum = _f(s, "B", "sum")
+        B_p10 = _f(s, "B", "p10")
+        B_p50 = _f(s, "B", "p50")
+        B_p90 = _f(s, "B", "p90")
+
+        C_mean = _f(s, "C", "mean")
+        C_sum = _f(s, "C", "sum")
+        C_p10 = _f(s, "C", "p10")
+        C_p50 = _f(s, "C", "p50")
+        C_p90 = _f(s, "C", "p90")
+
+        BC_sum = B_sum + C_sum
+        carrion_share = (C_sum / BC_sum) if np.isfinite(BC_sum) and BC_sum > 1e-12 else 0.0
+
         self.t.append(tt)
 
-        self.B_mean.append(_f(s, "B", "mean"))
-        self.B_sum.append(_f(s, "B", "sum"))
-        self.B_p10.append(_f(s, "B", "p10"))
-        self.B_p50.append(_f(s, "B", "p50"))
-        self.B_p90.append(_f(s, "B", "p90"))
+        self.B_mean.append(B_mean)
+        self.C_mean.append(C_mean)
 
-        self.F_mean.append(_f(s, "F", "mean"))
-        self.F_sum.append(_f(s, "F", "sum"))
-        self.hazard_frac_0p35.append(_f(s, "F", "hazard_frac_0p35"))
+        self.B_sum.append(B_sum)
+        self.C_sum.append(C_sum)
+        self.BC_sum.append(BC_sum)
 
-        self.C_mean.append(_f(s, "C", "mean"))
-        self.C_sum.append(_f(s, "C", "sum"))
-        self.C_p10.append(_f(s, "C", "p10"))
-        self.C_p50.append(_f(s, "C", "p50"))
-        self.C_p90.append(_f(s, "C", "p90"))
+        self.carrion_share.append(carrion_share)
+
+        self.B_p10.append(B_p10)
+        self.B_p50.append(B_p50)
+        self.B_p90.append(B_p90)
+
+        self.C_p10.append(C_p10)
+        self.C_p50.append(C_p50)
+        self.C_p90.append(C_p90)
 
         self._trim()
         return True
 
 
 # ============================================================
-# Tail thread (same as pop/pheno)
+# Tail thread
 # ============================================================
 
 def start_tail_thread(fp: str, q: "queue.Queue[dict]", *, poll_s: float = 0.25) -> threading.Thread:
@@ -155,7 +183,6 @@ def start_tail_thread(fp: str, q: "queue.Queue[dict]", *, poll_s: float = 0.25) 
                         q.put(obj)
                 q.put({"_event": "batch_done"})
 
-            # initial batch
             read_all_open()
 
             while True:
@@ -173,7 +200,6 @@ def start_tail_thread(fp: str, q: "queue.Queue[dict]", *, poll_s: float = 0.25) 
                 except FileNotFoundError:
                     continue
 
-                # rotation
                 if st.st_ino != inode:
                     f.close()
                     f = open(fp, "r", encoding="utf-8")
@@ -182,7 +208,6 @@ def start_tail_thread(fp: str, q: "queue.Queue[dict]", *, poll_s: float = 0.25) 
                     read_all_open()
                     continue
 
-                # truncate
                 cur = f.tell()
                 if st.st_size < cur:
                     q.put({"_event": "reset"})
@@ -216,13 +241,12 @@ def _status(series: WorldSeries, *, size: int) -> str:
     cells = int(size) * int(size)
 
     Bsum = series.B_sum[i]
-    Fsum = series.F_sum[i]
     Csum = series.C_sum[i]
+    BCsum = series.BC_sum[i]
 
     Bmean = series.B_mean[i]
-    Fmean = series.F_mean[i]
     Cmean = series.C_mean[i]
-    hfrac = series.hazard_frac_0p35[i]
+    carrion_share = series.carrion_share[i]
 
     meanB_from_sum = (Bsum / cells) if (cells > 0 and np.isfinite(Bsum)) else float("nan")
     meanC_from_sum = (Csum / cells) if (cells > 0 and np.isfinite(Csum)) else float("nan")
@@ -230,48 +254,63 @@ def _status(series: WorldSeries, *, size: int) -> str:
     return "\n".join(
         [
             f"t={t:.2f}  n={len(series.t)}  cells={cells}",
-            f"B_sum={_fmt(Bsum,2)}  B_mean={_fmt(Bmean,4)}  B_sum/cells={_fmt(meanB_from_sum,4)}",
-            f"F_sum={_fmt(Fsum,2)}  F_mean={_fmt(Fmean,4)}  hazard_frac≥0.35={_fmt(hfrac,4)}",
-            f"C_sum={_fmt(Csum,4)}  C_mean={_fmt(Cmean,6)}  C_sum/cells={_fmt(meanC_from_sum,6)}",
+            f"B_sum={_fmt(Bsum,2)}  B_mean={_fmt(Bmean,6)}  B_sum/cells={_fmt(meanB_from_sum,6)}",
+            f"C_sum={_fmt(Csum,2)}  C_mean={_fmt(Cmean,6)}  C_sum/cells={_fmt(meanC_from_sum,6)}",
+            f"B+C={_fmt(BCsum,2)}  carrion_share={_fmt(carrion_share,4)}",
         ]
     )
 
 
-def run_ui_loop(fig, ax_kpi, ax_h, txt, series: WorldSeries, args, Q: "queue.Queue[dict]"):
+def run_ui_loop(fig, ax_pool, ax_mix, ax_dist, txt, series: WorldSeries, args, Q: "queue.Queue[dict]"):
     last_redraw = 0.0
     redraw_min_dt = float(args.redraw_min_dt)
     max_items_per_tick = int(args.max_items_per_tick)
     show_percentiles = not bool(args.no_percentiles)
 
     def redraw() -> None:
-        ax_kpi.clear()
-        ax_h.clear()
+        ax_pool.clear()
+        ax_mix.clear()
+        ax_dist.clear()
 
         if not series.t:
-            ax_kpi.set_title("World (waiting for events)")
+            ax_pool.set_title("World (waiting for events)")
             txt.set_text(_status(series, size=int(args.size)))
             fig.canvas.draw_idle()
             return
 
         t = series.t
 
-        # KPI panel
-        ax_kpi.plot(t, series.B_mean, label="B_mean")
-        ax_kpi.plot(t, series.F_mean, label="F_mean")
+        # Panel 1: resource pools
+        ax_pool.plot(t, series.B_sum, label="B_sum")
+        ax_pool.plot(t, series.C_sum, label="C_sum")
+        ax_pool.plot(t, series.BC_sum, label="B_sum + C_sum", linestyle="--")
+        ax_pool.set_ylabel("total mass")
+        ax_pool.set_title("World resource pools")
+        ax_pool.legend(loc="upper left", fontsize="small")
+
+        # Panel 2: ecological mix
+        ax_mix.plot(t, series.carrion_share, label="carrion_share = C / (B + C)")
+        ax_mix.set_ylabel("share")
+        ax_mix.set_ylim(0.0, 1.0)
+        ax_mix.set_title("Ecological mix")
+        ax_mix.legend(loc="upper left", fontsize="small")
+
+        # Panel 3: field distributions / means
+        ax_dist.plot(t, series.B_mean, label="B_mean")
+        ax_dist.plot(t, series.C_mean, label="C_mean")
+
         if show_percentiles:
-            ax_kpi.plot(t, series.B_p10, linestyle=":", label="B_p10")
-            ax_kpi.plot(t, series.B_p50, linestyle=":", label="B_p50")
-            ax_kpi.plot(t, series.B_p90, linestyle=":", label="B_p90")
+            ax_dist.plot(t, series.B_p10, linestyle=":", label="B_p10")
+            ax_dist.plot(t, series.B_p50, linestyle=":", label="B_p50")
+            ax_dist.plot(t, series.B_p90, linestyle=":", label="B_p90")
+            ax_dist.plot(t, series.C_p10, linestyle="--", label="C_p10")
+            ax_dist.plot(t, series.C_p50, linestyle="--", label="C_p50")
+            ax_dist.plot(t, series.C_p90, linestyle="--", label="C_p90")
 
-        ax_kpi.set_ylabel("mean density (0..1)")
-        ax_kpi.set_title("World: KPI (densities)")
-        ax_kpi.legend(loc="upper left", fontsize="small")
-
-        # hazard panel
-        ax_h.plot(t, series.hazard_frac_0p35, linestyle=":", label="hazard_frac≥0.35")
-        ax_h.set_ylabel("hazard frac")
-        ax_h.set_xlabel("t")
-        ax_h.legend(loc="upper left", fontsize="small")
+        ax_dist.set_ylabel("density")
+        ax_dist.set_xlabel("t")
+        ax_dist.set_title("Field means and percentiles")
+        ax_dist.legend(loc="upper left", fontsize="small", ncol=2)
 
         txt.set_text(_status(series, size=int(args.size)))
         fig.suptitle(f"Live world plot ({args.fp})")
@@ -339,16 +378,17 @@ def main() -> None:
     ap.add_argument("--max_items_per_tick", type=int, default=5000)
     args = ap.parse_args()
 
-    fig = plt.figure(figsize=(10, 7))
-    gs = fig.add_gridspec(2, 1, height_ratios=[4, 1], hspace=0.15)
-    ax_kpi = fig.add_subplot(gs[0, 0])
-    ax_h = fig.add_subplot(gs[1, 0], sharex=ax_kpi)
+    fig = plt.figure(figsize=(10, 9))
+    gs = fig.add_gridspec(3, 1, height_ratios=[3, 1.5, 2.5], hspace=0.22)
+    ax_pool = fig.add_subplot(gs[0, 0])
+    ax_mix = fig.add_subplot(gs[1, 0], sharex=ax_pool)
+    ax_dist = fig.add_subplot(gs[2, 0], sharex=ax_pool)
 
-    txt = ax_kpi.text(
+    txt = ax_pool.text(
         0.01,
         0.02,
         "",
-        transform=ax_kpi.transAxes,
+        transform=ax_pool.transAxes,
         fontsize="small",
         va="bottom",
         ha="left",
@@ -359,20 +399,18 @@ def main() -> None:
     Q: "queue.Queue[dict]" = queue.Queue()
 
     th = start_tail_thread(str(args.fp), Q, poll_s=float(args.poll))
-    tmr = run_ui_loop(fig, ax_kpi, ax_h, txt, series, args, Q)
+    tmr = run_ui_loop(fig, ax_pool, ax_mix, ax_dist, txt, series, args, Q)
 
-    # håll referenser vid liv (macOS/backends kan annars GC:a timers)
     fig._tail_thread = th
     fig._live_timer = tmr
     fig._series = series
 
-    # Set window title
     try:
         fig.canvas.manager.set_window_title("NEP – World Plot")
     except Exception:
-        pass    
+        pass
 
-    plt.show()  # blockar => fönstret lever
+    plt.show()
 
 
 if __name__ == "__main__":

@@ -367,17 +367,24 @@ class WorldViewer:
 
                 sig_B = float(accB[i]) if accB is not None else 0.0
                 sig_C = float(accC[i]) if accC is not None else 0.0
-                sig   = max(sig_B, sig_C)
+
+                if not math.isfinite(sig_B):
+                    sig_B = 0.0
+                if not math.isfinite(sig_C):
+                    sig_C = 0.0
+
+                sig = max(sig_B, sig_C)
 
                 if sig < 0.02:
                     color = (60, 80, 60, 25)
                 else:
-                    alpha = int(40 + 160 * min(sig, 1.0))
+                    sig_clamped = max(0.0, min(sig, 1.0))
+                    alpha = int(40 + 160 * sig_clamped)
                     if sig_B >= sig_C:
-                        g = int(80 + 175 * sig_B)
+                        g = int(80 + 175 * max(0.0, min(sig_B, 1.0)))
                         color = (20, min(255, g), 30, alpha)
                     else:
-                        gb = int(80 + 175 * sig_C)
+                        gb = int(80 + 175 * max(0.0, min(sig_C, 1.0)))
                         color = (20, min(255, gb), min(255, gb), alpha)
 
                 pygame.draw.line(ray_surf, color, (px, py), (int(ex), int(ey)), 1)

@@ -289,13 +289,30 @@ class Population:
         E = np.fromiter((float(a.body.E_total()) for a in alive), dtype=np.float64, count=pop_n)
         D = np.fromiter((float(a.body.D) for a in alive),       dtype=np.float64, count=pop_n)
         M = np.fromiter((float(a.body.M) for a in alive),       dtype=np.float64, count=pop_n)
+        G = np.fromiter((float(getattr(a.body, "gest_M", 0.0)) for a in alive), dtype=np.float64, count=pop_n)
+        R = np.fromiter(
+            (
+                float(a.body.E_total()) / max(float(a.body.E_cap()), 1e-12)
+                for a in alive
+            ),
+            dtype=np.float64,
+            count=pop_n,
+        )
     
         sE = _stats_1d(E)
         sD = _stats_1d(D)
         sM = _stats_1d(M)
+        sR = _stats_1d(R)
+
+        M_sum = float(np.nansum(M)) if pop_n > 0 else 0.0
+        gest_M_sum = float(np.nansum(G)) if pop_n > 0 else 0.0
+        E_store_sum = float(np.nansum(E)) if pop_n > 0 else 0.0
+        e_body = float(getattr(self.AP, "E_body_J_per_kg", 0.0))
+        E_body_equiv = e_body * M_sum
+        E_gest_equiv = e_body * gest_M_sum
     
         # Backward compatible: mean_* som tidigare
-        # Nya fält: median_* och pXX_*
+        # Nya fält: median_* och pXX_* + mass/energy ledgers.
         payload = records.population_record(
             t=t,
             pop_n=pop_n,
@@ -305,6 +322,7 @@ class Population:
             mean_E=sE["mean"],
             mean_D=sD["mean"],
             mean_M=sM["mean"],
+            mean_R=sR["mean"],
         
             median_E=sE["median"],
             p10_E=sE["p10"],
@@ -324,6 +342,14 @@ class Population:
             p75_M=sM["p75"],
             p90_M=sM["p90"],
         )
+        if isinstance(payload, dict):
+            payload.update({
+                "M_sum": float(M_sum),
+                "gest_M_sum": float(gest_M_sum),
+                "E_store_sum": float(E_store_sum),
+                "E_body_equiv": float(E_body_equiv),
+                "E_gest_equiv": float(E_gest_equiv),
+            })
     
         self._emit("population", t, payload)
 
@@ -331,11 +357,18 @@ class Population:
         self._emit("sample", t, records.sample_record(t, a, pop_n=len(self.agents)))
 
     def _emit_world(self, t: float) -> None:
-        self._emit(
-            "world",
-            t,
-            records.world_record(t, self.world, with_percentiles=self.world_log_with_percentiles),
-        )
+        payload = records.world_record(t, self.world, with_percentiles=self.world_log_with_percentiles)
+        if isinstance(payload, dict):
+            B_sum = float(np.nansum(self.world.B))
+            C_sum = float(np.nansum(self.world.C))
+            e_plant = float(getattr(self.AP, "E_plant_J_per_kg", getattr(self.AP, "E_bio_J_per_kg", 0.0)))
+            e_carc = float(getattr(self.AP, "E_carcass_J_per_kg", 0.0))
+            payload.update({
+                "E_B": e_plant * B_sum,
+                "E_C": e_carc * C_sum,
+                "BC_sum": B_sum + C_sum,
+            })
+        self._emit("world", t, payload)
 
     def _emit_step_if_tracked(self, t: float, a: Agent, B0: float, C0: float) -> None:
         if self.track_step_id is None:
