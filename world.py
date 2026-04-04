@@ -92,6 +92,10 @@ class WorldParams:
     # --- Perception scaling ---
     C_sense_K: float = 5e-4
 
+    # Energy densities for open-system ledger diagnostics (J/kg)
+    E_plant_J_per_kg: float = 4.0e6
+    E_carcass_J_per_kg: float = 7.0e6
+
 
 # -------------------------
 # World
@@ -112,6 +116,14 @@ class World:
 
         # time
         self.t = 0.0
+        self.last_flux = {
+            "dM_growth": 0.0,
+            "dM_wither": 0.0,
+            "dM_decay": 0.0,
+            "E_in_growth": 0.0,
+            "E_loss_wither": 0.0,
+            "E_loss_decay": 0.0,
+        }
 
         # Precompute latitudinal profiles (depend only on y)
         ys = np.arange(s, dtype=np.float32)
@@ -283,6 +295,20 @@ class World:
         dC = (-float(P.C_decay) * self.C) + float(P.C_diff) * lapC
         self.C = (self.C + np.float32(dt) * np.float32(dC)).astype(np.float32, copy=False)
         self.C = np.maximum(self.C, 0.0).astype(np.float32, copy=False)
+
+        dM_growth = float(np.sum(np.float64(dt) * np.float64(growth)))
+        dM_wither = float(np.sum(np.float64(dt) * np.float64(wither)))
+        dM_decay = float(np.sum(np.float64(dt) * np.float64(np.maximum(float(P.C_decay) * self.C, 0.0))))
+        e_plant = float(getattr(P, "E_plant_J_per_kg", getattr(P, "E_bio_J_per_kg", 4.0e6)))
+        e_carc = float(getattr(P, "E_carcass_J_per_kg", 7.0e6))
+        self.last_flux = {
+            "dM_growth": max(0.0, dM_growth),
+            "dM_wither": max(0.0, dM_wither),
+            "dM_decay": max(0.0, dM_decay),
+            "E_in_growth": max(0.0, dM_growth) * e_plant,
+            "E_loss_wither": max(0.0, dM_wither) * e_plant,
+            "E_loss_decay": max(0.0, dM_decay) * e_carc,
+        }
 
         # --- Germination / seeding
         seed_p = float(P.seed_p)

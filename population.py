@@ -310,6 +310,23 @@ class Population:
         e_body = float(getattr(self.AP, "E_body_J_per_kg", 0.0))
         E_body_equiv = e_body * M_sum
         E_gest_equiv = e_body * gest_M_sum
+
+        flow_keys = [
+            "food_bio_kg", "food_carcass_kg", "E_in_bio", "E_in_carcass", "E_in_total",
+            "E_loss_digest_bio", "E_loss_digest_carcass", "E_loss_basal", "E_loss_compute",
+            "E_loss_sense", "E_loss_loco", "E_loss_thermo", "E_loss_gest_overhead",
+            "E_build_growth", "E_build_gestation", "E_loss_repair", "E_from_catabolism",
+            "E_loss_catabolism", "dM_growth", "dM_gestation", "dM_catabolism",
+        ]
+        flow_sums = {k: 0.0 for k in flow_keys}
+        for a in alive:
+            fl = getattr(getattr(a, "body", None), "last_flux", None)
+            if isinstance(fl, dict):
+                for k in flow_keys:
+                    try:
+                        flow_sums[k] += float(fl.get(k, 0.0))
+                    except Exception:
+                        pass
     
         # Backward compatible: mean_* som tidigare
         # Nya fält: median_* och pXX_* + mass/energy ledgers.
@@ -349,6 +366,7 @@ class Population:
                 "E_store_sum": float(E_store_sum),
                 "E_body_equiv": float(E_body_equiv),
                 "E_gest_equiv": float(E_gest_equiv),
+                **{k: float(v) for k, v in flow_sums.items()},
             })
     
         self._emit("population", t, payload)
@@ -363,10 +381,19 @@ class Population:
             C_sum = float(np.nansum(self.world.C))
             e_plant = float(getattr(self.AP, "E_plant_J_per_kg", getattr(self.AP, "E_bio_J_per_kg", 0.0)))
             e_carc = float(getattr(self.AP, "E_carcass_J_per_kg", 0.0))
+            wf = getattr(self.world, "last_flux", {})
             payload.update({
                 "E_B": e_plant * B_sum,
                 "E_C": e_carc * C_sum,
                 "BC_sum": B_sum + C_sum,
+                "M_B": B_sum,
+                "M_C": C_sum,
+                "E_in_growth": float(wf.get("E_in_growth", 0.0)),
+                "E_loss_wither": float(wf.get("E_loss_wither", 0.0)),
+                "E_loss_decay": float(wf.get("E_loss_decay", 0.0)),
+                "dM_growth": float(wf.get("dM_growth", 0.0)),
+                "dM_wither": float(wf.get("dM_wither", 0.0)),
+                "dM_decay": float(wf.get("dM_decay", 0.0)),
             })
         self._emit("world", t, payload)
 

@@ -130,9 +130,17 @@ class AgentParams:
     eat_rate: float = 1e-4  # kg/s
 
     # Energy densities (J/kg)
+    # E_bio_J_per_kg behålls som bakåtkompatibelt alias för växtbiomassa.
     E_bio_J_per_kg: float = 4.0e6
+    E_plant_J_per_kg: float = 4.0e6
     E_carcass_J_per_kg: float = 7.0e6
     E_body_J_per_kg: float = 7.0e6
+
+    # Conversion efficiencies
+    digest_eff_plant: float = 0.55
+    digest_eff_carcass: float = 0.75
+    anabolism_eff: float = 0.70
+    catabolism_eff: float = 0.90
 
     # Energy storage capacity (J/kg)
     E_cap_per_M: float = 3.0e5
@@ -277,11 +285,13 @@ class AgentParams:
     birth_energy_eff: float = 0.70
 
     # Aktiv tillväxt mot M_target.
-    # growth_rate_per_s: kg/s tillväxt (nå M_target på ~100s från nyfödd)
-    # growth_E_per_kg: anabolisk byggkostnad — INTE energidensitet i vävnad.
-    #   Samma princip som gestation_E_per_kg: metaboliskt arbete, inte lagrat innehåll.
-    growth_rate_per_s: float = 0.008    # 0.008 kg/s → ~100s till vuxen storlek
-    growth_E_per_kg:   float = 10_000.0 # J/kg (samma som gestation_E_per_kg)
+    # Juvenil somatisk tillväxt mot M_target.
+    # Viktigt efter energikonsolideringen: tillväxt får bara ske hos omogna
+    # individer och bara när reservgraden är tillräckligt hög. Annars driver
+    # modellen in i en growth→catabolism-spiral direkt från warm start.
+    growth_rate_per_s: float = 0.008
+    growth_R_min: float = 0.65   # ingen aktiv tillväxt under denna reservgrad
+    growth_R_full: float = 0.90  # full tillväxthastighet först här
 
     # Gestationstillväxthastighet (kg/s fetal vävnad per sekund).
     # 0.004 kg/s → 50s för ett 0.2 kg foster (var 0.002 = 100s).
@@ -333,6 +343,7 @@ class Body:
 
     # energy ledger diagnostics (per-individual)
     last_ledger: dict | None = None
+    last_flux: dict | None = None
     ledger_steps: int = 0
     ledger_bad_steps: int = 0
     ledger_max_abs: float = 0.0
@@ -357,6 +368,13 @@ class Body:
     def E_cap(self) -> float:
         M = self.M
         return self.AP.E_cap_per_M * (M if M > 1e-9 else 1e-9)
+
+    def reserve_frac(self) -> float:
+        Ecap = self.E_cap()
+        if Ecap <= 1e-9:
+            return 0.0
+        r = self.E_total() / Ecap
+        return 0.0 if r < 0.0 else 1.0 if r > 1.0 else r
 
     def hunger(self) -> float:
         Et   = self.E_total()
@@ -607,9 +625,13 @@ class Body:
         # Alla dessa parametrar är konstanta under agentens liv.
         # ---------------------------------------------------------
         AP = self.AP
-        _E_bio        = float(AP.E_bio_J_per_kg)
+        _E_bio        = float(getattr(AP, 'E_plant_J_per_kg', AP.E_bio_J_per_kg))
         _E_carcass    = float(AP.E_carcass_J_per_kg)
         _E_body       = float(AP.E_body_J_per_kg)
+        _dig_eff_bio  = float(getattr(AP, 'digest_eff_plant', 1.0))
+        _dig_eff_car  = float(getattr(AP, 'digest_eff_carcass', 1.0))
+        _ana_eff      = max(1e-9, float(getattr(AP, 'anabolism_eff', 1.0)))
+        _cat_eff      = max(0.0, float(getattr(AP, 'catabolism_eff', 1.0)))
         _E_cap_per_M  = float(AP.E_cap_per_M)
         _k_basal      = float(AP.k_basal)
         _compute_cost = float(AP.compute_cost)
@@ -631,7 +653,6 @@ class Body:
         _gest_burden  = float(getattr(AP, "gestation_mass_burden", 0.0))
         _gest_over    = float(getattr(AP, "gestation_P_overhead_per_kg", 0.0))
         _gest_rate    = float(AP.gestation_growth_kg_per_s)
-        _gest_E_kg    = float(AP.gestation_E_per_kg)
         _k_damage     = float(getattr(AP, "k_damage", 0.02))
         _k_age0       = float(AP.k_age0)
         _k_age1       = float(AP.k_age1)
@@ -644,9 +665,9 @@ class Body:
         _wear_aE      = float(AP.wear_aE)
         _wear_aD      = float(AP.wear_aD)
         _growth_rate  = float(AP.growth_rate_per_s)
-        _growth_E_kg  = float(AP.growth_E_per_kg)
         # M_target: genetiskt bestämd vuxenmassa från phenotype
         _M_target     = float(getattr(pheno, "M_target", float(AP.M0)))
+        _build_E_kg   = _E_body / _ana_eff
     
         # ---------------------------------------------------------
         # (1) Intake -> buffers (up to cap), surplus -> mass
@@ -665,7 +686,13 @@ class Body:
         herb_eff  = (1.0 - _diet) ** 0.7
         scav_eff  = _diet ** 0.7
 
-        E_in = m_bio * _E_bio * herb_eff + m_car * _E_carcass * scav_eff
+        E_in_gross_bio = m_bio * _E_bio * herb_eff
+        E_in_gross_car = m_car * _E_carcass * scav_eff
+        E_in_bio = E_in_gross_bio * _dig_eff_bio
+        E_in_car = E_in_gross_car * _dig_eff_car
+        E_loss_digest_bio = max(0.0, E_in_gross_bio - E_in_bio)
+        E_loss_digest_car = max(0.0, E_in_gross_car - E_in_car)
+        E_in = E_in_bio + E_in_car
 
         Et0 = float(self.E_total())
         Ecap0 = _E_cap_per_M * max(1e-9, float(self.M))
@@ -745,7 +772,7 @@ class Body:
                 dM_want = min(_gest_rate * dt, M_tgt - M_cur)
 
                 if dM_want > 0.0:
-                    E_need = dM_want * _gest_E_kg
+                    E_need = dM_want * _build_E_kg
     
                     # pay from buffers
                     paid1 = float(self.take_energy(E_need))
@@ -755,12 +782,12 @@ class Body:
                     if deficit_g > 0.0:
                         free = max(0.0, float(self.M) - _M_min)
 
-                        want_cat    = deficit_g / _E_body
+                        want_cat    = deficit_g / max(_cat_eff * _E_body, 1e-12)
                         dM_cat_gest = min(want_cat, free)
 
                         if dM_cat_gest > 0.0:
                             self.M -= dM_cat_gest
-                            E_from_M_gest = dM_cat_gest * _E_body
+                            E_from_M_gest = dM_cat_gest * _E_body * _cat_eff
                             self.E_fast += E_from_M_gest / WF
 
                         paid2 = float(self.take_energy(deficit_g))
@@ -769,23 +796,37 @@ class Body:
                     out_gest_build = paid_total
 
                     # Massa byggd = betald energi / byggkostnad per kg.
-                    dM_gest = paid_total / _gest_E_kg
+                    dM_gest = paid_total / _build_E_kg
                     if dM_gest > 0.0:
                         self.gest_M = M_cur + dM_gest
                         self.gest_E_J = float(self.gest_E_J) + paid_total
     
         # ---------------------------------------------------------
-        # (2C.5) Aktiv tillväxt mot M_target
-        # Tillväxt är genetiskt programmerad — en ung agent försöker alltid växa.
-        # Energin tas ur budgeten precis som metabolism.
-        # Om energin inte räcker: tillväxten skalas proportionellt (svält = långsammare tillväxt).
+        # (2C.5) Aktiv juvenil tillväxt mot M_target
+        # Efter energikonsolideringen får tillväxt inte vara ett konstant drag
+        # hos alla individer under M_target; det dödar warm-startade vuxna som
+        # försöker "växa ikapp" genom akut katabolism. Därför krävs nu både:
+        #   (a) omogen ålder, och
+        #   (b) tillräcklig energireserv.
+        # Reservgaten är mjuk mellan growth_R_min och growth_R_full.
         # ---------------------------------------------------------
         out_growth = 0.0
         dM_growth_want = 0.0
-        if float(self.M) < _M_target:
+        r_now = self.reserve_frac()
+        gR0 = float(getattr(AP, 'growth_R_min', 0.65))
+        gR1 = max(gR0 + 1e-9, float(getattr(AP, 'growth_R_full', 0.90)))
+        if r_now <= gR0:
+            growth_gate = 0.0
+        elif r_now >= gR1:
+            growth_gate = 1.0
+        else:
+            growth_gate = (r_now - gR0) / (gR1 - gR0)
+
+        juvenile = float(age_s) < float(pheno.A_mature)
+        if juvenile and float(self.M) < _M_target and growth_gate > 0.0:
             M_deficit      = _M_target - float(self.M)
-            dM_growth_want = min(_growth_rate * dt, M_deficit)
-            out_growth     = dM_growth_want * _growth_E_kg  # anabolisk kostnad, ej energidensitet
+            dM_growth_want = min(_growth_rate * dt * growth_gate, M_deficit)
+            out_growth     = dM_growth_want * _build_E_kg
 
         # ---------------------------------------------------------
         # (2D) Pay drains ONCE
@@ -814,13 +855,13 @@ class Body:
         paid2 = 0.0
     
         if deficit > 0.0:
-            want_cat = deficit / _E_body
+            want_cat = deficit / max(_cat_eff * _E_body, 1e-12)
             free     = max(0.0, float(self.M) - _M_min)
             dM_cat   = min(want_cat, free)
 
             if dM_cat > 0.0:
                 self.M   -= dM_cat
-                E_from_M  = dM_cat * _E_body
+                E_from_M  = dM_cat * _E_body * _cat_eff
                 self.E_fast += E_from_M / WF
 
             paid2      = float(self.take_energy(deficit))
@@ -1021,6 +1062,12 @@ class Body:
     
             "E_before": E_before,
             "E_in": E_in,
+            "E_in_bio": E_in_bio,
+            "E_in_carcass": E_in_car,
+            "E_in_gross_bio": E_in_gross_bio,
+            "E_in_gross_carcass": E_in_gross_car,
+            "E_loss_digest_bio": E_loss_digest_bio,
+            "E_loss_digest_carcass": E_loss_digest_car,
             "E_store": dE_store,
             "E_to_M": E_to_M,
     
@@ -1053,6 +1100,32 @@ class Body:
             "dM_cat_gest": dM_cat_gest,
         }
     
+        self.last_flux = {
+            "food_bio_kg": float(m_bio),
+            "food_carcass_kg": float(m_car),
+            "E_in_bio": float(E_in_bio),
+            "E_in_carcass": float(E_in_car),
+            "E_in_total": float(E_in),
+            "E_loss_digest_bio": float(E_loss_digest_bio),
+            "E_loss_digest_carcass": float(E_loss_digest_car),
+            "E_loss_basal": float(out_basal),
+            "E_loss_compute": float(out_compute),
+            "E_loss_sense": float(out_sense),
+            "E_loss_loco": float(out_loco),
+            "E_loss_thermo": float(out_thermo),
+            "E_loss_gest_overhead": float(out_gest_overhead),
+            "E_build_growth": float(out_growth),
+            "E_build_gestation": float(out_gest_build),
+            "E_loss_repair": float(E_out_repair),
+            "E_from_catabolism": float(E_from_M_total),
+            "E_loss_catabolism": float(max(0.0, dM_cat_total * _E_body - E_from_M_total)),
+            "dM_growth": float(dM_growth_want if 'dM_growth_want' in locals() else 0.0),
+            "reserve_frac": float(r_now if 'r_now' in locals() else self.reserve_frac()),
+            "growth_gate": float(growth_gate if 'growth_gate' in locals() else 0.0),
+            "dM_gestation": float(dM_gest),
+            "dM_catabolism": float(dM_cat_total),
+        }
+
         if drift_abs >= prev_max_abs:
             self.ledger_worst = dict(self.last_ledger)
     
