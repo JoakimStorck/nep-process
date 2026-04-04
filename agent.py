@@ -221,7 +221,9 @@ class AgentParams:
     # k_age0=0 → ingen konstant bakgrund (var 0.200 — dödade unga för snabbt).
     # k_age1=0.001 → dD/dt = 0.001×age_s: vid 250s ger 0.25 D/s → döden.
     k_age0: float = 0.000
-    k_age1: float = 0.0003     # var 0.0002 → måttligt höjt för kortare naturlig livsspan.
+    k_age1: float = 0.0002     # var 0.001 → sänkt: 0.001 gav 0.25 D/s vid ålder 250s vilket är för aggressivt.
+                                # 0.0002 → ren åldringsdöd vid t≈100s, kombinerat med aktivitetsskada ger
+                                # realistisk livslängd 300-500s och ett bredare reproduktivt fönster.
     k_ageD: float = 0.4
 
     # Skadehastighet — grundterm i dD_eff.
@@ -311,16 +313,22 @@ class AgentParams:
     # Kalibrering: 0.002 kg/s × 10 000 J/kg = 20 J/s ≈ 2/3 av basalmetabolismen.
     # Det gör gestation energimässigt rimlig utan att tömma föräldern på sekunder.
     gestation_E_per_kg: float = 10_000.0  # J/kg (var implicit E_body_J_per_kg = 7 000 000)
-    growth_E_per_kg:    float = 10_000.0  # J/kg somatisk tillväxt (metaboliskt arbete, ej lagrad energi)
+    growth_E_per_kg:    float = 10_000.0  # J/kg somatisk tillväxt (samma princip som gestation)
     k_cat_dmg:          float = 1.0       # skada per relativ massförlust via katabolism
 
-    # Svält hämmar reparation via mTOR-hämning.
-    # repair_reserve_full: reservgrad ≥ detta ger 100% reparationskapacitet.
-    # repair_reserve_min:  reservgrad ≤ detta ger 0% reparationskapacitet.
-    # Linjär interpolation däremellan. Sätts högt nog att normala reserver (R~0.40)
-    # är helt opåverkade; mekanismen biter bara vid verklig svält (R < 0.25).
-    repair_reserve_full: float = 0.30   # full repair ovanför denna gräns
-    repair_reserve_min:  float = 0.05   # noll repair under denna gräns
+    # Svält/undervikt som kroppsligt sönderfall (utvecklingsrelaterad depletion).
+    # Kroppen jämförs mot en förväntad massa för åldern:
+    #   M_expected(age) = child_M + u_age * (M_target - child_M)
+    # där u_age = clamp(age / A_mature, 0, 1).
+    # Extra damage byggs bara upp om både strukturell undervikt och låg energireserv
+    # föreligger. Det gör att normalt små juveniler inte straffas, medan svältande
+    # ungar och utmärglade vuxna kan kollapsa.
+    starve_mass_ok_frac: float = 0.85    # ingen extra svältskada om M >= 85% av M_expected
+    starve_mass_crit_frac: float = 0.55  # maximal mass-severity vid M <= 55% av M_expected
+    starve_damage_gain: float = 0.08     # max extra damage/s vid full deprivation
+    starve_adult_boost: float = 1.35     # vuxna straffas hårdare än juveniler vid samma underskott
+    starve_reserve_full: float = 0.30    # ingen starvation-depletion ovanför denna reservgrad
+    starve_reserve_min: float = 0.05     # maximal starvation-depletion under denna reservgrad
 
     # Stokastisk dödsrisk — liten och tillståndsberoende ("olyckor").
     # Biologisk princip: friska agenter har låg olycksrisk; skadade har hög.
@@ -432,23 +440,6 @@ class Body:
     
         # R_max styrs av pheno.repair_capacity, inte AP
         R_max = float(pheno.repair_capacity) * math.exp(-float(AP.repair_W_decay) * float(self.W))
-
-        # Svält hämmar reparation (mTOR-hämning vid låg energireserv).
-        # Ovanför repair_reserve_full: full kapacitet, opåverkad.
-        # Nedanför repair_reserve_min: noll kapacitet.
-        # Däremellan: linjär avtagning.
-        # Effekt: R≥0.30 → skala=1.0 (friska agenter opåverkade),
-        #         R=0.20 → skala=0.60, R=0.10 → skala=0.20, R=0.05 → skala=0.
-        _r     = self.reserve_frac()
-        _rfull = float(getattr(AP, 'repair_reserve_full', 0.30))
-        _rmin  = float(getattr(AP, 'repair_reserve_min',  0.05))
-        if _r >= _rfull:
-            _r_scale = 1.0
-        elif _r <= _rmin:
-            _r_scale = 0.0
-        else:
-            _r_scale = (_r - _rmin) / max(_rfull - _rmin, 1e-9)
-        R_max *= _r_scale
         R_des = max(0.0, float(AP.repair_gain) * float(self.P))
         R_des = min(R_des, R_max)
     
@@ -570,6 +561,14 @@ class Body:
         if level >= 3:
             return float(self.AP.sense_cost_L3)
         return 0.0
+
+    def expected_mass(self, pheno: Phenotype, age_s: float) -> float:
+        """Förväntad kroppsmassa givet utvecklingsstadium."""
+        child_M = max(float(self.AP.M_min), float(getattr(pheno, "child_M", self.AP.M_min)))
+        M_target = max(child_M, float(getattr(pheno, "M_target", float(self.AP.M0))))
+        A_mature = max(1e-9, float(getattr(pheno, "A_mature", 1.0)))
+        u_age = clamp(float(age_s) / A_mature, 0.0, 1.0)
+        return child_M + u_age * (M_target - child_M)
 
     def step(
         self,
@@ -846,6 +845,11 @@ class Body:
         #   (b) tillräcklig energireserv.
         # Reservgaten är mjuk mellan growth_R_min och growth_R_full.
         # Juvenil-gate borttagen: indeterminerad tillväxt mot M_target oavsett ålder.
+        # Biologisk motivering: fiskar, reptiler och de flesta djur växer kontinuerligt
+        # mot ett genetiskt storleksmål under hela livet om energi finns. Den gamla
+        # juvenil-gaten innebar att A_mature (5–20s) var för kort för att hinna växa
+        # från child_M (0.14 kg) till M_target (1+ kg) → permanenta miniagenterna.
+        # Reservgaten (growth_R_min) är det primära skyddet mot okontrollerad tillväxt.
         # ---------------------------------------------------------
         out_growth = 0.0
         dM_growth_want = 0.0
@@ -940,6 +944,33 @@ class Body:
         age_rate = max(0.0, _k_age0 + _k_age1 * float(age_s))
         dD_age   = dt * age_rate * (1.0 + _k_ageD * d_norm) * (1.0 + frailty_gain)
 
+        # Utvecklingsrelaterad svältskada: kroppen ligger för långt under den massa
+        # som är rimlig för ålder/stadium, samtidigt som energireserven är låg.
+        M_expected = self.expected_mass(pheno, age_s)
+        m_rel = float(self.M) / max(M_expected, 1e-9)
+        m_ok = float(getattr(AP, "starve_mass_ok_frac", 0.85))
+        m_crit = float(getattr(AP, "starve_mass_crit_frac", 0.55))
+        if m_rel >= m_ok:
+            mass_severity = 0.0
+        elif m_rel <= m_crit:
+            mass_severity = 1.0
+        else:
+            mass_severity = (m_ok - m_rel) / max(m_ok - m_crit, 1e-9)
+
+        r_full = float(getattr(AP, "starve_reserve_full", 0.30))
+        r_min = float(getattr(AP, "starve_reserve_min", 0.05))
+        if r_now >= r_full:
+            reserve_severity = 0.0
+        elif r_now <= r_min:
+            reserve_severity = 1.0
+        else:
+            reserve_severity = (r_full - r_now) / max(r_full - r_min, 1e-9)
+
+        A_mature = max(1e-9, float(getattr(pheno, "A_mature", 1.0)))
+        adult_u = clamp(float(age_s) / A_mature, 0.0, 1.0)
+        adult_factor = 1.0 + (float(getattr(AP, "starve_adult_boost", 1.35)) - 1.0) * adult_u
+        dD_starve = dt * float(getattr(AP, "starve_damage_gain", 0.08)) * mass_severity * reserve_severity * adult_factor
+
         Tb_now = float(self.Tb)
         if Tb_now < _Tb_min:
             sev    = clamp((_Tb_min - Tb_now) / 10.0, 0.0, 1.0)
@@ -947,7 +978,7 @@ class Body:
         else:
             dD_cold = 0.0
 
-        dD_in      = dD_eff + dD_met + dD_age + dD_cold
+        dD_in      = dD_eff + dD_met + dD_age + dD_starve + dD_cold
         dD_pos_rate = dD_in / max(dt, 1e-9)
 
         self.D = clamp(D_before + dD_in, 0.0, _D_max)
@@ -1138,6 +1169,9 @@ class Body:
             "gest_E_J": float(self.gest_E_J),
             "dM_gest": dM_gest,
             "dM_cat_gest": dM_cat_gest,
+            "M_expected": M_expected,
+            "m_rel_expected": m_rel,
+            "dD_starve": dD_starve,
         }
     
         self.last_flux = {
@@ -1160,6 +1194,9 @@ class Body:
             "E_from_catabolism": float(E_from_M_total),
             "E_loss_catabolism": float(max(0.0, dM_cat_total * _E_body - E_from_M_total)),
             "dM_growth": float(dM_growth_want if 'dM_growth_want' in locals() else 0.0),
+            "M_expected": float(M_expected if 'M_expected' in locals() else 0.0),
+            "m_rel_expected": float(m_rel if 'm_rel' in locals() else 1.0),
+            "dD_starve": float(dD_starve if 'dD_starve' in locals() else 0.0),
             "reserve_frac": float(r_now if 'r_now' in locals() else self.reserve_frac()),
             "growth_gate": float(growth_gate if 'growth_gate' in locals() else 0.0),
             "hunt_state": float(hunt_state if 'hunt_state' in locals() else 0.0),

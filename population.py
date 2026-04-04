@@ -725,10 +725,12 @@ class Population:
                 B0, C0 = BC_list[i]
                 _ = a.apply_outputs(self.world, ctx, Y[i], B0, C0)
 
-        # (C2) Predation: selektivt ett angrepp per predator och steg
+        # (C2) Predation: verklig jakt = attack på levande byte.
+        # Energi stjäls inte längre direkt ur levande byte.
+        # Predatorn orsakar skada; om bytet dör blir kroppen carcass i (D),
+        # och energiutbytet sker senare via vanlig konsumtion av carcass.
         attack_range = float(self.AP.attack_range)
         dmg_per_s    = float(self.AP.attack_damage_per_s)
-        E_gain_frac  = float(self.AP.attack_energy_gain)
         cost_frac    = float(self.AP.attack_cost_per_s)
         size_f       = float(self.WP.size)
         dt_val       = float(self.WP.dt)
@@ -741,7 +743,6 @@ class Population:
 
             best_prey = None
             best_score = -1e9
-            best_dist = 1e9
             for prey in alive_now:
                 if prey is predator or not prey.body.alive:
                     continue
@@ -751,12 +752,12 @@ class Population:
                 sc = predator.attack_score(prey, dist)
                 if sc > best_score:
                     best_score = sc
-                    best_dist = dist
                     best_prey = prey
 
             if best_prey is None or best_score <= float(getattr(self.AP, 'attack_score_min', 0.18)):
                 continue
 
+            # Jakt kostar energi oavsett utfall.
             predator.body.take_energy(
                 cost_frac * pred_trait * float(predator.body.E_cap()) * dt_val
             )
@@ -765,14 +766,10 @@ class Population:
             dD = dmg_per_s * max(0.25, best_score) * pred_trait * (float(predator.body.M) ** 0.5) * dt_val
             prey.body.D = min(float(prey.body.D) + dD, float(prey.body.AP.D_max))
 
-            E_stolen = min(
-                E_gain_frac * dD * float(prey.body.E_cap()),
-                float(prey.body.E_total()),
-            )
-            if E_stolen > 0.0:
-                prey.body.take_energy(E_stolen)
-                room = max(0.0, float(predator.body.E_cap()) - float(predator.body.E_total()))
-                predator.body.E_fast += min(E_stolen, room) / 0.6
+            # Om attacken driver bytet till dödströskeln dör det direkt.
+            # Själva energiutbytet kommer inte här utan via carcass-steget nedan.
+            if float(prey.body.D) >= float(prey.body.AP.D_max):
+                prey.body.alive = False
 
         # (D) deaths -> carcass (kg) + release bank slot + emit death
         deaths = 0

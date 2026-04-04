@@ -16,7 +16,7 @@ pop = Population(WP=WP, AP=AP, PP=PP, seed=1, hub=None)
 # Värm upp ett fast antal steg istf populationsvillkor
 # (populationen kanske aldrig når 100 beroende på parametrar)
 WARMUP_STEPS = 500
-PROFILE_STEPS = 1000
+PROFILE_STEPS = 10000
 
 print(f"Värmer upp {WARMUP_STEPS} steg...", flush=True)
 t0 = time.perf_counter()
