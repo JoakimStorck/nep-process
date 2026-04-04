@@ -221,9 +221,7 @@ class AgentParams:
     # k_age0=0 → ingen konstant bakgrund (var 0.200 — dödade unga för snabbt).
     # k_age1=0.001 → dD/dt = 0.001×age_s: vid 250s ger 0.25 D/s → döden.
     k_age0: float = 0.000
-    k_age1: float = 0.0002     # var 0.001 → sänkt: 0.001 gav 0.25 D/s vid ålder 250s vilket är för aggressivt.
-                                # 0.0002 → ren åldringsdöd vid t≈100s, kombinerat med aktivitetsskada ger
-                                # realistisk livslängd 300-500s och ett bredare reproduktivt fönster.
+    k_age1: float = 0.0003     # var 0.0002 → måttligt höjt för kortare naturlig livsspan.
     k_ageD: float = 0.4
 
     # Skadehastighet — grundterm i dD_eff.
@@ -280,6 +278,15 @@ class AgentParams:
     attack_energy_gain: float = 0.5  # fraktion av bytets förlorade energi som predatorn får
     attack_cost_per_s: float = 0.05  # fraktion av predatorns Ecap per sekund som attacken kostar
 
+    # Selektiv predator-prey-logik
+    predator_trait_min: float = 0.20
+    threat_predation_min: float = 0.35
+    hunt_score_min: float = 0.12
+    attack_score_min: float = 0.18
+    prey_search_radius: float = 6.0
+    mate_search_radius: float = 5.0
+    flee_radius: float = 6.0
+
     birth_E0: float = 0.0
     birth_k_E_per_M: float = 7.0e4
     birth_energy_eff: float = 0.70
@@ -290,8 +297,8 @@ class AgentParams:
     # individer och bara när reservgraden är tillräckligt hög. Annars driver
     # modellen in i en growth→catabolism-spiral direkt från warm start.
     growth_rate_per_s: float = 0.008
-    growth_R_min: float = 0.65   # ingen aktiv tillväxt under denna reservgrad
-    growth_R_full: float = 0.90  # full tillväxthastighet först här
+    growth_R_min: float = 0.30   # ingen aktiv tillväxt under denna reservgrad
+    growth_R_full: float = 0.60  # full tillväxthastighet först här
 
     # Gestationstillväxthastighet (kg/s fetal vävnad per sekund).
     # 0.004 kg/s → 50s för ett 0.2 kg foster (var 0.002 = 100s).
@@ -304,6 +311,16 @@ class AgentParams:
     # Kalibrering: 0.002 kg/s × 10 000 J/kg = 20 J/s ≈ 2/3 av basalmetabolismen.
     # Det gör gestation energimässigt rimlig utan att tömma föräldern på sekunder.
     gestation_E_per_kg: float = 10_000.0  # J/kg (var implicit E_body_J_per_kg = 7 000 000)
+    growth_E_per_kg:    float = 10_000.0  # J/kg somatisk tillväxt (metaboliskt arbete, ej lagrad energi)
+    k_cat_dmg:          float = 1.0       # skada per relativ massförlust via katabolism
+
+    # Svält hämmar reparation via mTOR-hämning.
+    # repair_reserve_full: reservgrad ≥ detta ger 100% reparationskapacitet.
+    # repair_reserve_min:  reservgrad ≤ detta ger 0% reparationskapacitet.
+    # Linjär interpolation däremellan. Sätts högt nog att normala reserver (R~0.40)
+    # är helt opåverkade; mekanismen biter bara vid verklig svält (R < 0.25).
+    repair_reserve_full: float = 0.30   # full repair ovanför denna gräns
+    repair_reserve_min:  float = 0.05   # noll repair under denna gräns
 
     # Stokastisk dödsrisk — liten och tillståndsberoende ("olyckor").
     # Biologisk princip: friska agenter har låg olycksrisk; skadade har hög.
@@ -415,6 +432,23 @@ class Body:
     
         # R_max styrs av pheno.repair_capacity, inte AP
         R_max = float(pheno.repair_capacity) * math.exp(-float(AP.repair_W_decay) * float(self.W))
+
+        # Svält hämmar reparation (mTOR-hämning vid låg energireserv).
+        # Ovanför repair_reserve_full: full kapacitet, opåverkad.
+        # Nedanför repair_reserve_min: noll kapacitet.
+        # Däremellan: linjär avtagning.
+        # Effekt: R≥0.30 → skala=1.0 (friska agenter opåverkade),
+        #         R=0.20 → skala=0.60, R=0.10 → skala=0.20, R=0.05 → skala=0.
+        _r     = self.reserve_frac()
+        _rfull = float(getattr(AP, 'repair_reserve_full', 0.30))
+        _rmin  = float(getattr(AP, 'repair_reserve_min',  0.05))
+        if _r >= _rfull:
+            _r_scale = 1.0
+        elif _r <= _rmin:
+            _r_scale = 0.0
+        else:
+            _r_scale = (_r - _rmin) / max(_rfull - _rmin, 1e-9)
+        R_max *= _r_scale
         R_des = max(0.0, float(AP.repair_gain) * float(self.P))
         R_des = min(R_des, R_max)
     
@@ -667,7 +701,9 @@ class Body:
         _growth_rate  = float(AP.growth_rate_per_s)
         # M_target: genetiskt bestämd vuxenmassa från phenotype
         _M_target     = float(getattr(pheno, "M_target", float(AP.M0)))
-        _build_E_kg   = _E_body / _ana_eff
+        _build_E_kg        = _E_body / _ana_eff
+        _gest_build_E_kg   = float(getattr(AP, 'gestation_E_per_kg', 10_000.0))
+        _growth_build_E_kg = float(getattr(AP, 'growth_E_per_kg',    10_000.0))
     
         # ---------------------------------------------------------
         # (1) Intake -> buffers (up to cap), surplus -> mass
@@ -772,7 +808,7 @@ class Body:
                 dM_want = min(_gest_rate * dt, M_tgt - M_cur)
 
                 if dM_want > 0.0:
-                    E_need = dM_want * _build_E_kg
+                    E_need = dM_want * _gest_build_E_kg
     
                     # pay from buffers
                     paid1 = float(self.take_energy(E_need))
@@ -796,7 +832,7 @@ class Body:
                     out_gest_build = paid_total
 
                     # Massa byggd = betald energi / byggkostnad per kg.
-                    dM_gest = paid_total / _build_E_kg
+                    dM_gest = paid_total / _gest_build_E_kg
                     if dM_gest > 0.0:
                         self.gest_M = M_cur + dM_gest
                         self.gest_E_J = float(self.gest_E_J) + paid_total
@@ -809,12 +845,13 @@ class Body:
         #   (a) omogen ålder, och
         #   (b) tillräcklig energireserv.
         # Reservgaten är mjuk mellan growth_R_min och growth_R_full.
+        # Juvenil-gate borttagen: indeterminerad tillväxt mot M_target oavsett ålder.
         # ---------------------------------------------------------
         out_growth = 0.0
         dM_growth_want = 0.0
         r_now = self.reserve_frac()
-        gR0 = float(getattr(AP, 'growth_R_min', 0.65))
-        gR1 = max(gR0 + 1e-9, float(getattr(AP, 'growth_R_full', 0.90)))
+        gR0 = float(getattr(AP, 'growth_R_min', 0.30))
+        gR1 = max(gR0 + 1e-9, float(getattr(AP, 'growth_R_full', 0.60)))
         if r_now <= gR0:
             growth_gate = 0.0
         elif r_now >= gR1:
@@ -822,18 +859,18 @@ class Body:
         else:
             growth_gate = (r_now - gR0) / (gR1 - gR0)
 
-        juvenile = float(age_s) < float(pheno.A_mature)
-        if juvenile and float(self.M) < _M_target and growth_gate > 0.0:
+        if float(self.M) < _M_target and growth_gate > 0.0:
             M_deficit      = _M_target - float(self.M)
             dM_growth_want = min(_growth_rate * dt * growth_gate, M_deficit)
-            out_growth     = dM_growth_want * _build_E_kg
+            out_growth     = dM_growth_want * _growth_build_E_kg
 
         # ---------------------------------------------------------
         # (2D) Pay drains ONCE
         # ---------------------------------------------------------
+        # OBS: out_gest_build ingår INTE — redan betald i sektion (2C).
         E_out_drain = (
             out_basal + out_compute + out_sense + out_loco + out_thermo
-            + out_gest_overhead + out_gest_build + out_growth
+            + out_gest_overhead + out_growth
         )
     
         paid = float(self.take_energy(E_out_drain))
@@ -863,6 +900,9 @@ class Body:
                 self.M   -= dM_cat
                 E_from_M  = dM_cat * _E_body * _cat_eff
                 self.E_fast += E_from_M / WF
+                _k_cat_dmg = float(getattr(AP, 'k_cat_dmg', 1.0))
+                dD_cat = _k_cat_dmg * dM_cat / max(float(self.M), 1e-9)
+                self.D = clamp(float(self.D) + dD_cat, 0.0, _D_max)
 
             paid2      = float(self.take_energy(deficit))
             deficit    = max(0.0, deficit - paid2)
@@ -1020,7 +1060,7 @@ class Body:
         E_after = float(self.E_total())
         M_after = float(self.M)
     
-        expected_E_after = E_before + dE_store + E_from_M_total - E_out_drain - E_out_repair
+        expected_E_after = E_before + dE_store + E_from_M_total - E_out_drain - out_gest_build - E_out_repair
     
         drift = E_after - expected_E_after
         drift_abs = abs(drift)
@@ -1122,6 +1162,10 @@ class Body:
             "dM_growth": float(dM_growth_want if 'dM_growth_want' in locals() else 0.0),
             "reserve_frac": float(r_now if 'r_now' in locals() else self.reserve_frac()),
             "growth_gate": float(growth_gate if 'growth_gate' in locals() else 0.0),
+            "hunt_state": float(hunt_state if 'hunt_state' in locals() else 0.0),
+            "flee_state": float(flee_state if 'flee_state' in locals() else 0.0),
+            "best_prey_score": float(best_prey_score if 'best_prey_score' in locals() else 0.0),
+            "best_threat_score": float(best_threat_score if 'best_threat_score' in locals() else 0.0),
             "dM_gestation": float(dM_gest),
             "dM_catabolism": float(dM_cat_total),
         }
@@ -1540,6 +1584,47 @@ class Agent:
     def _signed_angle(a: float) -> float:
         return (a + math.pi) % (2.0 * math.pi) - math.pi
 
+
+    def _torus_delta_to(self, other, size: float) -> tuple[float, float, float]:
+        dx = float(other.x) - float(self.x)
+        dy = float(other.y) - float(self.y)
+        half = 0.5 * float(size)
+        if dx > half:
+            dx -= float(size)
+        elif dx < -half:
+            dx += float(size)
+        if dy > half:
+            dy -= float(size)
+        elif dy < -half:
+            dy += float(size)
+        d2 = dx * dx + dy * dy
+        return dx, dy, math.sqrt(d2) if d2 > 0.0 else 0.0
+
+    def attack_value(self, target, dist: float) -> float:
+        tb = getattr(target, 'body', None)
+        if tb is None or not bool(getattr(tb, 'alive', False)):
+            return -1.0e9
+        tm = max(0.0, float(getattr(tb, 'M', 0.0)))
+        te = max(0.0, float(tb.E_total())) if hasattr(tb, 'E_total') else 0.0
+        my_ecap = max(1e-9, float(self.body.E_cap()))
+        dist_term = max(0.0, 1.0 - float(dist) / max(1e-9, float(self.AP.attack_range)))
+        return 0.35 * tm + 0.65 * (te / my_ecap) + 0.40 * dist_term
+
+    def attack_risk(self, target, dist: float) -> float:
+        tb = getattr(target, 'body', None)
+        tp = float(getattr(getattr(target, 'pheno', None), 'predation', 0.0))
+        if tb is None or not bool(getattr(tb, 'alive', False)):
+            return 1.0e9
+        tm = max(1e-9, float(getattr(tb, 'M', 0.0)))
+        my_m = max(1e-9, float(self.body.M))
+        d_norm = clamp(float(getattr(tb, 'D', 0.0)) / max(1e-9, float(self.AP.D_max)), 0.0, 1.0)
+        healthy = 1.0 - d_norm
+        dist_term = max(0.0, 1.0 - float(dist) / max(1e-9, float(self.AP.attack_range)))
+        return 0.45 * (tm / my_m) + 0.55 * tp + 0.35 * healthy * dist_term
+
+    def attack_score(self, target, dist: float) -> float:
+        return self.attack_value(target, dist) - self.attack_risk(target, dist)
+
     def apply_traits(self) -> None:
         self.pheno = derive_pheno(self.genome.traits)
 
@@ -1685,6 +1770,84 @@ class Agent:
 
         return x_in, float(B0), float(C0)
 
+    def _torus_delta_to(self, other: "Agent", size: float) -> tuple[float, float, float]:
+        dx = float(other.x) - float(self.x)
+        dy = float(other.y) - float(self.y)
+        half = 0.5 * float(size)
+        if dx > half:
+            dx -= float(size)
+        elif dx < -half:
+            dx += float(size)
+        if dy > half:
+            dy -= float(size)
+        elif dy < -half:
+            dy += float(size)
+        d2 = dx * dx + dy * dy
+        return dx, dy, math.sqrt(d2) if d2 > 0.0 else 0.0
+
+    def attack_value(self, target: "Agent", dist: float) -> float:
+        if not target.body.alive:
+            return -1e9
+        d_norm = 1.0 - clamp(dist / max(float(self.AP.prey_search_radius), 1e-9), 0.0, 1.0)
+        m_term = clamp(float(target.body.M) / max(float(self.body.M), 1e-9), 0.0, 2.0)
+        e_term = clamp(float(target.body.reserve_frac()), 0.0, 1.0)
+        weak_term = 1.0 - clamp(float(target.body.D) / max(float(target.body.AP.D_max), 1e-9), 0.0, 1.0)
+        weak_term = 1.0 - weak_term  # low D => low prey value from weakness, high D => high value
+        return 0.55 * d_norm + 0.25 * m_term + 0.10 * e_term + 0.10 * weak_term
+
+    def attack_risk(self, target: "Agent", dist: float) -> float:
+        d_norm = 1.0 - clamp(dist / max(float(self.AP.prey_search_radius), 1e-9), 0.0, 1.0)
+        rel_mass = clamp(float(target.body.M) / max(float(self.body.M), 1e-9), 0.0, 3.0)
+        target_pred = clamp(float(getattr(target.pheno, "predation", 0.0)), 0.0, 1.0)
+        target_def = 1.0 - clamp(float(target.body.D) / max(float(target.body.AP.D_max), 1e-9), 0.0, 1.0)
+        return 0.35 * rel_mass + 0.40 * target_pred + 0.20 * target_def + 0.05 * d_norm
+
+    def attack_score(self, target: "Agent", dist: float) -> float:
+        return float(self.attack_value(target, dist) - self.attack_risk(target, dist))
+
+    def _local_social_targets(self, world: World):
+        agents = getattr(world, "_agents", None)
+        if not agents:
+            return None, None, None, None, None
+        size = float(world.WP.size)
+        prey_r = float(self.AP.prey_search_radius)
+        flee_r = float(self.AP.flee_radius)
+        mate_r = float(self.AP.mate_search_radius)
+        pred_self = float(getattr(self.pheno, "predation", 0.0))
+
+        best_prey = None
+        best_prey_score = -1e9
+        best_threat = None
+        best_threat_score = -1e9
+        best_mate = None
+        best_mate_dist = mate_r
+
+        for other in agents:
+            if other is self or not other.body.alive:
+                continue
+            dx, dy, dist = self._torus_delta_to(other, size)
+            if dist <= 1e-9:
+                continue
+
+            if self.ready_to_reproduce() and other.ready_to_reproduce() and dist <= best_mate_dist:
+                best_mate = (other, dx, dy, dist)
+                best_mate_dist = dist
+
+            if dist <= prey_r and pred_self >= float(self.AP.predator_trait_min):
+                sc = self.attack_score(other, dist)
+                if sc > best_prey_score:
+                    best_prey = (other, dx, dy, dist)
+                    best_prey_score = sc
+
+            other_pred = float(getattr(other.pheno, "predation", 0.0))
+            if dist <= flee_r and other_pred >= float(self.AP.threat_predation_min):
+                sc_th = other.attack_score(self, dist)
+                if sc_th > best_threat_score:
+                    best_threat = (other, dx, dy, dist)
+                    best_threat_score = sc_th
+
+        return best_prey, best_prey_score, best_threat, best_threat_score, best_mate
+
     def apply_outputs(
         self,
         world: World,
@@ -1726,63 +1889,143 @@ class Agent:
         allow_eat = 1.0 - inh_eat
     
         # ---------------------------------------------------------
-        # 2) Temperature at location (NO policy modulation)
+        # 2) Temperature + local target assessment
         # ---------------------------------------------------------
         Tloc = float(world.temperature_at(self.x, self.y)) if hasattr(world, "temperature_at") else 0.0
-    
+
+        soc = float(getattr(self.pheno, "sociability", 0.0))
+        pred = float(getattr(self.pheno, "predation", 0.0))
+        N, Nu, Nd = self._cached_agent_hit
+        in_mating_mode = self.ready_to_reproduce()
+
+        best_prey, best_prey_score, best_threat, best_threat_score, best_mate = self._local_social_targets(world)
+        hunt_state = 0.0
+        flee_state = 0.0
+
         # ---------------------------------------------------------
-        # 3) Heading integration (turn + exploration jitter)
+        # 3) Reflexiva drivkrafter: flykt, jakt, parning, socialt, föda
+        # PRIORITET: flee > hunt > mating > social > food > explore
+        # ---------------------------------------------------------
+        if best_threat is not None and pred < float(self.AP.threat_predation_min) and best_threat_score > float(self.AP.hunt_score_min):
+            other, dx, dy, dist = best_threat
+            a_th = math.atan2(dy, dx)
+            err = self._signed_angle(a_th - self.heading)
+            bias = clamp(err / math.pi, -1.0, 1.0)
+            turn = clamp(turn - 0.95 * bias, -1.0, 1.0)
+            thrust = clamp(max(thrust, 0.95), 0.0, 1.0)
+            explore_drive *= 0.10
+            flee_state = 1.0
+
+        elif best_prey is not None and pred >= float(self.AP.predator_trait_min) and best_prey_score > float(self.AP.hunt_score_min):
+            other, dx, dy, dist = best_prey
+            a_hit = math.atan2(dy, dx)
+            errN = self._signed_angle(a_hit - self.heading)
+            biasN = clamp(errN / math.pi, -1.0, 1.0)
+            hs = clamp(pred, 0.0, 1.0)
+            turn = clamp(turn + 0.90 * hs * biasN, -1.0, 1.0)
+            thrust = clamp(max(thrust, 0.85), 0.0, 1.0)
+            explore_drive *= 0.25
+            hunt_state = 1.0
+
+        elif in_mating_mode and best_mate is not None:
+            other, dx, dy, dist = best_mate
+            a_hit = math.atan2(dy, dx)
+            errN = self._signed_angle(a_hit - self.heading)
+            biasN = clamp(errN / math.pi, -1.0, 1.0)
+            turn = clamp(0.95 * biasN, -1.0, 1.0)
+            thrust = max(thrust, 0.95)
+            explore_drive = 0.0
+
+        elif N > 0.5:
+            a_hit = self.heading + (2.0 * math.pi * float(Nu))
+            errN = self._signed_angle(a_hit - self.heading)
+            biasN = clamp(errN / math.pi, -1.0, 1.0)
+            Nd_f = float(Nd)
+            REP_ZONE = 0.35
+            if Nd_f < REP_ZONE:
+                rs = 1.0 - (Nd_f / REP_ZONE)
+                turn = clamp(turn - 0.70 * rs * biasN, -1.0, 1.0)
+                explore_drive = explore_drive * (1.0 - 0.3 * rs)
+            else:
+                soc_bias = 2.0 * soc - 1.0
+                if abs(soc_bias) > 1e-6:
+                    wdist = clamp(1.0 - Nd_f, 0.0, 1.0)
+                    turn = clamp(turn + 0.70 * soc_bias * wdist * biasN, -1.0, 1.0)
+                    explore_drive = explore_drive * (1.0 - 0.60 * abs(soc_bias) * wdist)
+
+        hunger_now = float(self.body.hunger())
+        if flee_state < 0.5 and hunger_now > 0.4:
+            sensors = getattr(self, "sensors", None)
+            if sensors is not None:
+                accB = getattr(sensors, "_accB", None)
+                accC = getattr(sensors, "_accC", None)
+                ang = getattr(sensors, "_ang_base", None)
+                if accB is not None and ang is not None and len(accB) > 0:
+                    _diet = float(getattr(self.pheno, "diet", 0.5))
+                    combo = accB * (1.0 - _diet) + accC * _diet
+                    i_best = int(np.argmax(combo))
+                    sig = float(combo[i_best])
+                    if sig > 0.05:
+                        food_angle = float(ang[i_best]) + float(self.heading)
+                        err_food = self._signed_angle(food_angle - self.heading)
+                        bias_food = clamp(err_food / math.pi, -1.0, 1.0)
+                        fd = clamp(hunger_now - 0.4, 0.0, 0.6) * sig
+                        turn = clamp(turn + 0.60 * fd * bias_food, -1.0, 1.0)
+                        thrust = clamp(thrust + 0.3 * fd, 0.0, 1.0)
+
+        # ---------------------------------------------------------
+        # 4) Heading integration (turn + exploration jitter)
         # ---------------------------------------------------------
         jitter = float(ctx.rng.normal(0.0, 0.65)) * explore_drive
         self.heading = float(self.heading) + dt * float(self.AP.turn_rate) * (
             0.85 * allow_move * turn + 0.25 * jitter
         )
         self.heading = self._signed_angle(self.heading)
-    
+
         # ---------------------------------------------------------
-        # 4) Locomotion control u in [0,1]
+        # 5) Locomotion control u in [0,1]
         # ---------------------------------------------------------
         fatigue = float(self.body.Fg)
         fatigue_factor = clamp(1.0 - 0.9 * fatigue, 0.05, 1.0)
         weak_move = float(self.body.move_factor())
         u = clamp(allow_move * thrust * fatigue_factor * weak_move, 0.0, 1.0)
-    
+
         # ---------------------------------------------------------
-        # 5) Locomotion dynamics
+        # 6) Locomotion dynamics
         # ---------------------------------------------------------
         v_prev = max(0.0, float(self.last_speed))
         M_pre = max(1e-9, float(self.body.M))
-    
+
         F0_cap = float(self.AP.F0)
-        alpha  = float(self.AP.force_mass_exp)
+        alpha = float(self.AP.force_mass_exp)
         F_prop = u * F0_cap * (M_pre ** alpha)
 
         c1 = float(self.AP.drag_lin)
         c2 = float(self.AP.drag_quad)
-    
+
         F_drag_prev = c1 * v_prev + c2 * v_prev * v_prev
         a = (F_prop - F_drag_prev) / M_pre
         v_euler = max(0.0, v_prev + dt * a)
-    
+
         speed = min(v_euler, float(self.AP.v_max))
         v_mid = 0.5 * (v_prev + speed)
         self.last_speed = float(speed)
-    
+
         # ---------------------------------------------------------
-        # 6) Locomotion energy (J)
+        # 7) Locomotion energy (J)
         # ---------------------------------------------------------
-        eta    = clamp(float(self.AP.locomotion_eff), 1e-6, 1.0)
+        eta = clamp(float(self.AP.locomotion_eff), 1e-6, 1.0)
         P_mech = max(0.0, F_prop * v_mid)
         E_move = (dt * P_mech) / eta
-    
+
         # ---------------------------------------------------------
-        # 7) Apply translation (torus)
+        # 8) Apply translation (torus)
         # ---------------------------------------------------------
         self.x = torus_wrap(float(self.x) + dt * speed * math.cos(self.heading), world.WP.size)
         self.y = torus_wrap(float(self.y) + dt * speed * math.sin(self.heading), world.WP.size)
-    
+
         # ---------------------------------------------------------
-        # 8) Feeding (kg)
+        # 9) Feeding (kg)
         # ---------------------------------------------------------
         got_bio = 0.0
         got_carcass = 0.0
@@ -1790,86 +2033,16 @@ class Agent:
             want_kg = float(self.AP.eat_rate) * dt * (0.25 + 0.75 * float(self.body.hunger()))
             got_total, got_carcass = world.consume_food(self.x, self.y, amount=want_kg, prefer_carcass=True)
             got_bio = max(0.0, float(got_total) - float(got_carcass))
-    
+
         food_bio_kg = float(got_bio)
         food_carcass_kg = float(got_carcass)
-    
+
         # ---------------------------------------------------------
-        # 9) Activity proxy
+        # 10) Activity proxy
         # ---------------------------------------------------------
         speed_n = clamp(speed / max(float(self.AP.v_max), 1e-9), 0.0, 1.0)
         ate = 1.0 if (allow_eat > 0.20 and (food_bio_kg + food_carcass_kg) > 0.0) else 0.0
         activity = 0.03 + 0.45 * speed_n + 0.10 * ate
-    
-        # ---------------------------------------------------------
-        # 10) Reflexiva drivkrafter: parning, predation, flykt, matsökning
-        # ---------------------------------------------------------
-        soc  = float(getattr(self.pheno, "sociability", 0.0))
-        pred = float(getattr(self.pheno, "predation",   0.0))
-        N, Nu, Nd = self._cached_agent_hit
-        in_mating_mode = self.ready_to_reproduce()
-
-        if in_mating_mode and N > 0.5:
-            # A. PARNINGSATTRAKTION — åsidosätter allt
-            a_hit = self.heading + (2.0 * math.pi * float(Nu))
-            errN  = self._signed_angle(a_hit - self.heading)
-            biasN = clamp(errN / math.pi, -1.0, 1.0)
-            if float(Nd) > 0.05:
-                turn          = clamp(0.95 * biasN, -1.0, 1.0)
-                thrust        = 1.0
-                explore_drive = 0.0
-
-        elif pred > 0.3 and N > 0.5:
-            # B. PREDATIONSATTRAKTION — rovdjur jagar närmaste agent
-            a_hit = self.heading + (2.0 * math.pi * float(Nu))
-            errN  = self._signed_angle(a_hit - self.heading)
-            biasN = clamp(errN / math.pi, -1.0, 1.0)
-            Nd_f  = float(Nd)
-            if Nd_f > 0.05:
-                hs            = clamp(pred, 0.0, 1.0)
-                turn          = clamp(turn + 0.90 * hs * biasN, -1.0, 1.0)
-                thrust        = clamp(thrust + 0.5 * hs, 0.0, 1.0)
-                explore_drive = explore_drive * (1.0 - 0.7 * hs)
-
-        elif N > 0.5:
-            # C. SOCIAL INTERAKTION (repulsion nära, soc-styrd på avstånd)
-            a_hit = self.heading + (2.0 * math.pi * float(Nu))
-            errN  = self._signed_angle(a_hit - self.heading)
-            biasN = clamp(errN / math.pi, -1.0, 1.0)
-            Nd_f  = float(Nd)
-            REP_ZONE = 0.35
-            if Nd_f < REP_ZONE:
-                rs            = 1.0 - (Nd_f / REP_ZONE)
-                turn          = clamp(turn - 0.70 * rs * biasN, -1.0, 1.0)
-                explore_drive = explore_drive * (1.0 - 0.3 * rs)
-            else:
-                soc_bias = 2.0 * soc - 1.0
-                if abs(soc_bias) > 1e-6:
-                    wdist         = clamp(1.0 - Nd_f, 0.0, 1.0)
-                    turn          = clamp(turn + 0.70 * soc_bias * wdist * biasN, -1.0, 1.0)
-                    explore_drive = explore_drive * (1.0 - 0.60 * abs(soc_bias) * wdist)
-
-        # D. MATSÖKNINGSREFLEX — sväng mot starkaste matråle när hungrig
-        hunger_now = float(self.body.hunger())
-        if hunger_now > 0.4:
-            sensors = getattr(self, "sensors", None)
-            if sensors is not None:
-                accB = getattr(sensors, "_accB", None)
-                accC = getattr(sensors, "_accC", None)
-                ang  = getattr(sensors, "_ang_base", None)
-                if accB is not None and ang is not None and len(accB) > 0:
-                    _diet  = float(getattr(self.pheno, "diet", 0.5))
-                    combo  = accB * (1.0 - _diet) + accC * _diet
-                    i_best = int(np.argmax(combo))
-                    sig    = float(combo[i_best])
-                    if sig > 0.05:
-                        food_angle = float(ang[i_best]) + float(self.heading)
-                        err_food   = self._signed_angle(food_angle - self.heading)
-                        bias_food  = clamp(err_food / math.pi, -1.0, 1.0)
-                        fd         = clamp(hunger_now - 0.4, 0.0, 0.6) * sig
-                        turn       = clamp(turn + 0.60 * fd * bias_food, -1.0, 1.0)
-                        thrust     = clamp(thrust + 0.3 * fd, 0.0, 1.0)
-
         # ---------------------------------------------------------
         # 11) Body dynamics (includes gestation build model: "Väg 2")
         # ---------------------------------------------------------

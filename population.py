@@ -670,6 +670,7 @@ class Population:
     
         # (B) occupancy from current positions
         self.world.rebuild_agent_layer(self.agents)
+        self.world._agents = self.agents
     
         # (C) agent step (sense + policy + act)
         alive: List[Agent] = [a for a in self.agents if a.body.alive]
@@ -724,63 +725,55 @@ class Population:
                 B0, C0 = BC_list[i]
                 _ = a.apply_outputs(self.world, ctx, Y[i], B0, C0)
 
-        # (C2) Predation: rovdjur attackerar levande byten inom attack_range
+        # (C2) Predation: selektivt ett angrepp per predator och steg
         attack_range = float(self.AP.attack_range)
         dmg_per_s    = float(self.AP.attack_damage_per_s)
         E_gain_frac  = float(self.AP.attack_energy_gain)
         cost_frac    = float(self.AP.attack_cost_per_s)
         size_f       = float(self.WP.size)
-        half_size_f  = size_f * 0.5
         dt_val       = float(self.WP.dt)
-        attack_sq    = attack_range * attack_range   # kvadratavstånd — undviker sqrt
 
         alive_now = [a for a in self.agents if a.body.alive]
         for predator in alive_now:
             pred_trait = float(getattr(predator.pheno, "predation", 0.0))
-            if pred_trait < 0.2 or not predator.body.alive:
+            if pred_trait < float(getattr(self.AP, 'predator_trait_min', 0.20)) or not predator.body.alive:
                 continue
 
-            px, py = float(predator.x), float(predator.y)
-            attacked_this_step = False
+            best_prey = None
+            best_score = -1e9
+            best_dist = 1e9
             for prey in alive_now:
                 if prey is predator or not prey.body.alive:
                     continue
-
-                # Torus-distans utan abs()/min()/sqrt()
-                ddx = float(prey.x) - px
-                ddy = float(prey.y) - py
-                if ddx >  half_size_f: ddx -= size_f
-                elif ddx < -half_size_f: ddx += size_f
-                if ddy >  half_size_f: ddy -= size_f
-                elif ddy < -half_size_f: ddy += size_f
-                if ddx * ddx + ddy * ddy > attack_sq:
+                _, _, dist = predator._torus_delta_to(prey, size_f)
+                if dist > attack_range:
                     continue
+                sc = predator.attack_score(prey, dist)
+                if sc > best_score:
+                    best_score = sc
+                    best_dist = dist
+                    best_prey = prey
 
-                # Betala attackkostnad — en gång per steg oavsett antal byten
-                if not attacked_this_step:
-                    predator.body.take_energy(
-                        cost_frac * pred_trait * float(predator.body.E_cap()) * dt_val
-                    )
-                    attacked_this_step = True
+            if best_prey is None or best_score <= float(getattr(self.AP, 'attack_score_min', 0.18)):
+                continue
 
-                # Skada proportionell mot predatorns massa och predation-trait
-                dD = dmg_per_s * pred_trait * (float(predator.body.M) ** 0.5) * dt_val
-                prey.body.D = min(float(prey.body.D) + dD, float(prey.body.AP.D_max))
+            predator.body.take_energy(
+                cost_frac * pred_trait * float(predator.body.E_cap()) * dt_val
+            )
 
-                # Predatorn stjäl energi från bytet
-                E_stolen = min(
-                    E_gain_frac * dD * float(prey.body.E_cap()),
-                    float(prey.body.E_total()),
-                )
-                if E_stolen > 0.0:
-                    prey.body.take_energy(E_stolen)
-                    room = max(0.0, float(predator.body.E_cap()) - float(predator.body.E_total()))
-                    predator.body.E_fast += min(E_stolen, room) / 0.6
+            prey = best_prey
+            dD = dmg_per_s * max(0.25, best_score) * pred_trait * (float(predator.body.M) ** 0.5) * dt_val
+            prey.body.D = min(float(prey.body.D) + dD, float(prey.body.AP.D_max))
 
-                if not prey.body.alive:
-                    break
+            E_stolen = min(
+                E_gain_frac * dD * float(prey.body.E_cap()),
+                float(prey.body.E_total()),
+            )
+            if E_stolen > 0.0:
+                prey.body.take_energy(E_stolen)
+                room = max(0.0, float(predator.body.E_cap()) - float(predator.body.E_total()))
+                predator.body.E_fast += min(E_stolen, room) / 0.6
 
-    
         # (D) deaths -> carcass (kg) + release bank slot + emit death
         deaths = 0
         survivors: List[Agent] = []
@@ -833,27 +826,8 @@ class Population:
             children: List[Agent] = []
             cap = int(self.PP.max_pop)
 
-            # Pre-filtrera verkligt redo individer EN GÅNG per steg.
-            # Inlinear HELA ready_to_reproduce-logiken — eliminerar ~800k funktionsanrop/steg.
-            # Kandidatlistan ska typiskt innehålla 3-10 agenter av 50, inte 40.
-            # _try_mating-loopen behoever sedan bara kolla distans + kompatibilitet.
-            _mating_candidates = []
-            for _a in self.agents:
-                _b = _a.body
-                if not _b.alive or _b.gestating or _a.repro_cd_s > 0.0:
-                    continue
-                if _a.age_s < _a.pheno.A_mature:
-                    continue
-                _M = _b.M
-                if _M < _a.AP.M_min or _M < _a.pheno.M_repro_min:
-                    continue
-                _Et   = _b.E_total()
-                _Ecap = _b.E_cap()
-                if _Et / (_Ecap if _Ecap > 1e-12 else 1e-12) < _a.pheno.E_repro_min:
-                    continue
-                if _b.hunger() > 0.7 or _b.D > 0.25 or _b.Fg > 0.85:
-                    continue
-                _mating_candidates.append(_a)
+            # En enda auktoritet för reproduktiv readiness.
+            _mating_candidates = [a for a in self.agents if a.ready_to_reproduce()]
 
             _cand_ids = {id(a) for a in _mating_candidates}
 
