@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import math
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Iterable, Optional, Tuple
 
 import numpy as np
@@ -15,11 +15,18 @@ except ImportError:
     _numba = None
     _NUMBA_AVAILABLE = False
 
+from abiotic import (
+    compute_plant_growth_window,
+    compute_plant_wither_rate,
+    step_plant_field,
+    step_carcass_field,
+)
+from grid import Grid
 
 def clamp(x: float, lo: float, hi: float) -> float:
     return lo if x < lo else hi if x > hi else x
 
-
+   
 # -------------------------
 # Parameters
 # -------------------------
@@ -103,9 +110,11 @@ class WorldParams:
 @dataclass
 class World:
     WP: WorldParams
+    grid: Grid = field(init=False)    
 
     def __post_init__(self) -> None:
         s = int(self.WP.size)
+        self.grid = Grid(size=s)
 
         # occupancy (0=empty else agent_id)
         self.A = np.zeros((s, s), dtype=np.int32)
@@ -195,10 +204,12 @@ class World:
 
     def temperature_at(self, x: float, y: float) -> float:
         s = int(self.WP.size)
-        yf = float(y) % s
-        y0 = int(math.floor(yf)) % s
+        _, yw = self.grid.wrap_pos(float(x), float(y))
+
+        y0 = int(math.floor(yw)) % s
         y1 = (y0 + 1) % s
-        fy = yf - math.floor(yf)
+        fy = yw - math.floor(yw)
+
         t0 = float(self.Ty[y0])
         t1 = float(self.Ty[y1])
         return (1.0 - fy) * t0 + fy * t1
@@ -216,25 +227,16 @@ class World:
                 continue
             aid = int(ag.id)
             by_id[aid] = ag
-            ix = int(ag.x) % s
-            iy = int(ag.y) % s
+
+            cell = int(self.grid.cell_of(float(ag.x), float(ag.y)))
+            iy, ix = divmod(cell, s)
             A[iy, ix] = aid
+
         self._agent_by_id = by_id
 
     # -------------------------
     # Ecology kernels
     # -------------------------
-    @staticmethod
-    def _laplace(A: np.ndarray) -> np.ndarray:
-        return (
-            np.roll(A, 1, axis=0) + np.roll(A, -1, axis=0)
-            + np.roll(A, 1, axis=1) + np.roll(A, -1, axis=1)
-            - 4.0 * A
-        )
-
-    def _clip_B(self, B: np.ndarray) -> np.ndarray:
-        return np.clip(B, 0.0, float(self.WP.B_K)).astype(np.float32, copy=False)
-
     def _add_blob(self, A: np.ndarray, cx: int, cy: int, amp: float, rad: int, hi: float) -> None:
         """
         Add a gaussian-ish blob with peak amplitude `amp` (same units as A),
@@ -242,70 +244,77 @@ class World:
         """
         s = int(self.WP.size)
         rr = float(rad * rad)
-
+    
         ys = np.arange(s, dtype=np.float32)
         xs = np.arange(s, dtype=np.float32)
-
-        dy = ((ys - float(cy) + s / 2) % s) - s / 2
-        dx = ((xs - float(cx) + s / 2) % s) - s / 2
+    
+        center = self.grid.cell_from_rowcol(int(cy), int(cx))
+        cyr, cxr = self.grid.rowcol_of(center)
+    
+        dy = ((ys - float(cyr) + s / 2) % s) - s / 2
+        dx = ((xs - float(cxr) + s / 2) % s) - s / 2
         DX, DY = np.meshgrid(dx, dy)
-
+    
         r2 = DX * DX + DY * DY
         mask = r2 <= rr
-
+    
         sigma2 = max(rr / 4.0, 1e-6)
         blob = float(amp) * np.exp(-r2 / (2.0 * sigma2))
-
+    
         A[mask] = np.clip(A[mask] + blob[mask], 0.0, float(hi)).astype(np.float32, copy=False)
 
-    def step(self) -> None:
-        dt = float(self.WP.dt)
-        P = self.WP
-
+    # -------------------------
+    # Abiotiska världspass
+    # -------------------------
+    def _step_temperature(self) -> np.ndarray:
+        """
+        Uppdatera temperaturprofilen för aktuell tid och returnera temperaturfältet T.
+        """
         self._update_temperature()
-        T = self.temperature_field()  # (s,s) degC
+        return self.temperature_field()
 
-        # --- Growth window G(T) (triangular around an optimum)
-        Tmin, Topt, Tmax = float(P.T_grow_min), float(P.T_grow_opt), float(P.T_grow_max)
-        G = np.zeros_like(T, dtype=np.float32)
+    def _compute_plant_growth_window(self, T: np.ndarray) -> np.ndarray:
+        return compute_plant_growth_window(self.WP, T)
 
-        if Topt > Tmin + 1e-9:
-            G = np.where((T >= Tmin) & (T < Topt), (T - Tmin) / (Topt - Tmin), G)
-        if Tmax > Topt + 1e-9:
-            G = np.where((T >= Topt) & (T <= Tmax), (Tmax - T) / (Tmax - Topt), G)
-        G = np.clip(G, 0.0, 1.0).astype(np.float32, copy=False)
+    def _compute_plant_wither_rate(self, T: np.ndarray) -> np.ndarray:
+        return compute_plant_wither_rate(self.WP, T)
+        
+    def _step_plants(self, G: np.ndarray, m: np.ndarray) -> tuple[float, float]:
+        """
+        Växtpass:
+          - uppdatera B med growth - wither + diffusion
+          - returnera (dM_growth, dM_wither)
+        """
+        self.B, dM_growth, dM_wither = step_plant_field(
+            self.B,
+            WP=self.WP,
+            G=G,
+            m=m,
+            dt=float(self.WP.dt),
+        )
+        return dM_growth, dM_wither
 
-        # --- Wither / dieoff rate m(T) >= 0
-        m = np.full_like(T, float(P.B_wither_base), dtype=np.float32)
+    def _step_carcass(self) -> float:
+        """
+        Kadaverpass:
+          - decay + diffusion för C
+          - returnera dM_decay för flux/loggning
+        """
+        self.C, dM_decay = step_carcass_field(
+            self.C,
+            WP=self.WP,
+            dt=float(self.WP.dt),
+        )
+        return dM_decay
 
-        if float(P.B_wither_cold) > 0.0 and float(P.cold_width) > 1e-9:
-            Sc = np.clip((float(P.T_cold) - T) / float(P.cold_width), 0.0, 1.0).astype(np.float32, copy=False)
-            m += float(P.B_wither_cold) * Sc
-
-        if float(P.B_wither_hot) > 0.0 and float(P.hot_width) > 1e-9:
-            Sh = np.clip((T - float(P.T_hot)) / float(P.hot_width), 0.0, 1.0).astype(np.float32, copy=False)
-            m += float(P.B_wither_hot) * Sh
-
-        # --- Plants: growth - wither + diffusion
-        lapB = self._laplace(self.B)
-
-        growth = (float(P.B_regen) * G) * (1.0 - self.B / float(P.B_K)) * self.B
-        wither = m * self.B
-
-        dB = growth - wither + float(P.B_diff) * lapB
-        self.B = self._clip_B(self.B + np.float32(dt) * dB)
-
-        # --- Carcass field C [kg/cell]: decay + diffusion
-        lapC = self._laplace(self.C)
-        dC = (-float(P.C_decay) * self.C) + float(P.C_diff) * lapC
-        self.C = (self.C + np.float32(dt) * np.float32(dC)).astype(np.float32, copy=False)
-        self.C = np.maximum(self.C, 0.0).astype(np.float32, copy=False)
-
-        dM_growth = float(np.sum(np.float64(dt) * np.float64(growth)))
-        dM_wither = float(np.sum(np.float64(dt) * np.float64(wither)))
-        dM_decay = float(np.sum(np.float64(dt) * np.float64(np.maximum(float(P.C_decay) * self.C, 0.0))))
+    def _update_world_flux(self, dM_growth: float, dM_wither: float, dM_decay: float) -> None:
+        """
+        Uppdatera världens öppna-system-ledger för senaste tick.
+        """
+        P = self.WP
         e_plant = float(getattr(P, "E_plant_J_per_kg", getattr(P, "E_bio_J_per_kg", 4.0e6)))
         e_carc = float(getattr(P, "E_carcass_J_per_kg", 7.0e6))
+
         self.last_flux = {
             "dM_growth": max(0.0, dM_growth),
             "dM_wither": max(0.0, dM_wither),
@@ -314,19 +323,48 @@ class World:
             "E_loss_wither": max(0.0, dM_wither) * e_plant,
             "E_loss_decay": max(0.0, dM_decay) * e_carc,
         }
-
-        # --- Germination / seeding
+        
+    def _step_seeding(self, G: np.ndarray) -> None:
+        """
+        Patch-/seedingpass för växtfältet.
+        """
+        P = self.WP
         seed_p = float(P.seed_p)
-        if seed_p > 0.0:
-            cx, cy = random.randrange(P.size), random.randrange(P.size)
-            Gcy = float(G[cy, 0])  # season factor at latitude row
-            seed_p_eff = seed_p * Gcy
+        if seed_p <= 0.0:
+            return
 
-            if seed_p_eff > 0.0 and random.random() < seed_p_eff:
-                rad = random.randint(P.seed_rad_min, P.seed_rad_max)
-                amp = float(P.seed_amp) * (0.25 + 0.75 * Gcy)  # kg peak amplitude
-                self._add_blob(self.B, cx, cy, amp=amp, rad=rad, hi=float(P.B_K))
+        cx, cy = random.randrange(P.size), random.randrange(P.size)
+        Gcy = float(G[cy, 0])  # season factor at latitude row
+        seed_p_eff = seed_p * Gcy
 
+        if seed_p_eff > 0.0 and random.random() < seed_p_eff:
+            rad = random.randint(P.seed_rad_min, P.seed_rad_max)
+            amp = float(P.seed_amp) * (0.25 + 0.75 * Gcy)  # kg peak amplitude
+            self._add_blob(self.B, cx, cy, amp=amp, rad=rad, hi=float(P.B_K))
+       
+    def step(self) -> None:
+        dt = float(self.WP.dt)
+
+        # (1) Temperatur / säsong
+        T = self._step_temperature()
+
+        # (2) Växtdrivfält
+        G = self._compute_plant_growth_window(T)
+        m = self._compute_plant_wither_rate(T)
+
+        # (3) Växtfält
+        dM_growth, dM_wither = self._step_plants(G, m)
+
+        # (4) Kadaverfält
+        dM_decay = self._step_carcass()
+
+        # (5) Flux / öppen-system-ledger
+        self._update_world_flux(dM_growth, dM_wither, dM_decay)
+
+        # (6) Seeding / patchdrivning
+        self._step_seeding(G)
+
+        # (7) Tid
         self.t += dt
 
     # -------------------------
@@ -334,7 +372,7 @@ class World:
     # -------------------------
     def sample(self, x: float, y: float) -> Tuple[float, float]:
         """Bilinear sampling at a single point. Returns (B_kg, C_kg)."""
-        return _bilinear_scalar_BC(self.B, self.C, x, y, int(self.WP.size))
+        return _bilinear_scalar_BC(self.B, self.C, x, y, self.grid)
 
     def sample_many(
         self,
@@ -351,7 +389,7 @@ class World:
         return _bilinear_many_BC(
             self.B, self.C,
             xs, ys,
-            int(self.WP.size),
+            self.grid,
             outB=outB, outC=outC, tmp=tmp,
         )
 
@@ -368,26 +406,12 @@ class World:
         if not math.isfinite(amt) or amt <= 0.0:
             return 0.0
 
-        s = int(self.WP.size)
         xf = float(x)
         yf = float(y)
         if not (math.isfinite(xf) and math.isfinite(yf)):
             return 0.0
 
-        xf %= s
-        yf %= s
-
-        x0 = int(math.floor(xf))
-        y0 = int(math.floor(yf))
-        x1 = x0 + 1
-        y1 = y0 + 1
-        if x1 == s:
-            x1 = 0
-        if y1 == s:
-            y1 = 0
-
-        fx = xf - math.floor(xf)
-        fy = yf - math.floor(yf)
+        x0, y0, x1, y1, fx, fy = self.grid.bilinear_corners(xf, yf)
 
         w00 = (1.0 - fx) * (1.0 - fy)
         w10 = fx * (1.0 - fy)
@@ -443,25 +467,24 @@ class World:
         """
         Add carcass mass to C (kg/cell). amount_kg is TOTAL kg deposited.
         """
-        s = int(self.WP.size)
         amt = float(amount_kg)
         if not math.isfinite(amt) or amt <= 0.0:
             return
-
+    
         r = int(rad)
         if r < 1:
             r = 1
-
-        cx = int(round(x)) % s
-        cy = int(round(y)) % s
-
+    
+        center = self.grid.cell_of(float(x), float(y))
+        cy, cx = self.grid.rowcol_of(center)
+    
         sigma = max(0.75, 0.5 * r)
         inv2sig2 = 1.0 / (2.0 * sigma * sigma)
-
+    
         wsum = 0.0
         weights: list[tuple[int, int, float]] = []
         rr = float(r * r)
-
+    
         for dy in range(-r, r + 1):
             for dx in range(-r, r + 1):
                 d2 = float(dx * dx + dy * dy)
@@ -470,36 +493,24 @@ class World:
                 w = math.exp(-d2 * inv2sig2)
                 weights.append((dx, dy, w))
                 wsum += w
-
+    
         if wsum <= 1e-12:
             self.C[cy, cx] = np.float32(float(self.C[cy, cx]) + amt)
             return
-
+    
         scale = amt / wsum
         for dx, dy, w in weights:
-            ix = (cx + dx) % s
-            iy = (cy + dy) % s
+            cell = self.grid.cell_from_rowcol(cy + dy, cx + dx)
+            iy, ix = self.grid.rowcol_of(cell)
             self.C[iy, ix] = np.float32(float(self.C[iy, ix]) + scale * w)
 
 
 # -------------------------
 # Sampling kernels (private)
 # -------------------------
-def _bilinear_scalar_BC(B: np.ndarray, C: np.ndarray, x: float, y: float, s: int) -> Tuple[float, float]:
-    xf = float(x) % s
-    yf = float(y) % s
-
-    x0 = int(xf)
-    y0 = int(yf)
-    x1 = x0 + 1
-    y1 = y0 + 1
-    if x1 == s:
-        x1 = 0
-    if y1 == s:
-        y1 = 0
-
-    fx = xf - x0
-    fy = yf - y0
+def _bilinear_scalar_BC(B: np.ndarray, C: np.ndarray, x: float, y: float, grid: Grid) -> Tuple[float, float]:
+    x0, y0, x1, y1, fx, fy = grid.bilinear_corners(float(x), float(y))
+    
     fx1 = 1.0 - fx
     fy1 = 1.0 - fy
 
@@ -554,7 +565,7 @@ def _bilinear_many_BC(
     C: np.ndarray,
     xs: np.ndarray,
     ys: np.ndarray,
-    s: int,
+    grid: Grid,
     outB: Optional[np.ndarray] = None,
     outC: Optional[np.ndarray] = None,
     tmp: Optional[np.ndarray] = None,
@@ -576,7 +587,7 @@ def _bilinear_many_BC(
         outC = np.empty(shape, dtype=np.float32)
 
     if _NUMBA_AVAILABLE:
-        _bilinear_kernel_nb(B, C, xs.ravel(), ys.ravel(), int(s),
+        _bilinear_kernel_nb(B, C, xs.ravel(), ys.ravel(), int(grid.size),
                             outB.ravel(), outC.ravel())
         return outB, outC
 
@@ -584,14 +595,9 @@ def _bilinear_many_BC(
     if tmp is None:
         tmp = np.empty(shape, dtype=np.float32)
 
-    xs2 = np.mod(xs, np.float32(s))
-    ys2 = np.mod(ys, np.float32(s))
-    x0 = xs2.astype(np.int32, copy=False)
-    y0 = ys2.astype(np.int32, copy=False)
-    fx = xs2 - x0;  fy = ys2 - y0
-    fx1 = np.float32(1.0) - fx;  fy1 = np.float32(1.0) - fy
-    x1 = x0 + 1;  y1 = y0 + 1
-    x1[x1 == s] = 0;  y1[y1 == s] = 0
+    x0, y0, x1, y1, fx, fy = grid.bilinear_indices_many(xs, ys)
+    fx1 = np.float32(1.0) - fx
+    fy1 = np.float32(1.0) - fy
 
     B00 = B[y0, x0]; B10 = B[y0, x1]; B01 = B[y1, x0]; B11 = B[y1, x1]
     np.multiply(B00, fx1, out=outB); outB += B10 * fx; outB *= fy1
