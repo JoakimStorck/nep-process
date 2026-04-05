@@ -9,9 +9,12 @@ import numpy as np
 
 from world import World, WorldParams
 from mlp import MLPGenome
-from agent import Agent, AgentParams, torus_wrap
+from agent import Agent, AgentParams
 from genetics import child_genome_from_parent, recombine, MutationConfig, genetic_compatibility
 from phenotype import derive_pheno
+
+from organism_store import OrganismStore
+from grid import Grid
 
 # new logging
 from simlog.events import Event, EventName
@@ -107,6 +110,9 @@ class Population:
     MC: MutationConfig = field(default_factory=MutationConfig)
     seed: int = 0
 
+    store: OrganismStore = field(init=False)
+    grid: Grid = field(init=False)
+    
     # optional: pass from runner; if None, no logging
     hub: Optional[EventHub] = None
 
@@ -137,8 +143,14 @@ class Population:
         random.seed(self.seed)
         self.rng = np.random.default_rng(self.seed)
         self.world = World(self.WP)
+        self.grid = Grid(size=int(self.WP.size))
         self._banks = {}
 
+        self.store = OrganismStore(
+            capacity=int(self.PP.max_pop),
+            world_size=int(self.WP.size),
+        )
+        
         self._next_sample_t = 0.0
         self._recent_sample_ids = []
         self._births_total = 0
@@ -192,6 +204,7 @@ class Population:
                 y=y,
                 heading=float(self.rng.uniform(-math.pi, math.pi)),
             )
+            a.bind_grid(self.grid)
             a.bind_world(self.world)
 
             # --- Warm start: åldersstrukturerad population ---
@@ -252,6 +265,8 @@ class Population:
             self._emit_birth(self.t, a, parent=None)
             self.agents.append(a)
 
+        self._sync_store()
+            
     # -----------------------
     # logging helpers
     # -----------------------
@@ -417,52 +432,6 @@ class Population:
     # -----------------------
     # births
     # -----------------------
-    def _spawn_child(self, 
-        parent: Agent, 
-        ctx: StepCtx, 
-        child_M_from_parent: float | None,
-        child_E_fast_J: float,
-        child_E_slow_J: float,
-    ) -> Agent:
-        dx = float(self.rng.normal(0.0, float(self.PP.spawn_jitter_r)))
-        dy = float(self.rng.normal(0.0, float(self.PP.spawn_jitter_r)))
-    
-        g_child = child_genome_from_parent(parent.genome, rng=self.rng, cfg=self.MC)
-    
-        child = Agent(
-            AP=self.AP,
-            genome=g_child,
-            x=torus_wrap(float(parent.x) + dx, int(self.WP.size)),
-            y=torus_wrap(float(parent.y) + dy, int(self.WP.size)),
-            heading=float(self.rng.uniform(-math.pi, math.pi)),
-        )
-        child.bind_world(self.world)
-        child.birth_t = float(self.t)
-    
-        # ParamBank slot
-        key = (tuple(g_child.layer_sizes), str(g_child.act))
-        bank = self._banks.get(key)
-        if bank is None:
-            bank = ParamBank.create(key[0], key[1], capacity=int(self.PP.max_pop))
-            self._banks[key] = bank
-    
-        slot = bank.alloc()
-        bank.write_genome(slot, g_child)
-    
-        child._policy_key = key
-        child._policy_slot = slot
-    
-        # newborn physiology (mass + ENERGY comes from parent)
-        child.init_newborn_state(
-            parent.pheno,
-            child_M_from_parent=child_M_from_parent,
-            child_E_fast_J=child_E_fast_J,
-            child_E_slow_J=child_E_slow_J,
-        )
-    
-        self._emit_birth(self.t, child, parent)
-        return child
-
     def _spawn_child(
         self,
         parent: Agent,
@@ -480,13 +449,18 @@ class Population:
         else:
             g_child = child_genome_from_parent(parent.genome, rng=self.rng, cfg=self.MC)
 
+        x_child, y_child = self.grid.wrap_pos(
+            float(parent.x) + dx,
+            float(parent.y) + dy,
+        )
         child = Agent(
             AP=self.AP,
             genome=g_child,
-            x=torus_wrap(float(parent.x) + dx, int(self.WP.size)),
-            y=torus_wrap(float(parent.y) + dy, int(self.WP.size)),
+            x=x_child,
+            y=y_child,
             heading=float(self.rng.uniform(-math.pi, math.pi)),
         )
+        child.bind_grid(self.grid)
         child.bind_world(self.world)
         child.birth_t = float(self.t)
 
@@ -533,16 +507,8 @@ class Population:
         if not best.ready_to_reproduce():
             return
 
-        # Avståndskontroll: måste fortfarande vara inom parningsradien
-        size_f = float(self.WP.size)
-        half   = size_f * 0.5
-        ddx = float(best.x) - float(agent.x)
-        ddy = float(best.y) - float(agent.y)
-        if ddx >  half: ddx -= size_f
-        elif ddx < -half: ddx += size_f
-        if ddy >  half: ddy -= size_f
-        elif ddy < -half: ddy += size_f
-        if ddx * ddx + ddy * ddy > float(self.PP.mating_radius) ** 2:
+        # Avståndskontroll via Grid: Population ska inte bära egen torusmatematik.
+        if self._pair_distance2(agent, best) > float(self.PP.mating_radius) ** 2:
             return
 
         # Genetisk kompatibilitet: P(parning lyckas) = exp(-d2_norm / 2*sigma2)
@@ -626,6 +592,26 @@ class Population:
         parent.repro_cd_s = float(self.AP.repro_cooldown_s)
         return child
 
+    def _pair_distance(self, a: Agent, b: Agent) -> float:
+        return self.grid.distance_pos(
+            float(a.x), float(a.y),
+            float(b.x), float(b.y),
+        )
+
+    def _pair_distance2(self, a: Agent, b: Agent) -> float:
+        return self.grid.distance2_pos(
+            float(a.x), float(a.y),
+            float(b.x), float(b.y),
+        )
+        
+    def _sync_store(self) -> None:
+        """
+        Fas 0: Agent/Body är fortfarande source of truth.
+        OrganismStore är en ren SoA-spegel som uppdateras efter init och efter varje tick.
+        """
+        self.store.sync_from_agents(self.agents, grid=self.grid)
+        self.store.assert_consistent()
+        
     # -----------------------
     # main loop
     # -----------------------
@@ -712,8 +698,7 @@ class Population:
         attack_range = float(self.AP.attack_range)
         dmg_per_s    = float(self.AP.attack_damage_per_s)
         cost_frac    = float(self.AP.attack_cost_per_s)
-        size_f       = float(self.WP.size)
-        dt_val       = float(self.WP.dt)
+        
         attack_score_min = float(getattr(self.AP, 'attack_score_min', 0.18))
         predator_trait_min = float(getattr(self.AP, 'predator_trait_min', 0.20))
 
@@ -741,9 +726,9 @@ class Population:
             if prey is None or prey is predator or (not prey.body.alive):
                 continue
 
-            _, _, dist = predator._torus_delta_to(prey, size_f)
+            dist = self._pair_distance(predator, prey)
             if dist > attack_range:
-                continue
+                continue            
 
             score = predator.attack_score(prey, dist)
             if score <= attack_score_min:
@@ -754,10 +739,10 @@ class Population:
             mismatch_cost = float(getattr(predator.AP, 'hunt_mismatch_cost', 2.0))
             cost_mult = 1.0 + (mismatch_cost - 1.0) * max(0.0, 1.0 - pred_diet)
             predator.body.take_energy(
-                cost_frac * hunt_eff * cost_mult * float(predator.body.E_cap()) * dt_val
+                cost_frac * hunt_eff * cost_mult * float(predator.body.E_cap()) * dt
             )
 
-            dD = dmg_per_s * max(0.25, score) * hunt_eff * (float(predator.body.M) ** 0.5) * dt_val
+            dD = dmg_per_s * max(0.25, score) * hunt_eff * (float(predator.body.M) ** 0.5) * dt
             prey.body.D = min(float(prey.body.D) + dD, float(prey.body.AP.D_max))
 
             # Om attacken driver bytet till dödströskeln dör det direkt.
@@ -859,7 +844,10 @@ class Population:
     
             while self._next_sample_t <= self.t + 1e-12:
                 self._next_sample_t += sd
-    
+
+        # (F.5) Fas 0-spegel till SoA-store
+        self._sync_store()
+        
         # (G) emit world + population
         self._emit_world(self.t)
         self._emit_population(self.t, births=self._births_total, deaths=self._deaths_total)

@@ -12,9 +12,7 @@ from world import World, clamp
 from mlp import MLPGenome
 from phenotype import Phenotype, derive_pheno, phenotype_summary
 
-
-def torus_wrap(x: float, size: int) -> float:
-    return x % size
+from grid import Grid
 
 
 # -------------------------
@@ -1211,7 +1209,7 @@ class Body:
 @dataclass
 class RaySensors:
     AP: AgentParams
-    world_size: int
+    grid: Grid
 
     _n: int = field(init=False, default=0)
     _m: int = field(init=False, default=0)
@@ -1243,6 +1241,23 @@ class RaySensors:
     def __post_init__(self) -> None:
         self._rebuild_cache()
 
+    def _wrap_points_inplace(self, xs: np.ndarray, ys: np.ndarray) -> None:
+        s = np.float32(self.grid.size)
+        np.mod(xs, s, out=xs)
+        np.mod(ys, s, out=ys)
+
+    def _points_to_cells(self, xs: np.ndarray, ys: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        s = int(self.grid.size)
+
+        np.floor(xs, out=xs)
+        np.floor(ys, out=ys)
+        np.mod(xs, s, out=xs)
+        np.mod(ys, s, out=ys)
+
+        np.copyto(self._ixs, xs, casting="unsafe")
+        np.copyto(self._iys, ys, casting="unsafe")
+        return self._ixs, self._iys
+        
     @staticmethod
     def _sat_u(x_kg: np.ndarray, K: float) -> np.ndarray:
         if K <= 0.0:
@@ -1377,10 +1392,8 @@ class RaySensors:
         np.multiply(self._dy[:, None], self._d[None, :], out=self._ys)
         self._ys += yy
 
-        ws = np.float32(self.world_size)
-        np.mod(self._xs, ws, out=self._xs)
-        np.mod(self._ys, ws, out=self._ys)
-
+        self._wrap_points_inplace(self._xs, self._ys)
+        
         # ---- (C) Sample world fields ----
         Bkg, Ckg = world.sample_many(self._xs, self._ys, outB=self._Bp, outC=self._Cp)
 
@@ -1459,19 +1472,10 @@ class RaySensors:
         np.multiply(self._dy[:, None], self._d[None, :], out=self._ys)
         self._ys += yy
 
-        ws = np.float32(self.world_size)
-        s  = int(self.world_size)
-        np.mod(self._xs, ws, out=self._xs)
-        np.mod(self._ys, ws, out=self._ys)
+        self._wrap_points_inplace(self._xs, self._ys)
+        ixs, iys = self._points_to_cells(self._xs, self._ys)
 
-        np.floor(self._xs, out=self._xs)
-        np.floor(self._ys, out=self._ys)
-        np.mod(self._xs, s, out=self._xs)
-        np.mod(self._ys, s, out=self._ys)
-        np.copyto(self._ixs, self._xs, casting="unsafe")
-        np.copyto(self._iys, self._ys, casting="unsafe")
-
-        aids = world.A[self._iys, self._ixs]
+        aids = world.A[iys, ixs]
         mask = (aids != 0) & (aids != int(self_id))
 
         # Maskera bortom per-stråle djup (ellipsmodell)
@@ -1519,6 +1523,7 @@ class Agent:
     OUT_DIM: ClassVar[int] = 5
     
     body: Body = field(init=False)
+    grid: Grid = field(init=False)
     sensors: RaySensors = field(init=False)
 
     obs_trace: np.ndarray = field(init=False)
@@ -1605,54 +1610,15 @@ class Agent:
 
     def bind_world(self, world: World) -> None:
         self.world = world
-        size = int(world.WP.size)
-        if getattr(self, "sensors", None) is None or getattr(self.sensors, "world_size", None) != size:
-            self.sensors = RaySensors(self.AP, world_size=size)
+        if getattr(self, "sensors", None) is None:
+            self.sensors = RaySensors(self.AP, grid=self.grid)
 
+    def bind_grid(self, grid: Grid) -> None:
+        self.grid = grid
+        
     @staticmethod
     def _signed_angle(a: float) -> float:
         return (a + math.pi) % (2.0 * math.pi) - math.pi
-
-
-    def _torus_delta_to(self, other, size: float) -> tuple[float, float, float]:
-        dx = float(other.x) - float(self.x)
-        dy = float(other.y) - float(self.y)
-        half = 0.5 * float(size)
-        if dx > half:
-            dx -= float(size)
-        elif dx < -half:
-            dx += float(size)
-        if dy > half:
-            dy -= float(size)
-        elif dy < -half:
-            dy += float(size)
-        d2 = dx * dx + dy * dy
-        return dx, dy, math.sqrt(d2) if d2 > 0.0 else 0.0
-
-    def attack_value(self, target, dist: float) -> float:
-        tb = getattr(target, 'body', None)
-        if tb is None or not bool(getattr(tb, 'alive', False)):
-            return -1.0e9
-        tm = max(0.0, float(getattr(tb, 'M', 0.0)))
-        te = max(0.0, float(tb.E_total())) if hasattr(tb, 'E_total') else 0.0
-        my_ecap = max(1e-9, float(self.body.E_cap()))
-        dist_term = max(0.0, 1.0 - float(dist) / max(1e-9, float(self.AP.attack_range)))
-        return 0.35 * tm + 0.65 * (te / my_ecap) + 0.40 * dist_term
-
-    def attack_risk(self, target, dist: float) -> float:
-        tb = getattr(target, 'body', None)
-        tp = float(getattr(getattr(target, 'pheno', None), 'predation', 0.0))
-        if tb is None or not bool(getattr(tb, 'alive', False)):
-            return 1.0e9
-        tm = max(1e-9, float(getattr(tb, 'M', 0.0)))
-        my_m = max(1e-9, float(self.body.M))
-        d_norm = clamp(float(getattr(tb, 'D', 0.0)) / max(1e-9, float(self.AP.D_max)), 0.0, 1.0)
-        healthy = 1.0 - d_norm
-        dist_term = max(0.0, 1.0 - float(dist) / max(1e-9, float(self.AP.attack_range)))
-        return 0.45 * (tm / my_m) + 0.55 * tp + 0.35 * healthy * dist_term
-
-    def attack_score(self, target, dist: float) -> float:
-        return self.attack_value(target, dist) - self.attack_risk(target, dist)
 
     def apply_traits(self) -> None:
         self.pheno = derive_pheno(self.genome.traits)
@@ -1799,18 +1765,11 @@ class Agent:
 
         return x_in, float(B0), float(C0)
 
-    def _torus_delta_to(self, other: "Agent", size: float) -> tuple[float, float, float]:
-        dx = float(other.x) - float(self.x)
-        dy = float(other.y) - float(self.y)
-        half = 0.5 * float(size)
-        if dx > half:
-            dx -= float(size)
-        elif dx < -half:
-            dx += float(size)
-        if dy > half:
-            dy -= float(size)
-        elif dy < -half:
-            dy += float(size)
+    def _torus_delta_to(self, other: "Agent") -> tuple[float, float, float]:
+        dx, dy = self.grid.torus_delta_pos(
+            float(self.x), float(self.y),
+            float(other.x), float(other.y),
+        )
         d2 = dx * dx + dy * dy
         return dx, dy, math.sqrt(d2) if d2 > 0.0 else 0.0
 
@@ -1905,7 +1864,7 @@ class Agent:
         if N > 0.5 and hit_id > 0:
             detected = world._agent_by_id.get(int(hit_id))
             if detected is not None and detected.body.alive and detected is not self:
-                dx, dy, dist = self._torus_delta_to(detected, float(world.WP.size))
+                dx, dy, dist = self._torus_delta_to(detected)
                 other_pred = float(getattr(detected.pheno, "predation", 0.0))
                 other_diet = float(getattr(detected.pheno, "diet", 0.5))
                 other_hunt_eff = other_pred * (other_diet ** _hunt_diet_exp)
@@ -2060,9 +2019,11 @@ class Agent:
         # ---------------------------------------------------------
         # 8) Apply translation (torus)
         # ---------------------------------------------------------
-        self.x = torus_wrap(float(self.x) + dt * speed * math.cos(self.heading), world.WP.size)
-        self.y = torus_wrap(float(self.y) + dt * speed * math.sin(self.heading), world.WP.size)
+        x_new = float(self.x) + dt * speed * math.cos(self.heading)
+        y_new = float(self.y) + dt * speed * math.sin(self.heading)
 
+        self.x, self.y = self.grid.wrap_pos(x_new, y_new)
+            
         # ---------------------------------------------------------
         # 9) Feeding (kg)
         # ---------------------------------------------------------
