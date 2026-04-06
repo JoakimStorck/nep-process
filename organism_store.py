@@ -58,6 +58,13 @@ class OrganismStore:
     mass: np.ndarray = field(init=False)
     age: np.ndarray = field(init=False)
 
+    repro_cd: np.ndarray = field(init=False)
+    
+    gestating: np.ndarray = field(init=False)
+    gest_M: np.ndarray = field(init=False)
+    gest_E_J: np.ndarray = field(init=False)
+    gest_M_target: np.ndarray = field(init=False)
+
     genome_idx: np.ndarray = field(init=False)
     traits: np.ndarray = field(init=False)
 
@@ -103,6 +110,13 @@ class OrganismStore:
         self.energy = np.zeros(cap, dtype=np.float32)
         self.mass = np.zeros(cap, dtype=np.float32)
         self.age = np.zeros(cap, dtype=np.float32)
+
+        self.repro_cd = np.zeros((self.capacity,), dtype=np.float32)
+        
+        self.gestating = np.zeros((self.capacity,), dtype=bool)
+        self.gest_M = np.zeros((self.capacity,), dtype=np.float32)
+        self.gest_E_J = np.zeros((self.capacity,), dtype=np.float32)
+        self.gest_M_target = np.zeros((self.capacity,), dtype=np.float32)
 
         # Fas 0: ännu ingen riktig genomstore.
         self.genome_idx = np.full(cap, -1, dtype=np.int32)
@@ -174,7 +188,6 @@ class OrganismStore:
     
         self.energy[slot] = float(body.E_total())
         self.mass[slot] = float(body.M)
-        self.age[slot] = float(a.age_s)
     
         self.genome_idx[slot] = slot
     
@@ -209,7 +222,14 @@ class OrganismStore:
         self.age[slot] = 0.0
         self.genome_idx[slot] = -1
         self.traits[slot, :] = 0.0
-    
+
+        self.repro_cd[slot] = np.float32(0.0)
+        
+        self.gestating[slot] = False
+        self.gest_M[slot] = np.float32(0.0)
+        self.gest_E_J[slot] = np.float32(0.0)
+        self.gest_M_target[slot] = np.float32(0.0)
+
         self.uptake_capacity[slot] = 0.0
         self.growth_capacity[slot] = 0.0
         self.dispersal_capacity[slot] = 0.0

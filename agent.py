@@ -2372,6 +2372,8 @@ class Agent:
     # --- reproduction hooks (Population uses these) ---
     
     def ready_to_reproduce(self) -> bool:
+        # OBS: repro_cd_s och body.gestating synkas nu från store före passen.
+        # Under migrationen används de här som kompatibilitetsyta.        
         if not self.body.alive:
             return False
     
