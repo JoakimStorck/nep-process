@@ -99,6 +99,17 @@ _T_PREDATION       = 22   # benägenhet att attackera levande byten
 _T_HIDDEN_1        = 23   # bredd på första dolda lagret
 _T_HIDDEN_2        = 24   # bredd på andra dolda lagret
 
+# ---- Shared organism trait block (phase 2+) ----
+# Dessa loci är avsedda att vara gemensamma på organismnivå.
+# Alla system behöver inte använda alla loci.
+_T_AUTOTROPHY      = 25
+_T_GROWTH          = 26
+_T_ADULT_MASS      = 27
+_T_TEMP_OPT        = 28
+_T_TEMP_WIDTH      = 29
+_T_SEXUAL_MODE     = 30
+_T_DISPERSAL       = 31
+
 @dataclass(frozen=True)
 class PhenoRanges:
     # maturity
@@ -288,3 +299,44 @@ def phenotype_summary(p: Phenotype) -> dict[str, float]:
         "hidden_1": int(p.hidden_1),
         "hidden_2": int(p.hidden_2),
     }
+
+def trait_unit(traits: np.ndarray | None, i: int, default: float = 0.0) -> float:
+    return _sigmoid(_get_trait(traits, i, default))
+
+
+def trait_lerp(
+    traits: np.ndarray | None,
+    i: int,
+    lo: float,
+    hi: float,
+    default: float = 0.0,
+) -> float:
+    return _lerp(lo, hi, trait_unit(traits, i, default))
+
+
+def autotrophy_from_traits(traits: np.ndarray | None) -> float:
+    return trait_unit(traits, _T_AUTOTROPHY, default=0.0)
+
+
+def growth_from_traits(traits: np.ndarray | None) -> float:
+    return trait_unit(traits, _T_GROWTH, default=0.0)
+
+
+def adult_mass_from_traits(traits: np.ndarray | None) -> float:
+    return trait_unit(traits, _T_ADULT_MASS, default=0.0)
+
+
+def temp_opt_from_traits(traits: np.ndarray | None) -> float:
+    return trait_unit(traits, _T_TEMP_OPT, default=0.0)
+
+
+def temp_width_from_traits(traits: np.ndarray | None) -> float:
+    return trait_unit(traits, _T_TEMP_WIDTH, default=0.0)
+
+
+def sexual_mode_from_traits(traits: np.ndarray | None) -> float:
+    return trait_unit(traits, _T_SEXUAL_MODE, default=0.0)
+
+
+def dispersal_from_traits(traits: np.ndarray | None) -> float:
+    return trait_unit(traits, _T_DISPERSAL, default=0.0)

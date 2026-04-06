@@ -65,7 +65,7 @@ def _hsv_to_rgb(h: float, s: float, v: float) -> Tuple[int, int, int]:
     return int(r * 255), int(g * 255), int(b * 255)
 
 
-def _agent_visuals(agent) -> Tuple[Tuple[int,int,int], int]:
+def _agent_visuals(agent) -> Tuple[Tuple[int, int, int], int]:
     """
     Returnerar (rgb_color, radius_px) baserat på agentens fysiologi:
       - Färg (hue): skada D  → grön (frisk/ung) till röd (döende)
@@ -76,32 +76,74 @@ def _agent_visuals(agent) -> Tuple[Tuple[int,int,int], int]:
     if body is None:
         return (200, 200, 200), 3
 
-    # --- Färg: hue från D (0=grön, 0.33→gul vid D=0.5, röd vid D=1) ---
-    D     = float(getattr(body, "D",   0.0))
+    D = float(getattr(body, "D", 0.0))
     D_max = float(getattr(getattr(agent, "AP", None), "D_max", 1.0) or 1.0)
     d_norm = max(0.0, min(1.0, D / max(D_max, 1e-9)))
-    hue = 0.33 * (1.0 - d_norm)   # 0.33=grön → 0.0=röd
+    hue = 0.33 * (1.0 - d_norm)
 
-    # --- Ljusstyrka: energireserv ---
     try:
-        Et   = float(body.E_total())
+        Et = float(body.E_total())
         Ecap = float(body.E_cap())
         e_frac = max(0.0, min(1.0, Et / max(Ecap, 1e-9)))
     except Exception:
         e_frac = 0.5
-    value = 0.35 + 0.65 * e_frac   # 0.35 (svält) → 1.0 (full)
+    value = 0.35 + 0.65 * e_frac
 
     saturation = 0.85
-
     rgb = _hsv_to_rgb(hue, saturation, value)
 
-    # --- Storlek: massa M (klammad till 2–8 px) ---
-    M    = float(getattr(body, "M", 0.2))
-    M0   = float(getattr(getattr(agent, "AP", None), "M0", 1.0) or 1.0)
-    m_n  = max(0.0, min(1.0, M / max(M0, 1e-9)))
+    M = float(getattr(body, "M", 0.2))
+    M0 = float(getattr(getattr(agent, "AP", None), "M0", 1.0) or 1.0)
+    m_n = max(0.0, min(1.0, M / max(M0, 1e-9)))
     radius = max(2, min(8, int(2 + 6 * m_n)))
 
     return rgb, radius
+
+
+def _iter_live_flora_slots(pop):
+    store = getattr(pop, "store", None)
+    if store is None:
+        return
+    n0 = int(getattr(store, "n_agents", 0))
+    n1 = int(getattr(store, "n", 0))
+    for slot in range(n0, n1):
+        if not bool(store.alive[slot]):
+            continue
+        if int(store.kind[slot]) != 1:
+            continue
+        yield slot
+
+def _flora_mass_field(pop) -> np.ndarray:
+    world = getattr(pop, "world", None)
+    if world is None:
+        return np.zeros((1, 1), dtype=np.float32)
+
+    s = int(world.WP.size)
+    B = np.zeros((s, s), dtype=np.float32)
+
+    store = getattr(pop, "store", None)
+    grid = getattr(pop, "grid", None)
+    if store is None or grid is None:
+        return B
+
+    n0 = int(getattr(store, "n_agents", 0))
+    n1 = int(getattr(store, "n", 0))
+
+    for slot in range(n0, n1):
+        if not bool(store.alive[slot]):
+            continue
+        if int(store.kind[slot]) != 1:
+            continue
+
+        cell = int(store.cell_idx[slot])
+        if cell < 0:
+            continue
+
+        row, col = grid.rowcol_of(cell)
+        B[row, col] += float(store.mass[slot])
+
+    return B    
+
 @dataclass
 class ViewerConfig:
     title: str = "NEP World"
@@ -111,19 +153,23 @@ class ViewerConfig:
 
     draw_agents: bool = True
     draw_heading: bool = True
-    draw_rays: bool = False        # visa sensing-strålar (tangent R)
+    draw_rays: bool = False
     agent_radius_px: int = 3
     agent_heading_len_px: int = 6
 
     show_hud: bool = True
 
     # Modes:
-    #   CB   : RGB=(C,B,0)
-    #   B/C  : grayscale single field
-    #   TEMP : grayscale temperature
-    #   VEG  : vegetation health (green<->brown based on stress)
-    mode: str = "VEG"
+    #   CB    : RGB=(C,B,0)
+    #   B/C   : grayscale single field
+    #   TEMP  : grayscale temperature
+    #   FLORA : diskret flora-overlay ovanpå neutral bakgrund
+    mode: str = "FLORA"
     gamma: float = 1.0
+
+    # Hur flora färgkodas i FLORA-läget:
+    #   temp_opt | dispersal | adult_mass | growth
+    flora_color_by: str = "temp_opt"
 
 
 class WorldViewer:
@@ -153,7 +199,6 @@ class WorldViewer:
                 if ev.key == pygame.K_SPACE:
                     self._paused = not self._paused
 
-                # modes (hazard removed)
                 if ev.key == pygame.K_1:
                     self.cfg.mode = "CB"
                 if ev.key == pygame.K_2:
@@ -161,16 +206,24 @@ class WorldViewer:
                 if ev.key == pygame.K_3:
                     self.cfg.mode = "C"
                 if ev.key == pygame.K_4:
-                    self.cfg.mode = "TEMP"
+                    self.cfg.mode = "FLORA"
                 if ev.key == pygame.K_5:
-                    self.cfg.mode = "VEG"
-
+                    self.cfg.mode = "TEMP"
+                    
                 if ev.key == pygame.K_a:
                     self.cfg.draw_agents = not self.cfg.draw_agents
                 if ev.key == pygame.K_r:
                     self.cfg.draw_rays = not self.cfg.draw_rays
                 if ev.key == pygame.K_h:
                     self.cfg.show_hud = not self.cfg.show_hud
+                if ev.key == pygame.K_t:
+                    order = ["temp_opt", "dispersal", "adult_mass", "growth"]
+                    cur = str(getattr(self.cfg, "flora_color_by", "temp_opt"))
+                    try:
+                        i = order.index(cur)
+                    except ValueError:
+                        i = 0
+                    self.cfg.flora_color_by = order[(i + 1) % len(order)]
 
                 if ev.key == pygame.K_EQUALS or ev.key == pygame.K_PLUS:
                     self.cfg.gamma = max(0.20, self.cfg.gamma * 0.90)
@@ -187,9 +240,6 @@ class WorldViewer:
         cap = int(getattr(self.cfg, "fps_cap", 0) or 0)
         if cap > 0:
             self._clock.tick(cap)
-        else:
-            # ingen throttling (ingen sleep)
-            pass
 
     # ---------- rendering ----------
     def _ensure_screen(self, size: int) -> None:
@@ -205,44 +255,18 @@ class WorldViewer:
             return x01
         return np.power(_clip01(x01), g, dtype=np.float32)
 
-    # ----- helpers for VEG mode -----
     @staticmethod
     def _temp_field(world, shape_like: np.ndarray) -> np.ndarray:
-        """Broadcast Ty -> (H,W). If missing Ty, return zeros."""
         if hasattr(world, "Ty"):
             Ty = np.asarray(world.Ty, dtype=np.float32)
             return np.broadcast_to(Ty[:, None], shape_like.shape).astype(np.float32, copy=False)
         return np.zeros_like(shape_like, dtype=np.float32)
 
-    @staticmethod
-    def _veg_G_and_m(T: np.ndarray, WP) -> Tuple[np.ndarray, np.ndarray]:
-        """Reconstruct G(T) and m(T) using WorldParams-compatible fields."""
-        # G(T) triangular window
-        G = np.zeros_like(T, dtype=np.float32)
-        Tmin, Topt, Tmax = float(WP.T_grow_min), float(WP.T_grow_opt), float(WP.T_grow_max)
-
-        if Topt > Tmin + 1e-9:
-            G = np.where((T >= Tmin) & (T < Topt), (T - Tmin) / (Topt - Tmin), G)
-        if Tmax > Topt + 1e-9:
-            G = np.where((T >= Topt) & (T <= Tmax), (Tmax - T) / (Tmax - Topt), G)
-        G = np.clip(G, 0.0, 1.0).astype(np.float32, copy=False)
-
-        # m(T) wither rate
-        m = np.full_like(T, float(WP.B_wither_base), dtype=np.float32)
-
-        if float(getattr(WP, "B_wither_cold", 0.0)) > 0.0 and float(getattr(WP, "cold_width", 0.0)) > 1e-9:
-            Sc = np.clip((float(WP.T_cold) - T) / float(WP.cold_width), 0.0, 1.0).astype(np.float32, copy=False)
-            m += float(WP.B_wither_cold) * Sc
-
-        if float(getattr(WP, "B_wither_hot", 0.0)) > 0.0 and float(getattr(WP, "hot_width", 0.0)) > 1e-9:
-            Sh = np.clip((T - float(WP.T_hot)) / float(WP.hot_width), 0.0, 1.0).astype(np.float32, copy=False)
-            m += float(WP.B_wither_hot) * Sh
-
-        return G, m
-
-    def _make_rgb(self, world) -> np.ndarray:
+    def _make_rgb(self, pop) -> np.ndarray:
         """Returns (H,W,3) uint8."""
-        B = np.asarray(world.B, dtype=np.float32)
+        world = pop.world
+    
+        B = _flora_mass_field(pop)
         C = np.asarray(world.C, dtype=np.float32)
     
         WP = getattr(world, "WP", None)
@@ -251,7 +275,7 @@ class WorldViewer:
     
         B01 = np.clip(B / max(BK, 1e-12), 0.0, 1.0).astype(np.float32, copy=False)
         C01 = np.clip(C / max(CK, 1e-12), 0.0, 1.0).astype(np.float32, copy=False)
-        C01 = np.sqrt(C01, dtype=np.float32)   # valfri men ofta bra för synlighet
+        C01 = np.sqrt(C01, dtype=np.float32)
     
         mode = self.cfg.mode.upper().strip()
     
@@ -262,47 +286,23 @@ class WorldViewer:
             img = np.dstack([C01, C01, C01])
     
         elif mode == "TEMP":
-            # stable normalization span for readability
-            T = self._temp_field(world, B)
+            T = self._temp_field(world, C)
             Tmin, Tmax = -10.0, 40.0
             t01 = np.clip((T - Tmin) / (Tmax - Tmin), 0.0, 1.0).astype(np.float32, copy=False)
             img = np.dstack([t01, t01, t01])
-
-        elif mode == "VEG":
-            # vegetation "health": green<->brown based on stress = wither/(growth+wither)
-            WP = world.WP
-            if WP is None:
-                img = np.dstack([B01, B01, B01])
-            else:
-                BK = float(getattr(WP, "B_K", 1.0))
-                invBK = 1.0 / max(BK, 1e-12)
-                B01 = np.clip(B * invBK, 0.0, 1.0).astype(np.float32, copy=False)
-
-                T = self._temp_field(world, B)
-                G, m = self._veg_G_and_m(T, WP)
-
-                # mirror World.step() terms (no diffusion needed for "health" coloring)
-                growth = (float(WP.B_regen) * G) * (1.0 - B * invBK) * B
-                wither = m * B
-
-                eps = np.float32(1e-9)
-                stress = wither / (growth + wither + eps)  # 0..1
-
-                # brightness scales with normalized biomass (kg -> 0..1)
-                green = B01 * (1.0 - stress)
-                brown = B01 * stress
-
-                R = brown
-                Gc = green + 0.35 * brown
-                Bl = 0.10 * brown
-
-                img = np.dstack([R, Gc, Bl]).astype(np.float32, copy=False)
-
-        else:
-            # default "CB": R=C, G=B, B=0
+    
+        elif mode == "FLORA":
+            T = self._temp_field(world, C)
+            Tmin, Tmax = -10.0, 40.0
+            t01 = np.clip((T - Tmin) / (Tmax - Tmin), 0.0, 1.0).astype(np.float32, copy=False)
+    
+            base = 0.08 + 0.10 * t01
+            img = np.dstack([0.10 * base, 0.18 * base, 0.22 * base]).astype(np.float32, copy=False)
+    
+        else:  # "CB"
             Z = np.zeros_like(B01, dtype=np.float32)
             img = np.dstack([C01, B01, Z])
-
+    
         img = self._gamma(img)
         return _as_u8_rgb(img)
 
@@ -316,16 +316,75 @@ class WorldViewer:
             surf = pygame.transform.scale(surf, (s * self.cfg.scale, s * self.cfg.scale))
         self._screen.blit(surf, (0, 0))
 
-    def _draw_rays(self, pop) -> None:
-        """
-        Visualiserar sensing-strålarna för varje levande agent.
-        Strållängden per stråle reflekterar ellipsmodellen via sensors._ray_m.
-        Grönt = mat (B), cyan = kadaver (C), svag grå = ingen signal.
-        """
+    def _draw_flora(self, pop) -> None:
+        store = getattr(pop, "store", None)
+        grid = getattr(pop, "grid", None)
+        if store is None or grid is None:
+            return
+    
         pygame = self.pg
-        s     = int(pop.world.WP.size)
         scale = int(self.cfg.scale)
-        W_px  = s * scale
+        color_by = str(getattr(self.cfg, "flora_color_by", "temp_opt")).lower()
+    
+        for slot in _iter_live_flora_slots(pop):
+            cell = int(store.cell_idx[slot])
+            if cell < 0:
+                continue
+    
+            row, col = grid.rowcol_of(cell)
+            x = col * scale
+            y = row * scale
+    
+            m = float(store.mass[slot])
+    
+            try:
+                m_cap = float(pop._flora_adult_mass[slot])
+            except Exception:
+                m_cap = max(m, 1e-9)
+            frac = max(0.0, min(1.0, m / max(m_cap, 1e-9)))
+            a = int(80 + 175 * frac)
+    
+            # default
+            u = 0.5
+    
+            try:
+                if color_by == "temp_opt":
+                    val = float(pop._flora_temp_opt[slot])
+                    u = max(0.0, min(1.0, (val + 5.0) / 40.0))
+    
+                elif color_by == "dispersal":
+                    val = float(pop._flora_dispersal_rate[slot])
+                    u = max(0.0, min(1.0, (val - 0.0002) / (0.0200 - 0.0002)))
+    
+                elif color_by == "adult_mass":
+                    val = float(pop._flora_adult_mass[slot])
+                    lo = 0.25 * float(pop.WP.B_K)
+                    hi = 4.0 * float(pop.WP.B_K)
+                    u = max(0.0, min(1.0, (val - lo) / max(hi - lo, 1e-9)))
+    
+                elif color_by == "growth":
+                    val = float(pop._flora_growth_rate[slot])
+                    u = max(0.0, min(1.0, (val - 0.005) / (0.050 - 0.005)))
+    
+            except Exception:
+                u = 0.5
+    
+            # kall/låg -> blå/cyan, varm/hög -> gul/röd
+            r = int(40 + 180 * u)
+            g = int(80 + 140 * (1.0 - abs(u - 0.5) * 2.0))
+            b = int(40 + 180 * (1.0 - u))
+    
+            color = (r, g, b, a)
+    
+            flora_surf = pygame.Surface((scale, scale), pygame.SRCALPHA)
+            flora_surf.fill(color)
+            self._screen.blit(flora_surf, (x, y))
+
+    def _draw_rays(self, pop) -> None:
+        pygame = self.pg
+        s = int(pop.world.WP.size)
+        scale = int(self.cfg.scale)
+        W_px = s * scale
 
         ray_surf = pygame.Surface((W_px, W_px), pygame.SRCALPHA)
 
@@ -337,16 +396,16 @@ class WorldViewer:
             if sensors is None:
                 continue
 
-            n    = int(getattr(sensors, "_n", 0))
-            m    = int(getattr(sensors, "_m", 0))
+            n = int(getattr(sensors, "_n", 0))
+            m = int(getattr(sensors, "_m", 0))
             if n <= 0 or m <= 0:
                 continue
 
-            accB  = getattr(sensors, "_accB",    None)
-            accC  = getattr(sensors, "_accC",    None)
-            ang   = getattr(sensors, "_ang_base", None)
-            d     = getattr(sensors, "_d",        None)
-            ray_m = getattr(sensors, "_ray_m",    None)
+            accB = getattr(sensors, "_accB", None)
+            accC = getattr(sensors, "_accC", None)
+            ang = getattr(sensors, "_ang_base", None)
+            d = getattr(sensors, "_d", None)
+            ray_m = getattr(sensors, "_ray_m", None)
             if ang is None or d is None:
                 continue
 
@@ -355,7 +414,6 @@ class WorldViewer:
             py = int(ay * scale) % W_px
 
             for i in range(n):
-                # Per-stråle räckvidd från ellipsmodellen
                 if ray_m is not None and i < len(ray_m):
                     depth = max(1, min(int(ray_m[i]), m))
                 else:
@@ -405,13 +463,12 @@ class WorldViewer:
             return
 
         scale = int(self.cfg.scale)
-        hl    = int(self.cfg.agent_heading_len_px)
+        hl = int(self.cfg.agent_heading_len_px)
 
         agents = getattr(pop, "agents", None)
         if agents is None:
             return
 
-        # Rita strålar först (under agenterna)
         if self.cfg.draw_rays:
             self._draw_rays(pop)
             ray_surf = getattr(getattr(pop, "world", None), "_viewer_ray_surf", None)
@@ -427,11 +484,8 @@ class WorldViewer:
             py = int(y * scale) % (s * scale)
 
             color, radius = _agent_visuals(a)
-
-            # Fyllda cirklar med biologisk färg
             pygame.draw.circle(self._screen, color, (px, py), radius)
 
-            # --- Parningsläge: pulserande ring ---
             ready = False
             try:
                 ready = a.ready_to_reproduce()
@@ -442,39 +496,33 @@ class WorldViewer:
                 ring_alpha = int(120 + 120 * pulse)
                 ring_r = radius + 2 + int(pulse * 2)
                 ring_color = (255, 220, 50, ring_alpha)
-                ring_surf = pygame.Surface((ring_r*2+2, ring_r*2+2), pygame.SRCALPHA)
-                pygame.draw.circle(ring_surf, ring_color,
-                                   (ring_r+1, ring_r+1), ring_r, 2)
+                ring_surf = pygame.Surface((ring_r * 2 + 2, ring_r * 2 + 2), pygame.SRCALPHA)
+                pygame.draw.circle(ring_surf, ring_color, (ring_r + 1, ring_r + 1), ring_r, 2)
                 self._screen.blit(ring_surf, (px - ring_r - 1, py - ring_r - 1))
 
-            # --- Predation: röd yttre ring proportionell mot predation-trait ---
             pred_trait = 0.0
             try:
                 pred_trait = float(getattr(getattr(a, "pheno", None), "predation", 0.0))
             except Exception:
                 pass
             if pred_trait > 0.15:
-                pred_r     = radius + 1
+                pred_r = radius + 1
                 pred_alpha = int(60 + 180 * pred_trait)
                 pred_color = (220, 30, 30, pred_alpha)
-                pred_surf  = pygame.Surface((pred_r*2+2, pred_r*2+2), pygame.SRCALPHA)
-                pygame.draw.circle(pred_surf, pred_color,
-                                   (pred_r+1, pred_r+1), pred_r, max(1, int(pred_trait*3)))
+                pred_surf = pygame.Surface((pred_r * 2 + 2, pred_r * 2 + 2), pygame.SRCALPHA)
+                pygame.draw.circle(pred_surf, pred_color, (pred_r + 1, pred_r + 1), pred_r, max(1, int(pred_trait * 3)))
                 self._screen.blit(pred_surf, (px - pred_r - 1, py - pred_r - 1))
 
-            # --- Graviditet: liten inre prick för fostret ---
             body = getattr(a, "body", None)
             if body is not None and getattr(body, "gestating", False):
-                gest_M      = float(getattr(body, "gest_M", 0.0))
-                gest_M_tgt  = float(getattr(body, "gest_M_target", 1e-9))
-                frac        = min(1.0, gest_M / max(gest_M_tgt, 1e-9))
-                fetus_r     = max(1, int(radius * 0.35 + frac * radius * 0.25))
-                # Färg: grön-vit baserat på energi/massa-fraktion
-                g_val       = int(180 + 75 * frac)
+                gest_M = float(getattr(body, "gest_M", 0.0))
+                gest_M_tgt = float(getattr(body, "gest_M_target", 1e-9))
+                frac = min(1.0, gest_M / max(gest_M_tgt, 1e-9))
+                fetus_r = max(1, int(radius * 0.35 + frac * radius * 0.25))
+                g_val = int(180 + 75 * frac)
                 fetus_color = (200, g_val, 120)
                 pygame.draw.circle(self._screen, fetus_color, (px, py), fetus_r)
 
-            # Riktningslinje i samma färg men lite mörkare
             if self.cfg.draw_heading and hl > 0:
                 dim = tuple(max(0, int(c * 0.6)) for c in color)
                 ex = int(px + (radius + hl * 0.5) * math.cos(h))
@@ -485,17 +533,14 @@ class WorldViewer:
         if not self.cfg.show_hud:
             return
 
-        # time
         t = getattr(pop, "t", None)
         if t is None and hasattr(pop, "world"):
             t = getattr(pop.world, "t", 0.0)
 
-        # population (alive)
         n = 0
         if hasattr(pop, "agents"):
             n = sum(1 for a in pop.agents if _is_alive(a))
 
-        # temperature stats (global + hemispheres)
         tmean = tmin = tmax = float("nan")
         tmeanN = tmeanS = float("nan")
         if hasattr(pop, "world") and hasattr(pop.world, "Ty"):
@@ -508,6 +553,30 @@ class WorldViewer:
                 if 0 < mid < Ty.size:
                     tmeanN = float(np.mean(Ty[:mid]))
                     tmeanS = float(np.mean(Ty[mid:]))
+
+        flora_n = 0
+        flora_mass = 0.0
+        line5 = ""
+        if hasattr(pop, "store"):
+            store = pop.store
+            n0 = int(getattr(store, "n_agents", 0))
+            n1 = int(getattr(store, "n", 0))
+            mask = (store.kind[n0:n1] == 1) & store.alive[n0:n1]
+            flora_n = int(np.sum(mask))
+            if flora_n > 0:
+                flora_mass = float(np.sum(store.mass[n0:n1][mask]))
+
+        if hasattr(pop, "_flora_summary"):
+            ft = pop._flora_summary()
+            color_by = str(getattr(self.cfg, "flora_color_by", "temp_opt"))
+            line5 = (
+                f"flora[{color_by}]: "
+                f"g={ft['flora_mean_growth_rate']:.3f}  "
+                f"M*={ft['flora_mean_adult_mass']:.4f}  "
+                f"Topt={ft['flora_mean_temp_opt']:.1f}  "
+                f"Tw={ft['flora_mean_temp_width']:.1f}  "
+                f"d={ft['flora_mean_dispersal_rate']:.4f}"
+            )
 
         mode = self.cfg.mode.upper()
         paused = "PAUSED" if self._paused else ""
@@ -528,13 +597,19 @@ class WorldViewer:
         else:
             line2 = "T(mean/min/max)=NA"
 
+        line3 = f"flora_n={flora_n:4d}  flora_mass={flora_mass:.4f} kg"
+
         rays_str = "strålar:PÅ" if self.cfg.draw_rays else "strålar:av"
-        line3 = f"grön=frisk→röd=döende  ljus=energi  gul ring=parningsredo  vit prick=gravid  [{rays_str} R]"
+        line4 = f"grön=frisk→röd=döende  ljus=energi  gul ring=parningsredo  vit prick=gravid  [{rays_str} R]  [trait T]"
+
+        lines = [line1, line2, line3, line4]
+        if line5:
+            lines.append(line5)
 
         x0, y0 = 5, 5
         dy = 18
 
-        for i, text in enumerate([line1, line2, line3]):
+        for i, text in enumerate(lines):
             y = y0 + i * dy
             surf_shadow = self._font.render(text, True, (0, 0, 0))
             self._screen.blit(surf_shadow, (x0 + 1, y + 1))
@@ -556,8 +631,11 @@ class WorldViewer:
             self._throttle()
             return True
 
-        rgb = self._make_rgb(pop.world)
+        rgb = self._make_rgb(pop)
         self._blit_field(rgb)
+
+        if self.cfg.mode.upper().strip() == "FLORA":
+            self._draw_flora(pop)
 
         self._draw_agents(pop)
         self._draw_hud(pop, births_total=births_total, deaths_total=deaths_total)

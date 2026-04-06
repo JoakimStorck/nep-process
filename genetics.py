@@ -5,8 +5,18 @@ from dataclasses import dataclass
 import numpy as np
 
 from mlp import MLPGenome
-from phenotype import derive_pheno, _T_DIET, _T_PREDATION
-
+from phenotype import (
+    derive_pheno,
+    _T_DIET,
+    _T_PREDATION,
+    _T_AUTOTROPHY,
+    _T_GROWTH,
+    _T_ADULT_MASS,
+    _T_TEMP_OPT,
+    _T_TEMP_WIDTH,
+    _T_SEXUAL_MODE,
+    _T_DISPERSAL,
+)
 
 def _arch_from_traits(
     traits: np.ndarray | None,
@@ -240,6 +250,61 @@ def genetic_compatibility(g1: MLPGenome, g2: MLPGenome, sigma: float = 2.0) -> f
     sigma_sq = max(float(sigma), 1e-9) ** 2
     return float(np.exp(-d_sq_norm / (2.0 * sigma_sq)))
 
+def init_organism_traits(
+    rng: np.random.Generator,
+    n_traits: int,
+    *,
+    mode: str = "random",
+) -> np.ndarray:
+    """
+    Initiera en traitvektor i logit-rymden.
+    mode="random": bred, neutral initiering.
+    mode="flora": bias mot växtlik strategi men utan hård typflagga.
+    """
+    n = int(n_traits)
+    eps = 0.02
+
+    u = rng.uniform(eps, 1.0 - eps, size=n).astype(np.float64)
+
+    if mode == "flora":
+        if n > _T_AUTOTROPHY:
+            u[_T_AUTOTROPHY] = rng.uniform(0.80, 0.98)
+        if n > _T_GROWTH:
+            u[_T_GROWTH] = rng.uniform(0.10, 0.90)
+        if n > _T_ADULT_MASS:
+            u[_T_ADULT_MASS] = rng.uniform(0.10, 0.90)
+        if n > _T_TEMP_OPT:
+            u[_T_TEMP_OPT] = rng.uniform(0.05, 0.95)
+        if n > _T_TEMP_WIDTH:
+            u[_T_TEMP_WIDTH] = rng.uniform(0.10, 0.90)
+        if n > _T_SEXUAL_MODE:
+            u[_T_SEXUAL_MODE] = rng.uniform(0.02, 0.10)  # asexuell bias
+        if n > _T_DISPERSAL:
+            u[_T_DISPERSAL] = rng.uniform(0.05, 0.95)
+
+    return np.log(u / (1.0 - u)).astype(np.float32)
+
+
+def mutate_trait_vector(
+    parent_traits: np.ndarray,
+    rng: np.random.Generator,
+    *,
+    sigma: float = 0.05,
+    p: float = 0.10,
+    clip: float = 2.5,
+) -> np.ndarray:
+    """
+    Enkel asexuell mutation av en fristående traitvektor.
+    Avsedd för flora i fas 2.
+    """
+    child = np.asarray(parent_traits, dtype=np.float32).copy()
+    mask = rng.random(child.shape) < float(p)
+    if mask.any():
+        child[mask] += rng.normal(0.0, float(sigma), size=int(mask.sum())).astype(np.float32)
+    if clip is not None and float(clip) > 0.0:
+        child[:] = np.clip(child, -float(clip), float(clip)).astype(np.float32)
+    return child
+    
 
 def _mutate_weights(g: MLPGenome, rng: np.random.Generator, sigma: float, p: float) -> None:
     assert g.weights is not None and g.biases is not None

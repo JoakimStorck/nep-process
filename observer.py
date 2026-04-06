@@ -17,7 +17,7 @@ class Observer:
     every_s: float = 0.5
     _next_t: float = 0.0
 
-    def maybe_log(self, t: float, agent: Agent, B0: float, F0: float, C0: float) -> bool:
+    def maybe_log(self, t: float, agent: Agent, B0: float, C0: float) -> bool:
         if t < self._next_t:
             return False
         self._next_t = t + self.every_s
@@ -32,7 +32,6 @@ class Observer:
             "x": float(agent.x),
             "y": float(agent.y),
             "B0": float(B0),
-            "F0": float(F0),
             "C0": float(C0),
             "alive": bool(agent.body.alive),
         }
@@ -70,7 +69,6 @@ def _policy_key(g: MLPGenome) -> str:
 
 
 def _weight_norms(g: MLPGenome) -> Dict[str, Any]:
-    # små, billiga fingerprints; räcker för att se drift/skillnad
     assert g.weights is not None and g.biases is not None
     w_norms = [float(np.linalg.norm(W)) for W in g.weights]
     b_norms = [float(np.linalg.norm(b)) for b in g.biases]
@@ -136,13 +134,11 @@ class WorldObserver:
         return True
 
     def log_now(self, t: float, world: World) -> None:
-        B = world.B
         F = world.F
         C = world.C
 
         def stats(A: np.ndarray) -> Dict[str, float]:
             flat = A.ravel()
-            # kvantiler är lite dyrare; om det stör: logga bara mean/sum.
             p10, p50, p90 = np.percentile(flat, [10, 50, 90])
             return {
                 "mean": float(flat.mean()),
@@ -154,7 +150,6 @@ class WorldObserver:
 
         s = {
             "t": float(t),
-            "B": stats(B),
             "F": {**stats(F), "hazard_frac_0p35": float((F >= 0.35).mean())},
             "C": {"mean": float(C.mean()), "sum": float(C.sum())},
         }

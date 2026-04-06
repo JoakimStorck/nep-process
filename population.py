@@ -10,8 +10,18 @@ import numpy as np
 from world import World, WorldParams
 from mlp import MLPGenome
 from agent import Agent, AgentParams
-from genetics import child_genome_from_parent, recombine, MutationConfig, genetic_compatibility
-from phenotype import derive_pheno
+from genetics import (
+    child_genome_from_parent,
+    recombine,
+    MutationConfig,
+    genetic_compatibility,
+    init_organism_traits,
+    mutate_trait_vector,
+)
+from phenotype import (
+    derive_pheno,
+    trait_lerp,
+)
 
 from organism_store import OrganismStore
 from grid import Grid
@@ -70,7 +80,7 @@ class PopParams:
     init_pop: int = 12
     max_pop: int = 500   # höjt — naturlig matbrist sätter taket nu, inte detta
 
-    n_traits: int = 25   # +2 arkitekturtraits (hidden_1=23, hidden_2=24)
+    n_traits: int = 32   # +2 arkitekturtraits (hidden_1=23, hidden_2=24)
 
     spawn_jitter_r: float = 1.5
 
@@ -127,6 +137,8 @@ class Population:
 
     _banks: dict[tuple, "ParamBank"] = field(init=False, default_factory=dict)
 
+    _next_store_id: int = field(init=False, default=1)
+
     # agent sampling
     _next_sample_t: float = 0.0
     _recent_sample_ids: List[int] = field(default_factory=list)
@@ -136,7 +148,13 @@ class Population:
     _births_total: int = 0
     _deaths_total: int = 0
 
-    # world logging knobs (gating lives in logger)
+    _last_flora_growth: float = 0.0
+    _last_flora_established: int = 0
+    _last_flora_dispersed_mass: float = 0.0
+    
+    _flora_by_cell_cache: dict[int, list[int]] = field(init=False, default_factory=dict)
+    _flora_summary_cache: dict[str, float] | None = field(init=False, default=None)
+    
     world_log_with_percentiles: bool = True
 
     def __post_init__(self) -> None:
@@ -146,6 +164,10 @@ class Population:
         self.grid = Grid(size=int(self.WP.size))
         self._banks = {}
 
+        self.world.consume_food_hook = self.consume_food
+        self.world.sample_flora_local_hook = self.sample_flora_local
+        self.world.sample_flora_rays_hook = self.sample_flora_rays        
+        
         self.store = OrganismStore(
             capacity=int(self.PP.max_pop),
             world_size=int(self.WP.size),
@@ -155,6 +177,9 @@ class Population:
         self._recent_sample_ids = []
         self._births_total = 0
         self._deaths_total = 0
+
+        self._flora_by_cell_cache = {}
+        self._flora_summary_cache = None
 
         # ensure MC uses PP.n_traits (single source of truth for this run)
         if int(self.MC.n_traits) != int(self.PP.n_traits):
@@ -262,11 +287,19 @@ class Population:
             a._policy_key = key
             a._policy_slot = slot
 
+            store_slot = self.store.alloc_slot()
+            a.store_slot = int(store_slot)
+            self.store.write_agent(store_slot, a, self.grid)            
+            
             self._emit_birth(self.t, a, parent=None)
             self.agents.append(a)
 
-        self._sync_store()
-            
+        self._next_store_id = max((int(a.id) for a in self.agents), default=0) + 1
+
+        _ = self._seed_initial_flora(
+            n_flora=max(16, int(self.PP.max_pop) // 2),
+        )
+
     # -----------------------
     # logging helpers
     # -----------------------
@@ -390,25 +423,49 @@ class Population:
         self._emit("sample", t, records.sample_record(t, a, pop_n=len(self.agents)))
 
     def _emit_world(self, t: float) -> None:
-        payload = records.world_record(t, self.world, with_percentiles=self.world_log_with_percentiles)
+        payload = records.world_record(
+            t,
+            self.world,
+            with_percentiles=self.world_log_with_percentiles,
+        )
         if isinstance(payload, dict):
-            B_sum = float(np.nansum(self.world.B))
             C_sum = float(np.nansum(self.world.C))
             e_plant = float(getattr(self.AP, "E_plant_J_per_kg", getattr(self.AP, "E_bio_J_per_kg", 0.0)))
             e_carc = float(getattr(self.AP, "E_carcass_J_per_kg", 0.0))
             wf = getattr(self.world, "last_flux", {})
+    
+            flora_info = self._flora_summary()
+            flora_n = int(flora_info["flora_n"])
+            flora_mass = float(flora_info["flora_mass_store"])
+            flora_energy = float(flora_info["flora_energy_store"])
+    
             payload.update({
-                "E_B": e_plant * B_sum,
+                # Flora-store är source of truth
+                "E_B": e_plant * flora_mass,
                 "E_C": e_carc * C_sum,
-                "BC_sum": B_sum + C_sum,
-                "M_B": B_sum,
+                "BC_sum": flora_mass + C_sum,
+                "M_B": flora_mass,
                 "M_C": C_sum,
+    
+                "flora_n": flora_n,
+                "flora_mass_store": flora_mass,
+                "flora_energy_store": flora_energy,
+    
+                "flora_mean_growth_rate": float(flora_info["flora_mean_growth_rate"]),
+                "flora_mean_adult_mass": float(flora_info["flora_mean_adult_mass"]),
+                "flora_mean_temp_opt": float(flora_info["flora_mean_temp_opt"]),
+                "flora_mean_temp_width": float(flora_info["flora_mean_temp_width"]),
+                "flora_mean_dispersal_rate": float(flora_info["flora_mean_dispersal_rate"]),
+    
                 "E_in_growth": float(wf.get("E_in_growth", 0.0)),
                 "E_loss_wither": float(wf.get("E_loss_wither", 0.0)),
                 "E_loss_decay": float(wf.get("E_loss_decay", 0.0)),
                 "dM_growth": float(wf.get("dM_growth", 0.0)),
                 "dM_wither": float(wf.get("dM_wither", 0.0)),
                 "dM_decay": float(wf.get("dM_decay", 0.0)),
+                "flora_dM_growth": float(getattr(self, "_last_flora_growth", 0.0)),
+                "flora_established": int(getattr(self, "_last_flora_established", 0)),
+                "flora_dispersed_mass": float(getattr(self, "_last_flora_dispersed_mass", 0.0)),
             })
         self._emit("world", t, payload)
 
@@ -483,6 +540,10 @@ class Population:
             child_E_slow_J=child_E_slow_J,
         )
 
+        store_slot = self.store.alloc_slot()
+        child.store_slot = int(store_slot)
+        self.store.write_agent(store_slot, child, self.grid)
+        
         self._emit_birth(self.t, child, parent)
         return child
 
@@ -603,14 +664,524 @@ class Population:
             float(a.x), float(a.y),
             float(b.x), float(b.y),
         )
+
+
+    def _rebuild_flora_caches(self) -> None:
+        """
+        Bygg per-tick-cacher för flora-tailen:
+          - flora per cell
+          - summeringar för world-logg
+        """
+        by_cell: dict[int, list[int]] = {}
+    
+        flora_n = 0
+        flora_mass = 0.0
+        flora_energy = 0.0
+    
+        vals_growth = 0.0
+        vals_adult_mass = 0.0
+        vals_temp_opt = 0.0
+        vals_temp_width = 0.0
+        vals_dispersal = 0.0
+    
+        for slot in range(int(self.store.n)):
+            if not bool(self.store.alive[slot]):
+                continue
+            if int(self.store.kind[slot]) != 1:
+                continue
+    
+            cell = int(self.store.cell_idx[slot])
+            if cell >= 0:
+                by_cell.setdefault(cell, []).append(int(slot))
+    
+            flora_n += 1
+    
+            m = float(self.store.mass[slot])
+            e = float(self.store.energy[slot])
+            flora_mass += m
+            flora_energy += e
+    
+            vals_growth += float(self.store.flora_growth_rate[slot])
+            vals_adult_mass += float(self.store.flora_adult_mass[slot])
+            vals_temp_opt += float(self.store.flora_temp_opt[slot])
+            vals_temp_width += float(self.store.flora_temp_width[slot])
+            vals_dispersal += float(self.store.flora_dispersal_rate[slot])
+    
+        self._flora_by_cell_cache = by_cell
+    
+        if flora_n <= 0:
+            nan = float("nan")
+            self._flora_summary_cache = {
+                "flora_n": 0,
+                "flora_mass_store": 0.0,
+                "flora_energy_store": 0.0,
+                "flora_mean_growth_rate": nan,
+                "flora_mean_adult_mass": nan,
+                "flora_mean_temp_opt": nan,
+                "flora_mean_temp_width": nan,
+                "flora_mean_dispersal_rate": nan,
+            }
+        else:
+            inv = 1.0 / float(flora_n)
+            self._flora_summary_cache = {
+                "flora_n": int(flora_n),
+                "flora_mass_store": float(flora_mass),
+                "flora_energy_store": float(flora_energy),
+                "flora_mean_growth_rate": float(vals_growth * inv),
+                "flora_mean_adult_mass": float(vals_adult_mass * inv),
+                "flora_mean_temp_opt": float(vals_temp_opt * inv),
+                "flora_mean_temp_width": float(vals_temp_width * inv),
+                "flora_mean_dispersal_rate": float(vals_dispersal * inv),
+            }
+
+    def _flora_slots_grouped_by_cell(self) -> dict[int, list[int]]:
+        if not self._flora_by_cell_cache:
+            self._rebuild_flora_caches()
+        return self._flora_by_cell_cache
+    
+    
+    def _flora_summary(self) -> dict[str, float]:
+        if self._flora_summary_cache is None:
+            self._rebuild_flora_caches()
+        return self._flora_summary_cache
         
-    def _sync_store(self) -> None:
+    def _consume_flora_from_store(self, x: float, y: float, amount: float, max_radius: int = 1) -> float:
         """
-        Fas 0: Agent/Body är fortfarande source of truth.
-        OrganismStore är en ren SoA-spegel som uppdateras efter init och efter varje tick.
+        Konsumera växtmassa från diskret flora i OrganismStore.
+        Returnerar faktiskt konsumerad kg.
         """
-        self.store.sync_from_agents(self.agents, grid=self.grid)
-        self.store.assert_consistent()
+        amt = float(amount)
+        if not math.isfinite(amt) or amt <= 0.0:
+            return 0.0
+    
+        cell0 = int(self.grid.cell_of(float(x), float(y)))
+        flora_by_cell = self._flora_slots_grouped_by_cell()
+    
+        got = 0.0
+        e_per_kg = float(self.WP.E_plant_J_per_kg)
+    
+        # Börja i aktuell cell, gå sedan utåt i topologiskt avstånd
+        candidate_cells: list[int] = [cell0]
+        for r in range(1, int(max_radius) + 1):
+            for cell in self.grid.cells_within(cell0, r):
+                if cell != cell0:
+                    candidate_cells.append(int(cell))
+    
+        seen: set[int] = set()
+        ordered_cells: list[int] = []
+        for c in candidate_cells:
+            if c not in seen:
+                seen.add(c)
+                ordered_cells.append(c)
+    
+        for cell in ordered_cells:
+            slots = flora_by_cell.get(cell)
+            if not slots:
+                continue
+    
+            for slot in list(slots):
+                if amt <= 1e-12:
+                    break
+                if not bool(self.store.alive[slot]) or int(self.store.kind[slot]) != 1:
+                    continue
+    
+                m = float(self.store.mass[slot])
+                if m <= 1e-12:
+                    continue
+    
+                take = m if m < amt else amt
+                new_m = m - take
+    
+                self.store.mass[slot] = np.float32(new_m)
+                self.store.energy[slot] = np.float32(max(0.0, new_m * e_per_kg))
+                got += take
+                amt -= take
+    
+                # Dö/frigör flora som blivit i praktiken tom
+                if new_m <= 1e-12:
+                    old_cell = int(cell)                    
+                    self.store.release_slot(slot)
+
+            if amt <= 1e-12:
+                break
+                
+        if got > 0.0:
+            self._flora_summary_cache = None
+            
+        return float(got)
+
+    def _add_or_create_flora_in_cell(
+        self,
+        cell: int,
+        add_mass: float,
+        traits: np.ndarray | None = None,
+    ) -> bool:
+        dm = float(add_mass)
+        if not math.isfinite(dm) or dm <= 0.0:
+            return False
+    
+        e_per_kg = float(self.WP.E_plant_J_per_kg)
+    
+        flora_by_cell = self._flora_slots_grouped_by_cell()
+        slots = flora_by_cell.get(int(cell), None)
+        if slots:
+            for slot in slots:
+                if not bool(self.store.alive[slot]):
+                    continue
+                if int(self.store.kind[slot]) != 1:
+                    continue
+        
+                new_m = float(self.store.mass[slot]) + dm
+                self.store.mass[slot] = np.float32(new_m)
+                self.store.energy[slot] = np.float32(new_m * e_per_kg)
+        
+                self._flora_summary_cache = None
+                return True
+    
+        try:
+            slot = self.store.alloc_slot()
+        except RuntimeError:
+            return False
+    
+        if traits is None:
+            traits = init_organism_traits(
+                self.rng,
+                int(self.PP.n_traits),
+                mode="flora",
+            )
+    
+        self._init_flora_slot(slot, int(cell), dm, traits)
+        self._flora_by_cell_cache.setdefault(int(cell), []).append(int(slot))
+        self._flora_summary_cache = None        
+        return True
+        
+    def _flora_growth_rate(self, traits: np.ndarray | None) -> float:
+        return trait_lerp(traits, 26, 0.005, 0.050, default=0.0)
+    
+    def _flora_adult_mass(self, traits: np.ndarray | None) -> float:
+        return trait_lerp(traits, 27, 0.25 * float(self.WP.B_K), 4.0 * float(self.WP.B_K), default=0.5)
+    
+    def _flora_temp_opt(self, traits: np.ndarray | None) -> float:
+        return trait_lerp(traits, 28, -5.0, 35.0, default=0.5)
+    
+    def _flora_temp_width(self, traits: np.ndarray | None) -> float:
+        return trait_lerp(traits, 29, 4.0, 18.0, default=0.5)
+    
+    def _flora_dispersal_rate(self, traits: np.ndarray | None) -> float:
+        return trait_lerp(traits, 31, 0.0002, 0.020, default=0.5)
+
+    def _flora_uptake_capacity(self, traits: np.ndarray | None) -> float:
+        # autotrophy-locus: högre värde => högre upptagskapacitet
+        return trait_lerp(traits, 25, 0.25, 1.0, default=0.5)
+    
+    def _flora_repro_capacity(self, traits: np.ndarray | None) -> float:
+        # sexual_mode nära 0 => asexuell flora med hög lokal reproduktionsbenägenhet
+        sexual = trait_lerp(traits, 30, 0.0, 1.0, default=0.0)
+        return float(max(0.0, 1.0 - sexual))
+        
+    def _init_flora_slot(
+        self,
+        slot: int,
+        cell: int,
+        mass: float,
+        traits: np.ndarray,
+    ) -> None:
+        y, x = self.grid.rowcol_of(int(cell))
+        e_per_kg = float(self.WP.E_plant_J_per_kg)
+
+        g_rate = np.float32(self._flora_growth_rate(traits))
+        a_mass = np.float32(self._flora_adult_mass(traits))
+        t_opt = np.float32(self._flora_temp_opt(traits))
+        t_width = np.float32(self._flora_temp_width(traits))
+        d_rate = np.float32(self._flora_dispersal_rate(traits))
+
+        self.store.id[slot] = int(self._next_store_id)
+        self._next_store_id += 1
+    
+        self.store.alive[slot] = True
+        self.store.kind[slot] = 1
+        self.store.cell_idx[slot] = int(cell)
+        self.store.pos_x[slot] = np.float32(x + 0.5)
+        self.store.pos_y[slot] = np.float32(y + 0.5)
+    
+        m = float(mass)
+        self.store.mass[slot] = np.float32(m)
+        self.store.energy[slot] = np.float32(m * e_per_kg)
+        self.store.age[slot] = np.float32(0.0)
+        self.store.genome_idx[slot] = -1
+        self.store.traits[slot, :] = np.asarray(traits, dtype=np.float32)
+    
+        self.store.flora_growth_rate[slot] = g_rate
+        self.store.flora_adult_mass[slot] = a_mass
+        self.store.flora_temp_opt[slot] = t_opt
+        self.store.flora_temp_width[slot] = t_width
+        self.store.flora_dispersal_rate[slot] = d_rate
+        
+        # Härled enkla store-kapaciteter från traits istället för hårdkodade 1.0/0.0
+        self.store.uptake_capacity[slot] = np.float32(self._flora_uptake_capacity(traits))
+        self.store.growth_capacity[slot] = np.float32(g_rate / 0.050)
+        self.store.dispersal_capacity[slot] = np.float32(d_rate / 0.020)
+
+        self.store.sense_radius[slot] = np.float32(0.0)
+        self.store.sense_rate[slot] = np.float32(0.0)
+        self.store.mobility[slot] = np.float32(0.0)
+        self.store.attack_capacity[slot] = np.float32(0.0)
+        self.store.repair_capacity[slot] = np.float32(0.0)
+        self.store.repro_capacity[slot] = np.float32(self._flora_repro_capacity(traits))
+    
+        self.store.flood_tolerance[slot] = np.float32(0.0)
+        self.store.buoyancy[slot] = np.float32(0.0)
+        
+    def _seed_initial_flora(
+        self,
+        n_flora: int | None = None,
+        init_mass_frac_lo: float = 0.4,
+        init_mass_frac_hi: float = 1.0,
+    ) -> int:
+        """
+        Skapa initial diskret flora direkt i OrganismStore, utan world.B som mellanlager.
+        """
+        size = int(self.WP.size)
+        n_cells = size * size
+        BK = float(self.WP.B_K)
+        if BK <= 0.0:
+            return 0
+    
+        if n_flora is None:
+            n_flora = max(16, int(self.PP.max_pop) // 2)
+        n_flora = max(0, min(int(n_flora), n_cells))
+    
+        cells = self.rng.choice(n_cells, size=n_flora, replace=False)
+    
+        created = 0
+        for cell in cells:
+            try:
+                slot = self.store.alloc_slot()
+            except RuntimeError:
+                break
+    
+            traits = init_organism_traits(
+                self.rng,
+                int(self.PP.n_traits),
+                mode="flora",
+            )
+    
+            mass = BK * float(self.rng.uniform(init_mass_frac_lo, init_mass_frac_hi))
+            self._init_flora_slot(int(slot), int(cell), float(mass), traits)
+            created += 1
+    
+        return created
+        
+    def _growth_system_flora(self) -> float:
+        """
+        Enkel första tillväxt för diskret flora i OrganismStore.
+        Returnerar total producerad biomassa (kg) detta tick.
+        """
+        dt = float(self.WP.dt)
+        BK = float(self.WP.B_K)
+        if BK <= 0.0 or dt <= 0.0:
+            return 0.0
+    
+        produced = 0.0
+        e_per_kg = float(self.WP.E_plant_J_per_kg)
+    
+        for slot in range(int(self.store.n)):
+            if not bool(self.store.alive[slot]):
+                continue
+            if int(self.store.kind[slot]) != 1:
+                continue
+        
+            cell = int(self.store.cell_idx[slot])
+            if cell < 0:
+                continue
+        
+            row, _ = self.grid.rowcol_of(cell)
+            T = float(self.world.Ty[row])
+        
+            m_cap = max(1e-12, float(self.store.flora_adult_mass[slot]))
+            regen = max(0.0, float(self.store.flora_growth_rate[slot]))
+        
+            Topt = float(self.store.flora_temp_opt[slot])
+            Tw = max(1e-6, float(self.store.flora_temp_width[slot]))
+            gate = max(0.0, 1.0 - abs(T - Topt) / Tw)
+            gate = max(0.0, min(1.0, gate))
+        
+            m = float(self.store.mass[slot])
+            if m <= 0.0:
+                continue
+    
+            # Enkel logistisk tillväxt
+            dm = regen * gate * m * max(0.0, 1.0 - m / m_cap) * dt
+            if dm <= 0.0:
+                continue
+    
+            new_m = m + dm
+            if new_m > m_cap:
+                dm = m_cap - m
+                new_m = m_cap
+    
+            if dm > 0.0:
+                self.store.mass[slot] = np.float32(new_m)
+                self.store.energy[slot] = np.float32(new_m * e_per_kg)
+                produced += dm
+    
+        return float(produced)
+
+    def _dispersal_system_flora(self) -> tuple[int, float]:
+        """
+        Enkel första spridning för diskret flora.
+        Returnerar (antal etableringar/påfyllningar, totalt utspridd massa i kg).
+        """
+        dt = float(self.WP.dt)
+        BK = float(self.WP.B_K)
+        if BK <= 0.0 or dt <= 0.0:
+            return 0, 0.0
+    
+        established = 0
+        dispersed_mass = 0.0
+    
+        # Frys listan över kandidater detta tick så att nyfödda spridare
+        # inte sprider vidare samma tick.
+        parent_slots: list[int] = []
+        for slot in range(int(self.store.n)):
+            if bool(self.store.alive[slot]) and int(self.store.kind[slot]) == 1:
+                parent_slots.append(slot)
+    
+        for slot in parent_slots:
+            if not bool(self.store.alive[slot]):
+                continue
+            if int(self.store.kind[slot]) != 1:
+                continue
+    
+            traits = self.store.traits[slot, :]
+            
+            m_cap = max(1e-12, float(self.store.flora_adult_mass[slot]))
+            base_p = max(0.0, float(self.store.flora_dispersal_rate[slot]))
+    
+            repro_threshold = 0.70 * m_cap
+            seed_mass = 0.10 * m_cap
+            min_parent_mass_after = 0.20 * m_cap
+            radius = 1 if m_cap < 1.5 * float(self.WP.B_K) else 2
+    
+            m = float(self.store.mass[slot])
+            if m < repro_threshold:
+                continue
+            if m - seed_mass < min_parent_mass_after:
+                continue
+    
+            # Enkel första sannolikhet per tick
+            repro_cap = float(self.store.repro_capacity[slot])
+            p = base_p * repro_cap * dt
+            if self.rng.random() >= p:
+                continue
+    
+            origin = int(self.store.cell_idx[slot])
+            if origin < 0:
+                continue
+    
+            candidates = [int(c) for c in self.grid.cells_within(origin, radius) if int(c) != origin]
+            if not candidates:
+                continue
+    
+            target = int(candidates[int(self.rng.integers(0, len(candidates)))])
+    
+            child_traits = mutate_trait_vector(
+                traits,
+                self.rng,
+                sigma=0.05,
+                p=0.10,
+                clip=2.5,
+            )
+            ok = self._add_or_create_flora_in_cell(target, seed_mass, traits=child_traits)
+            if not ok:
+                continue
+    
+            # Betala från moderorganismen
+            new_m = m - seed_mass
+            e_per_kg = float(self.WP.E_plant_J_per_kg)
+            self.store.mass[slot] = np.float32(new_m)
+            self.store.energy[slot] = np.float32(max(0.0, new_m * e_per_kg))
+    
+            established += 1
+            dispersed_mass += seed_mass
+    
+        return established, float(dispersed_mass)
+        
+    # -----------------------
+    # public methods
+    # -----------------------    
+    def sample_flora_local(self, x: float, y: float) -> float:
+        """
+        Lokal biomassasampling av flora från store.
+        Just nu: summerad massa i aktuell cell.
+        """
+        cell = int(self.grid.cell_of(float(x), float(y)))
+        slots = self._flora_slots_grouped_by_cell().get(cell)
+        if not slots:
+            return 0.0
+    
+        total = 0.0
+        for slot in slots:
+            if not bool(self.store.alive[slot]):
+                continue
+            if int(self.store.kind[slot]) != 1:
+                continue
+            total += float(self.store.mass[slot])
+        return float(total)
+
+    def sample_flora_rays(self, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
+        """
+        Enkel ray-sampling av flora.
+        Returnerar biomassan i cellen för varje punkt (ingen bilinjär interpolation ännu).
+        """
+        xs = np.asarray(xs, dtype=np.float32)
+        ys = np.asarray(ys, dtype=np.float32)
+        if xs.shape != ys.shape:
+            raise ValueError("xs and ys must have same shape")
+    
+        out = np.zeros(xs.shape, dtype=np.float32)
+        flora_by_cell = self._flora_slots_grouped_by_cell()
+    
+        flat_x = xs.ravel()
+        flat_y = ys.ravel()
+        flat_o = out.ravel()
+    
+        for i in range(flat_x.size):
+            cell = int(self.grid.cell_of(float(flat_x[i]), float(flat_y[i])))
+            slots = flora_by_cell.get(cell)
+            if not slots:
+                continue
+    
+            total = 0.0
+            for slot in slots:
+                if not bool(self.store.alive[slot]):
+                    continue
+                if int(self.store.kind[slot]) != 1:
+                    continue
+                total += float(self.store.mass[slot])
+    
+            flat_o[i] = np.float32(total)
+    
+        return out
+        
+    def consume_food(self, x: float, y: float, amount: float, prefer_carcass: bool = True) -> tuple[float, float]:
+        """
+        Konsumera upp till `amount` kg totalt.
+        Kadaver tas fortsatt från world.C.
+        Växtföda tas från diskret flora i OrganismStore.
+        Returnerar (got_total_kg, got_carcass_kg).
+        """
+        amt = float(amount)
+        if not math.isfinite(amt) or amt <= 0.0:
+            return 0.0, 0.0
+    
+        got_c = 0.0
+        if prefer_carcass:
+            got_c = float(self.world._consume_bilinear_from(self.world.C, x, y, amt))
+            amt = max(0.0, amt - got_c)
+    
+        got_f = float(self._consume_flora_from_store(x, y, amt, max_radius=1))
+        return got_c + got_f, got_c
         
     # -----------------------
     # main loop
@@ -634,10 +1205,13 @@ class Population:
     
         # (A) world fields
         self.world.step()
-    
+
+        dM_growth_flora = self._growth_system_flora()
+        flora_established, flora_dispersed_mass = self._dispersal_system_flora()
+        self._rebuild_flora_caches()        
+        
         # (B) occupancy from current positions
         self.world.rebuild_agent_layer(self.agents)
-        self.world._agents = self.agents
     
         # (C) agent step (sense + policy + act)
         alive: List[Agent] = [a for a in self.agents if a.body.alive]
@@ -758,7 +1332,11 @@ class Population:
             if not a.body.alive:
                 # release policy slot
                 self._banks[a._policy_key].release(a._policy_slot)
-    
+
+                if a.store_slot >= 0:
+                    self.store.release_slot(a.store_slot)
+                a.store_slot = -1
+                
                 body = a.body
     
                 # carcass mass = structural mass + energy buffer converted to kg
@@ -823,7 +1401,7 @@ class Population:
 
         self._births_total += births
         self._deaths_total += deaths
-    
+
         # (F) sampling (one agent per sample_dt)
         sd = float(self.PP.sample_dt)
         if sd > 0.0 and self.t + 1e-12 >= self._next_sample_t:
@@ -845,9 +1423,17 @@ class Population:
             while self._next_sample_t <= self.t + 1e-12:
                 self._next_sample_t += sd
 
-        # (F.5) Fas 0-spegel till SoA-store
-        self._sync_store()
-        
+        for a in self.agents:
+            if not a.body.alive:
+                continue
+            if a.store_slot < 0:
+                continue
+            self.store.write_agent(a.store_slot, a, self.grid)
+            
+        self._last_flora_growth = float(dM_growth_flora)
+        self._last_flora_established = int(flora_established)
+        self._last_flora_dispersed_mass = float(flora_dispersed_mass)
+
         # (G) emit world + population
         self._emit_world(self.t)
         self._emit_population(self.t, births=self._births_total, deaths=self._deaths_total)

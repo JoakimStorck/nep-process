@@ -204,8 +204,6 @@ def sample_record(t: float, a: Agent, pop_n: int) -> Dict[str, Any]:
 
 
 def world_record(t: float, world: World, with_percentiles: bool = True) -> Dict[str, Any]:
-    # hazard removed: world expected to have B and C (and possibly A)
-    B = world.B
     C = world.C
 
     def stats(A: np.ndarray) -> Dict[str, float]:
@@ -218,7 +216,13 @@ def world_record(t: float, world: World, with_percentiles: bool = True) -> Dict[
 
     s = {
         "t": float(t),
-        "B": stats(B),
         "C": stats(C) if with_percentiles else {"mean": float(C.mean()), "sum": float(C.sum())},
     }
+
+    # Temperaturprofil finns fortfarande i World och är legitim world-data
+    Ty = getattr(world, "Ty", None)
+    if Ty is not None:
+        Ty = np.asarray(Ty, dtype=np.float32)
+        s["T"] = stats(Ty) if with_percentiles else {"mean": float(Ty.mean()), "sum": float(Ty.sum())}
+
     return {"event": "world", "summary": s}

@@ -1346,6 +1346,7 @@ class RaySensors:
         self._noise64 = np.empty((self._n,), dtype=np.float64)
         self._ixs = np.empty((self._n, self._m), dtype=np.int32)
         self._iys = np.empty((self._n, self._m), dtype=np.int32)
+
     def sense(
         self,
         world: World,
@@ -1365,37 +1366,41 @@ class RaySensors:
           - world.sample_many(xs,ys) -> (B_kg_array, C_kg_array)
         """
         # ---- (A) Sample local physics ----
-        B0_kg, C0_kg = world.sample(x, y)
-
+        B0_kg, C0_kg = world.sample_food_local(x, y)
+        
         Pworld = getattr(world, "WP", None)
-        Kb = float(getattr(Pworld, "B_sense_K", 0.0)) if Pworld is not None else 0.0
+        Kb = float(getattr(Pworld, "B_K", 0.0)) if Pworld is not None else 0.0
         Kc = float(getattr(Pworld, "C_sense_K", 0.0)) if Pworld is not None else 0.0
-
+        
         B0_u = self._sat1_u(float(B0_kg), Kb)
         C0_u = self._sat1_u(float(C0_kg), Kc)
-
+        
         n = int(self._n)
         m_full = int(self._m)
         if n <= 0 or m_full <= 0:
             return (float(B0_u), float(C0_u)), self._accB[:0], self._accC[:0]
-
+        
         # ---- (B) Ray geometry — alltid full räckvidd (m_full) ----
         np.add(self._ang_base, np.float32(heading), out=self._ang)
         np.cos(self._ang, out=self._dx)
         np.sin(self._ang, out=self._dy)
-
+        
         xx = np.float32(x)
         yy = np.float32(y)
-
+        
         np.multiply(self._dx[:, None], self._d[None, :], out=self._xs)
         self._xs += xx
         np.multiply(self._dy[:, None], self._d[None, :], out=self._ys)
         self._ys += yy
-
+        
         self._wrap_points_inplace(self._xs, self._ys)
         
-        # ---- (C) Sample world fields ----
-        Bkg, Ckg = world.sample_many(self._xs, self._ys, outB=self._Bp, outC=self._Cp)
+        # ---- (C) Sample flora + carcass separately ----
+        self._Bp[:] = world.sample_flora_rays(self._xs, self._ys)
+        world.sample_many_carcass(self._xs, self._ys, outC=self._Cp)
+        
+        Bkg = self._Bp
+        Ckg = self._Cp
 
         # ---- (D) Konvertera kg→u, maskera bortom per-stråle djup, integrera ----
         self._sat_u(Bkg, Kb)
@@ -1518,6 +1523,7 @@ class Agent:
     heading: float
 
     id: int = field(default_factory=_new_agent_id)
+    store_slot: int = -1
 
     OBS_DIM: ClassVar[int] = 23   # +2: predator_bearing (cos/sin), predator_dist
     OUT_DIM: ClassVar[int] = 5
