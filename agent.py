@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math, random
 from dataclasses import dataclass, field, replace
-from typing import Iterable, Optional, Tuple
+from typing import ClassVar, Iterable, Optional, Tuple
 
 import numpy as np
 
@@ -1534,6 +1534,31 @@ class RaySensors:
     
         return 0.0, 0.0, 0.0, -1, -1, 0
 
+
+
+@dataclass
+class ActionPlan:
+    turn: float
+    thrust: float
+    allow_move: float
+    allow_eat: float
+    explore_drive: float
+    B0: float
+    C0: float
+    Tloc: float
+
+
+@dataclass
+class BodyStepInput:
+    speed: float
+    activity: float
+    food_bio_kg: float
+    food_carcass_kg: float
+    E_move: float
+    Tloc: float
+    B0: float
+    C0: float
+    
 # -------------------------
 # Agent
 # -------------------------
@@ -1893,10 +1918,6 @@ class Agent:
     # ------------------------------
     # apply_outputs: Helpers
     # ------------------------------
-    def _update_agent_clocks(self, dt: float) -> None:
-        self.age_s += float(dt)
-        self.repro_cd_s = max(0.0, float(self.repro_cd_s) - float(dt))
-    
     
     def _split_recurrent_output(self, y: np.ndarray) -> np.ndarray:
         _h_dim = int(self._h.shape[0])
@@ -2210,34 +2231,33 @@ class Agent:
         speed_n = clamp(speed / max(float(self.AP.v_max), 1e-9), 0.0, 1.0)
         ate = 1.0 if (allow_eat > 0.20 and (food_bio_kg + food_carcass_kg) > 0.0) else 0.0
         return 0.03 + 0.45 * speed_n + 0.10 * ate
-        
-    def apply_outputs(
+
+    
+    def plan_actions(
         self,
         world: World,
         ctx: StepCtx,
         y: np.ndarray,
         B0: float,
         C0: float,
-    ) -> Tuple[float, float]:
-        if not self.body.alive:
-            return 0.0, 0.0
+    ) -> ActionPlan:
+        """
+        Planeringsdel av gamla apply_outputs():
+          - tolka policy-output
+          - lokala reflexer/social steering
+          - food steering
     
-        dt = float(ctx.dt)
+        Ingen state-exekvering här:
+          - ingen rörelse
+          - ingen feeding
+          - ingen body.step()
     
-        # ---------------------------------------------------------
-        # 0) Clocks + recurrent state
-        # ---------------------------------------------------------
-        self._update_agent_clocks(dt)
+        Returnerar ett litet beslutspaket som move_system senare verkställer.
+        """
         y = self._split_recurrent_output(y)
     
-        # ---------------------------------------------------------
-        # 1) Decode policy outputs
-        # ---------------------------------------------------------
         turn, thrust, allow_move, allow_eat, explore_drive = self._decode_action_outputs(y)
     
-        # ---------------------------------------------------------
-        # 2) Local context + detected local target
-        # ---------------------------------------------------------
         Tloc = float(world.temperature_at(self.x, self.y)) if hasattr(world, "temperature_at") else 0.0
     
         soc = float(getattr(self.pheno, "sociability", 0.0))
@@ -2263,9 +2283,6 @@ class Agent:
             in_mating_mode,
         )
     
-        # ---------------------------------------------------------
-        # 3) Reflexive drives
-        # ---------------------------------------------------------
         turn, thrust, explore_drive, flee_state, hunt_state = self._apply_reflex_drives(
             turn=turn,
             thrust=thrust,
@@ -2283,9 +2300,6 @@ class Agent:
             best_mate=best_mate,
         )
     
-        # ---------------------------------------------------------
-        # 4) Food steering
-        # ---------------------------------------------------------
         turn, thrust, explore_drive = self._apply_food_steering(
             ctx=ctx,
             turn=turn,
@@ -2296,56 +2310,65 @@ class Agent:
             C0=C0,
         )
     
-        # ---------------------------------------------------------
-        # 5) Motion integration
-        # ---------------------------------------------------------
-        speed, E_move = self._integrate_motion(
-            ctx=ctx,
-            turn=turn,
-            thrust=thrust,
-            allow_move=allow_move,
-            explore_drive=explore_drive,
+        return ActionPlan(
+            turn=float(turn),
+            thrust=float(thrust),
+            allow_move=float(allow_move),
+            allow_eat=float(allow_eat),
+            explore_drive=float(explore_drive),
+            B0=float(B0),
+            C0=float(C0),
+            Tloc=float(Tloc),
         )
     
-        # ---------------------------------------------------------
-        # 6) Feeding
-        # ---------------------------------------------------------
+    def execute_action_plan(
+        self,
+        world: World,
+        ctx: StepCtx,
+        plan: ActionPlan,
+    ) -> BodyStepInput:
+        """
+        Exekveringsdel av action plan:
+          - rörelse
+          - feeding
+          - activity proxy
+    
+        Returnerar ett explicit underlag för body_system.
+        """
+        dt = float(ctx.dt)
+    
+        speed, E_move = self._integrate_motion(
+            ctx=ctx,
+            turn=float(plan.turn),
+            thrust=float(plan.thrust),
+            allow_move=float(plan.allow_move),
+            explore_drive=float(plan.explore_drive),
+        )
+    
         food_bio_kg, food_carcass_kg = self._perform_feeding(
             world=world,
             dt=dt,
-            allow_eat=allow_eat,
+            allow_eat=float(plan.allow_eat),
         )
     
-        # ---------------------------------------------------------
-        # 7) Activity proxy + body dynamics
-        # ---------------------------------------------------------
         activity = self._activity_proxy(
             speed=speed,
-            allow_eat=allow_eat,
+            allow_eat=float(plan.allow_eat),
             food_bio_kg=food_bio_kg,
             food_carcass_kg=food_carcass_kg,
         )
     
-        self.body.step(
-            ctx,
-            speed=speed,
-            activity=activity,
-            food_bio_kg=food_bio_kg,
-            food_carcass_kg=food_carcass_kg,
-            pheno=self.pheno,
-            extra_drain=E_move,
-            T_env=Tloc,
-            age_s=self.age_s,
+        return BodyStepInput(
+            speed=float(speed),
+            activity=float(activity),
+            food_bio_kg=float(food_bio_kg),
+            food_carcass_kg=float(food_carcass_kg),
+            E_move=float(E_move),
+            Tloc=float(plan.Tloc),
+            B0=float(plan.B0),
+            C0=float(plan.C0),
         )
-    
-        # ---------------------------------------------------------
-        # 8) Tracking
-        # ---------------------------------------------------------
-        self.last_B0 = float(B0)
-        self.last_C0 = float(C0)
-    
-        return float(B0), float(C0)
-
+        
     # --- reproduction hooks (Population uses these) ---
     
     def ready_to_reproduce(self) -> bool:

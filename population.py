@@ -1188,21 +1188,28 @@ class Population:
         self._flora_summary_cache = None
     
         return float(dM_growth_flora), int(flora_established), float(flora_dispersed_mass)
-    
-    
-    def _step_agents_policy(self, ctx: "StepCtx") -> None:
+        
+    def _step_sense_system(
+        self,
+        ctx: "StepCtx",
+    ) -> tuple[list[Agent], np.ndarray, list[tuple[float, float]]]:
         """
-        Kör sensing + policy-forward + apply_outputs för alla levande agenter.
+        Kör sensing/input-byggande för alla levande agenter.
+    
+        Returnerar:
+          - alive: levande agentobjekt i samma ordning som X/BC_list
+          - X: inputmatris till policy-näten
+          - BC_list: lokala (B0, C0)-värden per agent
         """
         alive: list[Agent] = [a for a in self.agents if a.body.alive]
         if not alive:
-            return
+            return [], np.zeros((0, 0), dtype=np.float32), []
     
         n = len(alive)
         in_dim = int(alive[0].genome.layer_sizes[0])
         X = np.empty((n, in_dim), dtype=np.float32)
     
-        BC_list: list[tuple[float, float]] = [None] * n  # type: ignore
+        BC_list: list[tuple[float, float]] = [(0.0, 0.0)] * n
     
         for i, a in enumerate(alive):
             x_in, B0, C0 = a.build_inputs(self.world, rng=self.rng)
@@ -1216,6 +1223,26 @@ class Population:
             X[i] = x_in
             BC_list[i] = (float(B0), float(C0))
             self._emit_step_if_tracked(self.t, a, float(B0), float(C0))
+    
+        return alive, X, BC_list
+        
+    def _step_decision_system(
+        self,
+        ctx: "StepCtx",
+        alive: list[Agent],
+        X: np.ndarray,
+        BC_list: list[tuple[float, float]],
+    ) -> list:
+        """
+        Kör decision-systemet för de agenter som redan passerat sensing:
+        
+          - policy-forward
+          - action planning
+        
+        Returnerar en lista av (agent, plan)-tupler som move_system senare verkställer.
+        """
+        if not alive:
+            return []
     
         groups: dict[tuple, list[int]] = {}
         for i, a in enumerate(alive):
@@ -1239,11 +1266,89 @@ class Population:
     
             Y[idxs_arr] = H
     
+        plans = []
         for i, a in enumerate(alive):
             B0, C0 = BC_list[i]
-            a.apply_outputs(self.world, ctx, Y[i], B0, C0)
+            plan = a.plan_actions(self.world, ctx, Y[i], B0, C0)
+            plans.append((a, plan))
     
+        return plans
+
+           
+    def _step_move_system(
+        self,
+        ctx: "StepCtx",
+        plans: list,
+    ) -> list:
+        """
+        Verkställ rörelse och feeding för planerade agenter.
     
+        Returnerar explicita body_inputs som body_system senare använder.
+        """
+        if not plans:
+            return []
+    
+        body_inputs = []
+    
+        for a, plan in plans:
+            if not a.body.alive:
+                continue
+    
+            body_in = a.execute_action_plan(self.world, ctx, plan)
+            body_inputs.append((a, body_in))
+    
+        return body_inputs
+
+    def _step_body_system(
+        self,
+        ctx: "StepCtx",
+        body_inputs: list,
+    ) -> None:
+        """
+        Kör fysiologisk kroppsdynamik som eget pass efter move_system.
+    
+        Detta håller fortfarande Body.step() intakt, men flyttar subsystemgränsen
+        ut ur move_system så att rörelse och fysiologi inte längre är samma pass.
+        """
+        if not body_inputs:
+            return
+    
+        for a, body_in in body_inputs:
+            if not a.body.alive:
+                continue
+    
+            a.body.step(
+                ctx,
+                speed=body_in.speed,
+                activity=body_in.activity,
+                food_bio_kg=body_in.food_bio_kg,
+                food_carcass_kg=body_in.food_carcass_kg,
+                pheno=a.pheno,
+                extra_drain=body_in.E_move,
+                T_env=body_in.Tloc,
+                age_s=a.age_s,
+            )
+    
+            a.last_B0 = float(body_in.B0)
+            a.last_C0 = float(body_in.C0)
+
+    def _step_interaction_system(self, ctx: "StepCtx") -> None:
+        """
+        Hantera organism–organism-interaktioner efter movement/body:
+          - predation
+          - mating-initiering
+    
+        Detta pass ska innehålla sådant som kräver att individerna redan har
+        uppdaterat position och kroppstillstånd för ticken, men ännu inte har
+        städats bort via death/birth-pass.
+        """
+        self._step_predation(ctx)
+    
+        for a in self.agents:
+            if not a.body.alive:
+                continue
+            self._try_mating(a, ctx)
+            
     def _step_predation(self, ctx: "StepCtx") -> None:
         """
         Verkställ predation mot lokalt detekterade mål.
@@ -1364,7 +1469,7 @@ class Population:
     
     def _step_births(self, ctx: "StepCtx") -> int:
         """
-        Hantera födslar och parningsförsök.
+        Hantera enbart födslar från redan etablerad gestation.
         Returnerar antal födda denna tick.
         """
         births = 0
@@ -1383,16 +1488,34 @@ class Population:
             child = self._try_birth(a, ctx)
             if child is not None:
                 children.append(child)
-                continue
-    
-            self._try_mating(a, ctx)
     
         if children:
             self.agents.extend(children)
         births = len(children)
         return int(births)
     
+    def _step_metabolism_system(self, ctx: StepCtx) -> None:
+        """
+        Första explicita fas-4-passet för fauna.
     
+        Detta är ännu inte full metabolism enligt manifestet.
+        Vi börjar med de enklaste metabola klockorna som redan ligger på agentnivå:
+          - biologisk ålder
+          - reproduktions-cooldown
+    
+        Den energiburna fysiologin ligger tills vidare kvar samlad i Body.step().
+        """
+        dt = float(ctx.dt)
+        if dt <= 0.0:
+            return
+    
+        for a in self.agents:
+            if not a.body.alive:
+                continue
+    
+            a.age_s += dt
+            a.repro_cd_s = max(0.0, float(a.repro_cd_s) - dt)
+            
     def _step_sampling(self) -> None:
         """
         Emit sample event enligt samplinginställningar.
@@ -1458,9 +1581,13 @@ class Population:
         ctx = StepCtx(t=float(self.t), dt=dt, rng=self.rng)
     
         dM_growth_flora, flora_established, flora_dispersed_mass = self._step_world_and_flora()
-    
-        self._step_agents_policy(ctx)
-        self._step_predation(ctx)
+
+        self._step_metabolism_system(ctx)
+        alive, X, BC_list = self._step_sense_system(ctx)
+        plans = self._step_decision_system(ctx, alive, X, BC_list)
+        body_inputs = self._step_move_system(ctx, plans)
+        self._step_body_system(ctx, body_inputs)
+        self._step_interaction_system(ctx)
     
         deaths = self._step_deaths()
         births = self._step_births(ctx)
