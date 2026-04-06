@@ -396,13 +396,6 @@ class Body:
         M = self.M
         return self.AP.E_cap_per_M * (M if M > 1e-9 else 1e-9)
 
-    def reserve_frac(self) -> float:
-        Ecap = self.E_cap()
-        if Ecap <= 1e-9:
-            return 0.0
-        r = self.E_total() / Ecap
-        return 0.0 if r < 0.0 else 1.0 if r > 1.0 else r
-
     def hunger(self) -> float:
         Et   = self.E_total()
         Ecap = self.E_cap()
@@ -481,43 +474,19 @@ class Body:
         w = float(self.weakness())
         return float(self.AP.rep_weak_min + (1.0 - float(self.AP.rep_weak_min)) * w)
 
-    def _finite(self, x: float) -> bool:
-        # Behålls för bakåtkompatibilitet men används ej internt längre.
-        return math.isfinite(float(x))
+    def clamp_energy_to_cap(self) -> None:
+        Et = float(self.E_total())
+        Ecap = float(self.E_cap())
+        if Et <= Ecap:
+            return
+        k = Ecap / max(Et, 1e-12)
+        self.scale_energy(k)
 
-    def _guard_snapshot(self, where: str) -> dict:
-        return {
-            "where": where,
-            "E_fast": float(self.E_fast),
-            "E_slow": float(self.E_slow),
-            "M": float(self.M),
-            "D": float(self.D),
-            "Fg": float(self.Fg),
-            "alive": bool(self.alive),
-        }
+    def scale_energy(self, factor: float) -> None:
+        f = max(0.0, float(factor))
+        self.E_fast = float(self.E_fast) * f
+        self.E_slow = float(self.E_slow) * f
 
-    def start_gestation(self, M_target: float) -> bool:
-        Mt = max(0.0, float(M_target))
-        if Mt <= 0.0:
-            return False
-        if self.gestating:
-            return False
-        self.gestating = True
-        self.gest_M = 0.0
-        self.gest_E_J = 0.0
-        self.gest_M_target = Mt
-        return True
-    
-    def abort_gestation(self) -> None:
-        # Nothing to refund because buffers were taken from net deltas (already removed from parent)
-        self.gestating = False
-        self.gest_M = 0.0
-        self.gest_E_J = 0.0
-        self.gest_M_target = 0.0
-    
-    def gestation_ready(self) -> bool:
-        return bool(self.gestating and (float(self.gest_M) >= float(self.gest_M_target) > 0.0))
-        
     def take_energy(self, amount: float) -> float:
         amt = float(max(0.0, amount))
         if amt <= 0.0:
@@ -540,19 +509,50 @@ class Body:
         self.E_slow = max(0.0, float(self.E_slow) - d_slow)
 
         return float(0.6 * d_fast + 0.4 * d_slow)
-
-    def scale_energy(self, factor: float) -> None:
-        f = max(0.0, float(factor))
-        self.E_fast = float(self.E_fast) * f
-        self.E_slow = float(self.E_slow) * f
+        
+    def start_gestation(self, M_target: float) -> bool:
+        Mt = max(0.0, float(M_target))
+        if Mt <= 0.0:
+            return False
+        if self.gestating:
+            return False
+        self.gestating = True
+        self.gest_M = 0.0
+        self.gest_E_J = 0.0
+        self.gest_M_target = Mt
+        return True
     
-    def clamp_energy_to_cap(self) -> None:
-        Et = float(self.E_total())
-        Ecap = float(self.E_cap())
-        if Et <= Ecap:
-            return
-        k = Ecap / max(Et, 1e-12)
-        self.scale_energy(k)
+    def abort_gestation(self) -> None:
+        # Nothing to refund because buffers were taken from net deltas (already removed from parent)
+        self.gestating = False
+        self.gest_M = 0.0
+        self.gest_E_J = 0.0
+        self.gest_M_target = 0.0
+    
+    def gestation_ready(self) -> bool:
+        return bool(self.gestating and (float(self.gest_M) >= float(self.gest_M_target) > 0.0))
+
+    def reserve_frac(self) -> float:
+        Ecap = self.E_cap()
+        if Ecap <= 1e-9:
+            return 0.0
+        r = self.E_total() / Ecap
+        return 0.0 if r < 0.0 else 1.0 if r > 1.0 else r
+
+    def _finite(self, x: float) -> bool:
+        # Behålls för bakåtkompatibilitet men används ej internt längre.
+        return math.isfinite(float(x))
+
+    def _guard_snapshot(self, where: str) -> dict:
+        return {
+            "where": where,
+            "E_fast": float(self.E_fast),
+            "E_slow": float(self.E_slow),
+            "M": float(self.M),
+            "D": float(self.D),
+            "Fg": float(self.Fg),
+            "alive": bool(self.alive),
+        }
         
     def _sense_cost(self, pheno: Phenotype) -> float:
         level = _sense_level(float(getattr(pheno, "sense_strength", 0.0)))
@@ -1210,6 +1210,7 @@ class Body:
 class RaySensors:
     AP: AgentParams
     grid: Grid
+    store: object | None = None
 
     _n: int = field(init=False, default=0)
     _m: int = field(init=False, default=0)
@@ -1453,56 +1454,85 @@ class RaySensors:
         heading: float,
         self_id: int,
         m_eff: int = 0,
-    ) -> tuple[float, float, float, int, int]:
+    ) -> tuple[float, float, float, int, int, int]:
         """
-        Returns (present, bearing_u, dist_u, j_hit, hit_agent_id).
+        Returns (present, bearing_u, dist_u, j_hit, hit_slot, hit_agent_id).
         j_hit: avståndssteg-index för träffen (-1 om ingen träff).
-        hit_agent_id: agent-ID vid träffpunkten (0 om ingen träff).
-        m_eff: effektivt antal avståndssteg att skanna (0 = alla).
+        hit_slot: store-slot för träffen (-1 om ingen träff).
+        hit_agent_id: biologiskt agent-ID vid träffpunkten (0 om ingen träff).
+    
+        Fauna upptäcks via store.spatial_index.
         """
         n = int(self._n)
         m_full = int(self._m)
         if n <= 0 or m_full <= 0:
-            return 0.0, 0.0, 0.0, -1, 0
-
+            return 0.0, 0.0, 0.0, -1, -1, 0
+    
+        store = getattr(self, "store", None)
+        if store is None:
+            return 0.0, 0.0, 0.0, -1, -1, 0
+    
         np.add(self._ang_base, np.float32(heading), out=self._ang)
         np.cos(self._ang, out=self._dx)
         np.sin(self._ang, out=self._dy)
-
+    
         xx = np.float32(x)
         yy = np.float32(y)
-
+    
         np.multiply(self._dx[:, None], self._d[None, :], out=self._xs)
         self._xs += xx
         np.multiply(self._dy[:, None], self._d[None, :], out=self._ys)
         self._ys += yy
-
+    
         self._wrap_points_inplace(self._xs, self._ys)
-        ixs, iys = self._points_to_cells(self._xs, self._ys)
-
-        aids = world.A[iys, ixs]
-        mask = (aids != 0) & (aids != int(self_id))
-
-        # Maskera bortom per-stråle djup (ellipsmodell)
+    
         if m_eff > 0 and m_eff < m_full:
             ray_depths = np.minimum(self._ray_m, m_eff)
         else:
             ray_depths = self._ray_m
-        j_idx    = np.arange(m_full, dtype=np.int32)[None, :]
-        depth_ok = j_idx < ray_depths[:, None]
-        mask     = mask & depth_ok
-
-        hit_per_j = mask.any(axis=0)
-        if not hit_per_j.any():
-            return 0.0, 0.0, 0.0, -1, 0
-
-        j_hit        = int(np.argmax(hit_per_j))
-        i_hit        = int(np.argmax(mask[:, j_hit]))
-        bearing_u    = float(i_hit) / float(n)
-        dist_u       = float(self._d[j_hit]) / max(float(self.AP.ray_len_front), 1e-9)
-        hit_agent_id = int(aids[i_hit, j_hit])
-        return 1.0, bearing_u, dist_u, j_hit, hit_agent_id
-
+    
+        for j in range(m_full):
+            hit_i = -1
+            hit_slot = -1
+            hit_id = 0
+    
+            for i in range(n):
+                if j >= int(ray_depths[i]):
+                    continue
+    
+                cell = int(self.grid.cell_of(float(self._xs[i, j]), float(self._ys[i, j])))
+                slots = store.slots_in_cell(cell)
+                if slots.size == 0:
+                    continue
+    
+                for slot in slots:
+                    s = int(slot)
+    
+                    if not bool(store.alive[s]):
+                        continue
+                    if int(store.kind[s]) != 0:
+                        continue
+    
+                    oid = int(store.id[s])
+                    if oid == int(self_id):
+                        continue
+                    if oid <= 0:
+                        continue
+    
+                    hit_i = i
+                    hit_slot = s
+                    hit_id = oid
+                    break
+    
+                if hit_i >= 0:
+                    break
+    
+            if hit_i >= 0:
+                bearing_u = float(hit_i) / float(n)
+                dist_u = float(self._d[j]) / max(float(self.AP.ray_len_front), 1e-9)
+                return 1.0, bearing_u, dist_u, j, hit_slot, hit_id
+    
+        return 0.0, 0.0, 0.0, -1, -1, 0
 
 # -------------------------
 # Agent
@@ -1524,6 +1554,7 @@ class Agent:
 
     id: int = field(default_factory=_new_agent_id)
     store_slot: int = -1
+    wrapper_lookup: object = None
 
     OBS_DIM: ClassVar[int] = 23   # +2: predator_bearing (cos/sin), predator_dist
     OUT_DIM: ClassVar[int] = 5
@@ -1556,9 +1587,8 @@ class Agent:
     _cached_x_in: np.ndarray = field(init=False)         # cachat obs-vektor
     _last_detect_j: int = field(init=False, default=-1)  # avståndssteg för senaste träff (-1=ingen)
     _sense_m_eff: int = field(init=False, default=0)     # effektivt stråldjup nästa skanning
-    _cached_agent_hit: tuple = field(init=False)         # (N, Nu, Nd, hit_id) från senaste see_agent_first_hit
+    _cached_agent_hit: tuple = field(init=False)         # (N, Nu, Nd, hit_slot, hit_id) från senaste see_agent_first_hit
     _cached_predator_hit: tuple = field(init=False)      # (pred_bearing, pred_dist) — närmaste hotande predator
-    _desired_mate_id: int = field(init=False, default=0) # ID för lokalt detekterad potentiell partner (0=ingen)
 
     def __post_init__(self) -> None:
         self.AP = replace(self.AP)
@@ -1597,9 +1627,8 @@ class Agent:
         self._cached_x_in = np.zeros((self.OBS_DIM + _h_dim,), dtype=np.float32)
         self._last_detect_j = -1
         self._sense_m_eff = 0
-        self._cached_agent_hit = (0.0, 0.0, 0.0, 0)
+        self._cached_agent_hit = (0.0, 0.0, 0.0, -1, 0)
         self._cached_predator_hit = (0.0, 0.0)
-        self._desired_mate_id = 0
 
     def _init_body_state_from_AP(self) -> None:
         self.body.M = max(0.0, float(self.AP.M0))
@@ -1617,20 +1646,28 @@ class Agent:
     def bind_world(self, world: World) -> None:
         self.world = world
         if getattr(self, "sensors", None) is None:
-            self.sensors = RaySensors(self.AP, grid=self.grid)
+            self.sensors = RaySensors(self.AP, grid=self.grid, store=None)
 
     def bind_grid(self, grid: Grid) -> None:
         self.grid = grid
-        
-    @staticmethod
-    def _signed_angle(a: float) -> float:
-        return (a + math.pi) % (2.0 * math.pi) - math.pi
+
+    def bind_store(self, store) -> None:
+        self.store = store
+        if getattr(self, "sensors", None) is not None:
+            self.sensors.store = store
+
+    def bind_wrapper_lookup(self, fn) -> None:
+        self.wrapper_lookup = fn
 
     def apply_traits(self) -> None:
         self.pheno = derive_pheno(self.genome.traits)
-
+        
     def phenotype_summary(self) -> dict:
         return phenotype_summary(self.pheno)
+
+    @staticmethod
+    def _signed_angle(a: float) -> float:
+        return (a + math.pi) % (2.0 * math.pi) - math.pi
 
     def _build_obs(self, B0: float, C0: float, rays_B, rays_C,
                    pred_bearing: float = 0.0, pred_dist: float = 0.0) -> np.ndarray:
@@ -1673,104 +1710,6 @@ class Agent:
         )
         return x
 
-    def build_inputs(self, world: World, rng: np.random.Generator):
-        if not self.body.alive:
-            return None, 0.0, 0.0
-
-        m_full = int(self.sensors._m) if self.sensors is not None else 0
-
-        # Initialisera m_eff vid första anropet
-        if self._sense_m_eff <= 0:
-            self._sense_m_eff = m_full
-
-        # --- Adaptiv sensing: returnera cache om cooldown aktiv ---
-        if self._sense_cd > 0:
-            self._sense_cd -= 1
-
-            # Body-state uppdateras varje steg även vid cache
-            hunger = float(self.body.hunger())
-            fatigue = float(self.body.Fg)
-            D = float(self.body.D)
-            self._cached_x_in[6] = hunger
-            self._cached_x_in[7] = fatigue
-            self._cached_x_in[20] = D
-
-            a = 0.06
-            self.obs_trace = (1.0 - a) * self.obs_trace + a * self._cached_x_in[:8]
-            self._cached_x_in[8:16] = self.obs_trace
-
-            # h uppdateras alltid — cachat obs + färskt h → korrekt nätverksinput
-            _h_dim = int(self._h.shape[0])
-            if _h_dim > 0:
-                self._cached_x_in[self.OBS_DIM:] = self._h
-
-            return self._cached_x_in.copy(), self._cached_B0, self._cached_C0
-
-        # --- Full sensing med adaptivt djup ---
-        m_eff = self._sense_m_eff
-
-        # Parningsläge: kör alltid full sensing för att inte missa en potentiell partner
-        if self.ready_to_reproduce():
-            m_eff = m_full
-            self._sense_cd = 0
-
-        (B0, C0), rays_B, rays_C = self.sensors.sense(
-            world, self.x, self.y, self.heading, rng=rng, m_eff=m_eff,
-        )
-
-        # Kontrollera om något detekterades (mat i rays eller lokalt)
-        thresh = float(self.AP.sense_alert_thresh)
-        food_near = (
-            float(B0) > thresh
-            or float(C0) > thresh
-            or (len(rays_B) > 0 and float(rays_B.max()) > thresh)
-            or (len(rays_C) > 0 and float(rays_C.max()) > thresh)
-        )
-
-        # Kontrollera grannar med adaptivt djup
-        N_ag, Nu_ag, Nd_ag, j_agent, hit_id = self.sensors.see_agent_first_hit(
-            world, self.x, self.y, self.heading, self.id, m_eff=m_eff,
-        )
-        agent_near = j_agent >= 0
-
-        # Cacha för apply_outputs — inkluderar hit_id för lokal agent-lookup
-        self._cached_agent_hit = (N_ag, Nu_ag, Nd_ag, hit_id)
-
-        # Predator-proxy: närmaste agent-riktning ger nätverket flykt-signal
-        pred_bearing = float(Nu_ag) * 2.0 * math.pi if N_ag > 0.5 else 0.0
-        pred_dist    = float(Nd_ag) if N_ag > 0.5 else 1.0
-
-        x_in = self._build_obs(B0, C0, rays_B, rays_C,
-                               pred_bearing=pred_bearing, pred_dist=pred_dist)
-
-        if food_near or agent_near:
-            # ALERT: hög frekvens, tight djup (lite förbi senaste träffen)
-            j_det = j_agent if agent_near else 0
-            self._last_detect_j = j_det
-            # Nästa scan: bara så långt som behövs + 2 steg marginal, max m_full
-            self._sense_m_eff = min(m_full, max(2, j_det + 3))
-            self._sense_cd = max(0, int(self.AP.sense_alert_steps) - 1)
-        else:
-            # IDLE: låg frekvens, full räckvidd (fångar nya saker i periferin)
-            self._last_detect_j = -1
-            self._sense_m_eff = m_full
-            self._sense_cd = max(0, int(self.AP.sense_idle_steps) - 1)
-
-        # Konkatenera rekurrent h till observationsvektorn
-        _h_dim = int(self._h.shape[0])
-        if _h_dim > 0:
-            x_full = np.empty(self.OBS_DIM + _h_dim, dtype=np.float32)
-            x_full[:self.OBS_DIM] = x_in
-            x_full[self.OBS_DIM:] = self._h
-            x_in = x_full
-
-        # Uppdatera cache
-        self._cached_B0 = float(B0)
-        self._cached_C0 = float(C0)
-        self._cached_x_in[:] = x_in
-
-        return x_in, float(B0), float(C0)
-
     def _torus_delta_to(self, other: "Agent") -> tuple[float, float, float]:
         dx, dy = self.grid.torus_delta_pos(
             float(self.x), float(self.y),
@@ -1778,7 +1717,7 @@ class Agent:
         )
         d2 = dx * dx + dy * dy
         return dx, dy, math.sqrt(d2) if d2 > 0.0 else 0.0
-
+        
     def attack_value(self, target: "Agent", dist: float) -> float:
         if not target.body.alive:
             return -1e9
@@ -1799,8 +1738,479 @@ class Agent:
     def attack_score(self, target: "Agent", dist: float) -> float:
         return float(self.attack_value(target, dist) - self.attack_risk(target, dist))
 
-    # _local_social_targets() avvecklad — social interaktion är nu perceptionsbunden via hit_id.
-
+    def _build_inputs_from_cache(self) -> tuple[np.ndarray, float, float]:
+        """
+        Returnera cachad observationsvektor, men uppdatera de delar som måste
+        spegla aktuell kroppsstatus även när ingen full sensing körs.
+        """
+        self._sense_cd -= 1
+    
+        hunger = float(self.body.hunger())
+        fatigue = float(self.body.Fg)
+        D = float(self.body.D)
+    
+        # obs = [B0, C0, meanB, meanC, maxB, maxC, hunger, fatigue]
+        self._cached_x_in[6] = hunger
+        self._cached_x_in[7] = fatigue
+    
+        # sista delen av obs-vektorn innehåller D på index 20
+        self._cached_x_in[20] = D
+    
+        a = 0.06
+        self.obs_trace = (1.0 - a) * self.obs_trace + a * self._cached_x_in[:8]
+        self._cached_x_in[8:16] = self.obs_trace
+    
+        # Rekurrentt state ska alltid vara färskt
+        _h_dim = int(self._h.shape[0])
+        if _h_dim > 0:
+            self._cached_x_in[self.OBS_DIM:] = self._h
+    
+        return self._cached_x_in.copy(), self._cached_B0, self._cached_C0
+    
+    
+    def _run_full_sensing(
+        self,
+        world: World,
+        rng: np.random.Generator,
+        m_eff: int,
+    ) -> tuple[
+        float, float, np.ndarray, np.ndarray,
+        float, float, float, int, int, int,
+        bool, bool, float, float
+    ]:
+        """
+        Kör full sensing och returnerar allt som build_inputs behöver vidare.
+        """
+        (B0, C0), rays_B, rays_C = self.sensors.sense(
+            world, self.x, self.y, self.heading, rng=rng, m_eff=m_eff,
+        )
+    
+        thresh = float(self.AP.sense_alert_thresh)
+        food_near = (
+            float(B0) > thresh
+            or float(C0) > thresh
+            or (len(rays_B) > 0 and float(rays_B.max()) > thresh)
+            or (len(rays_C) > 0 and float(rays_C.max()) > thresh)
+        )
+    
+        N_ag, Nu_ag, Nd_ag, j_agent, hit_slot, hit_id = self.sensors.see_agent_first_hit(
+            world, self.x, self.y, self.heading, self.id, m_eff=m_eff,
+        )
+        agent_near = j_agent >= 0
+    
+        pred_bearing = float(Nu_ag) * 2.0 * math.pi if N_ag > 0.5 else 0.0
+        pred_dist = float(Nd_ag) if N_ag > 0.5 else 1.0
+    
+        return (
+            float(B0), float(C0), rays_B, rays_C,
+            float(N_ag), float(Nu_ag), float(Nd_ag),
+            int(j_agent), int(hit_slot), int(hit_id),
+            bool(food_near), bool(agent_near),
+            float(pred_bearing), float(pred_dist),
+        )
+    
+    
+    def _update_sensing_schedule(
+        self,
+        *,
+        food_near: bool,
+        agent_near: bool,
+        j_agent: int,
+        m_full: int,
+    ) -> None:
+        """
+        Uppdatera adaptiv sensingfrekvens och nästa effektiva djup.
+        """
+        if food_near or agent_near:
+            j_det = int(j_agent) if agent_near else 0
+            self._last_detect_j = j_det
+            self._sense_m_eff = min(m_full, max(2, j_det + 3))
+            self._sense_cd = max(0, int(self.AP.sense_alert_steps) - 1)
+        else:
+            self._last_detect_j = -1
+            self._sense_m_eff = m_full
+            self._sense_cd = max(0, int(self.AP.sense_idle_steps) - 1)
+            
+    def build_inputs(self, world: World, rng: np.random.Generator):
+        if not self.body.alive:
+            return None, 0.0, 0.0
+    
+        m_full = int(self.sensors._m) if self.sensors is not None else 0
+    
+        if self._sense_m_eff <= 0:
+            self._sense_m_eff = m_full
+    
+        # Cacheväg
+        if self._sense_cd > 0:
+            return self._build_inputs_from_cache()
+    
+        # Full sensing
+        m_eff = self._sense_m_eff
+    
+        # Parningsläge: tvinga full räckvidd
+        if self.ready_to_reproduce():
+            m_eff = m_full
+            self._sense_cd = 0
+    
+        (
+            B0, C0, rays_B, rays_C,
+            N_ag, Nu_ag, Nd_ag,
+            j_agent, hit_slot, hit_id,
+            food_near, agent_near,
+            pred_bearing, pred_dist,
+        ) = self._run_full_sensing(world, rng, m_eff)
+    
+        self._cached_agent_hit = (N_ag, Nu_ag, Nd_ag, hit_slot, hit_id)
+    
+        x_in = self._build_obs(
+            B0, C0, rays_B, rays_C,
+            pred_bearing=pred_bearing,
+            pred_dist=pred_dist,
+        )
+    
+        self._update_sensing_schedule(
+            food_near=food_near,
+            agent_near=agent_near,
+            j_agent=j_agent,
+            m_full=m_full,
+        )
+    
+        # Lägg till rekurrentt state
+        _h_dim = int(self._h.shape[0])
+        if _h_dim > 0:
+            x_full = np.empty(self.OBS_DIM + _h_dim, dtype=np.float32)
+            x_full[:self.OBS_DIM] = x_in
+            x_full[self.OBS_DIM:] = self._h
+            x_in = x_full
+    
+        # Uppdatera cache
+        self._cached_B0 = float(B0)
+        self._cached_C0 = float(C0)
+        self._cached_x_in[:] = x_in
+    
+        return x_in, float(B0), float(C0)
+        
+    # ------------------------------
+    # apply_outputs: Helpers
+    # ------------------------------
+    def _update_agent_clocks(self, dt: float) -> None:
+        self.age_s += float(dt)
+        self.repro_cd_s = max(0.0, float(self.repro_cd_s) - float(dt))
+    
+    
+    def _split_recurrent_output(self, y: np.ndarray) -> np.ndarray:
+        _h_dim = int(self._h.shape[0])
+        _out_dim = int(self.OUT_DIM)
+        if _h_dim > 0:
+            h_raw = y[_out_dim : _out_dim + _h_dim]
+            self._h = np.tanh(h_raw).astype(np.float32)
+            return y[:_out_dim]
+        return y
+    
+    
+    def _decode_action_outputs(
+        self,
+        y: np.ndarray,
+    ) -> tuple[float, float, float, float, float]:
+        turn = float(np.tanh(y[0]))
+        thrust = float(1.0 / (1.0 + np.exp(-float(y[1]))))
+        inh_move = float(1.0 / (1.0 + np.exp(-float(y[2]))))
+        inh_eat = float(1.0 / (1.0 + np.exp(-float(y[3]))))
+        explore_drive = float(1.0 / (1.0 + np.exp(-float(y[4]))))
+    
+        allow_move = 1.0 - inh_move
+        allow_eat = 1.0 - inh_eat
+        return turn, thrust, allow_move, allow_eat, explore_drive
+    
+    
+    def _resolve_detected_agent(
+        self,
+        hit_slot: int,
+        hit_id: int,
+        N: float,
+    ):
+        store = getattr(self, "store", None)
+        lookup = getattr(self, "wrapper_lookup", None)
+    
+        if N <= 0.5:
+            return None
+        if store is None or not callable(lookup):
+            return None
+        if int(hit_slot) < 0:
+            return None
+    
+        s = int(hit_slot)
+        if s < 0 or s >= int(store.n):
+            return None
+        if not bool(store.alive[s]):
+            return None
+        if int(store.kind[s]) != 0:
+            return None
+    
+        detected_id = int(store.id[s])
+        if detected_id <= 0 or detected_id == int(self.id):
+            return None
+        if int(hit_id) > 0 and detected_id != int(hit_id):
+            return None
+    
+        detected = lookup(s)
+        if detected is None or detected is self or (not detected.body.alive):
+            return None
+        return detected
+    
+    
+    def _evaluate_local_agent_drives(
+        self,
+        detected,
+        hunt_eff: float,
+        in_mating_mode: bool,
+    ) -> tuple[object, float, object, float, object]:
+        best_prey = None
+        best_prey_score = -1e9
+        best_threat = None
+        best_threat_score = -1e9
+        best_mate = None
+    
+        if detected is None:
+            return best_prey, best_prey_score, best_threat, best_threat_score, best_mate
+    
+        dx, dy, dist = self._torus_delta_to(detected)
+    
+        _hunt_diet_exp = float(getattr(self.AP, "hunt_diet_exp", 1.5))
+    
+        other_pred = float(getattr(detected.pheno, "predation", 0.0))
+        other_diet = float(getattr(detected.pheno, "diet", 0.5))
+        other_hunt_eff = other_pred * (other_diet ** _hunt_diet_exp)
+    
+        if other_hunt_eff >= float(self.AP.threat_predation_min):
+            sc_th = detected.attack_score(self, dist)
+            if sc_th > float(self.AP.hunt_score_min):
+                best_threat = (detected, dx, dy, dist)
+                best_threat_score = sc_th
+    
+        if hunt_eff >= float(self.AP.predator_trait_min):
+            sc = self.attack_score(detected, dist)
+            if sc > float(self.AP.hunt_score_min):
+                best_prey = (detected, dx, dy, dist)
+                best_prey_score = sc
+    
+        if in_mating_mode and detected.ready_to_reproduce():
+            best_mate = (detected, dx, dy, dist)
+    
+        return best_prey, best_prey_score, best_threat, best_threat_score, best_mate
+    
+    
+    def _apply_reflex_drives(
+        self,
+        turn: float,
+        thrust: float,
+        explore_drive: float,
+        soc: float,
+        hunt_eff: float,
+        in_mating_mode: bool,
+        N: float,
+        Nu: float,
+        Nd: float,
+        best_prey,
+        best_prey_score: float,
+        best_threat,
+        best_threat_score: float,
+        best_mate,
+    ) -> tuple[float, float, float, float, float]:
+        hunt_state = 0.0
+        flee_state = 0.0
+    
+        if (
+            best_threat is not None
+            and hunt_eff < float(self.AP.threat_predation_min)
+            and best_threat_score > float(self.AP.hunt_score_min)
+        ):
+            other, dx, dy, dist = best_threat
+            a_th = math.atan2(dy, dx)
+            err = self._signed_angle(a_th - self.heading)
+            bias = clamp(err / math.pi, -1.0, 1.0)
+    
+            turn = clamp(turn - 0.95 * bias, -1.0, 1.0)
+            thrust = clamp(max(thrust, 0.95), 0.0, 1.0)
+            explore_drive *= 0.10
+            flee_state = 1.0
+    
+        elif (
+            best_prey is not None
+            and hunt_eff >= float(self.AP.predator_trait_min)
+            and best_prey_score > float(self.AP.hunt_score_min)
+        ):
+            other, dx, dy, dist = best_prey
+            a_hit = math.atan2(dy, dx)
+            errN = self._signed_angle(a_hit - self.heading)
+            biasN = clamp(errN / math.pi, -1.0, 1.0)
+            hs = clamp(hunt_eff, 0.0, 1.0)
+    
+            turn = clamp(turn + 0.90 * hs * biasN, -1.0, 1.0)
+            thrust = clamp(max(thrust, 0.85), 0.0, 1.0)
+            explore_drive *= 0.25
+            hunt_state = 1.0
+    
+        elif in_mating_mode and best_mate is not None:
+            other, dx, dy, dist = best_mate
+            a_hit = math.atan2(dy, dx)
+            errN = self._signed_angle(a_hit - self.heading)
+            biasN = clamp(errN / math.pi, -1.0, 1.0)
+    
+            turn = clamp(0.95 * biasN, -1.0, 1.0)
+            thrust = max(thrust, 0.95)
+            explore_drive = 0.0
+    
+        elif N > 0.5:
+            a_hit = self.heading + (2.0 * math.pi * float(Nu))
+            errN = self._signed_angle(a_hit - self.heading)
+            biasN = clamp(errN / math.pi, -1.0, 1.0)
+            Nd_f = float(Nd)
+    
+            REP_ZONE = 0.35
+            if Nd_f < REP_ZONE:
+                rs = 1.0 - (Nd_f / REP_ZONE)
+                turn = clamp(turn - 0.70 * rs * biasN, -1.0, 1.0)
+                explore_drive = explore_drive * (1.0 - 0.3 * rs)
+            else:
+                soc_bias = 2.0 * soc - 1.0
+                if abs(soc_bias) > 1e-6:
+                    wdist = clamp(1.0 - Nd_f, 0.0, 1.0)
+                    turn = clamp(turn + 0.70 * soc_bias * wdist * biasN, -1.0, 1.0)
+                    explore_drive = explore_drive * (1.0 - 0.60 * abs(soc_bias) * wdist)
+    
+        return turn, thrust, explore_drive, flee_state, hunt_state
+    
+    
+    def _apply_food_steering(
+        self,
+        ctx: "StepCtx",
+        turn: float,
+        thrust: float,
+        explore_drive: float,
+        flee_state: float,
+        B0: float,
+        C0: float,
+    ) -> tuple[float, float, float]:
+        hunger_now = float(self.body.hunger())
+    
+        if flee_state < 0.5 and hunger_now > 0.4:
+            sensors = getattr(self, "sensors", None)
+            if sensors is not None:
+                accB = getattr(sensors, "_accB", None)
+                accC = getattr(sensors, "_accC", None)
+                ang = getattr(sensors, "_ang_base", None)
+    
+                if accB is not None and accC is not None and ang is not None and len(accB) > 0:
+                    _diet = float(getattr(self.pheno, "diet", 0.5))
+                    herb_eff = (1.0 - _diet) ** 0.7
+                    scav_eff = _diet ** 0.7
+    
+                    combo = accB * herb_eff + accC * scav_eff
+                    i_best = int(np.argmax(combo))
+                    sig = float(combo[i_best])
+    
+                    if sig > 0.05:
+                        food_angle = float(ang[i_best]) + float(self.heading)
+                        err_food = self._signed_angle(food_angle - self.heading)
+                        bias_food = clamp(err_food / math.pi, -1.0, 1.0)
+                        fd = clamp(hunger_now - 0.4, 0.0, 0.6) * sig
+    
+                        turn = clamp(turn + 0.60 * fd * bias_food, -1.0, 1.0)
+                        thrust = clamp(thrust + 0.3 * fd, 0.0, 1.0)
+    
+        _diet_local = float(getattr(self.pheno, "diet", 0.5))
+        _herb_local = (1.0 - _diet_local) ** 0.7
+        _scav_local = _diet_local ** 0.7
+        food_local = clamp(float(B0) * _herb_local + float(C0) * _scav_local, 0.0, 1.0)
+    
+        explore_drive *= 1.0 - hunger_now * food_local
+        return turn, thrust, explore_drive
+    
+    
+    def _integrate_motion(
+        self,
+        ctx: "StepCtx",
+        turn: float,
+        thrust: float,
+        allow_move: float,
+        explore_drive: float,
+    ) -> tuple[float, float]:
+        dt = float(ctx.dt)
+    
+        jitter = float(ctx.rng.normal(0.0, 0.65)) * explore_drive
+        self.heading = float(self.heading) + dt * float(self.AP.turn_rate) * (
+            0.85 * allow_move * turn + 0.25 * jitter
+        )
+        self.heading = self._signed_angle(self.heading)
+    
+        fatigue = float(self.body.Fg)
+        fatigue_factor = clamp(1.0 - 0.9 * fatigue, 0.05, 1.0)
+        weak_move = float(self.body.move_factor())
+        u = clamp(allow_move * thrust * fatigue_factor * weak_move, 0.0, 1.0)
+    
+        v_prev = max(0.0, float(self.last_speed))
+        M_pre = max(1e-9, float(self.body.M))
+    
+        F0_cap = float(self.AP.F0)
+        alpha = float(self.AP.force_mass_exp)
+        F_prop = u * F0_cap * (M_pre ** alpha)
+    
+        c1 = float(self.AP.drag_lin)
+        c2 = float(self.AP.drag_quad)
+    
+        F_drag_prev = c1 * v_prev + c2 * v_prev * v_prev
+        a = (F_prop - F_drag_prev) / M_pre
+        v_euler = max(0.0, v_prev + dt * a)
+    
+        speed = min(v_euler, float(self.AP.v_max))
+        v_mid = 0.5 * (v_prev + speed)
+        self.last_speed = float(speed)
+    
+        eta = clamp(float(self.AP.locomotion_eff), 1e-6, 1.0)
+        P_mech = max(0.0, F_prop * v_mid)
+        E_move = (dt * P_mech) / eta
+    
+        x_new = float(self.x) + dt * speed * math.cos(self.heading)
+        y_new = float(self.y) + dt * speed * math.sin(self.heading)
+        self.x, self.y = self.grid.wrap_pos(x_new, y_new)
+    
+        return float(speed), float(E_move)
+    
+    
+    def _perform_feeding(
+        self,
+        world: World,
+        dt: float,
+        allow_eat: float,
+    ) -> tuple[float, float]:
+        got_bio = 0.0
+        got_carcass = 0.0
+    
+        if allow_eat > 0.20:
+            want_kg = float(self.AP.eat_rate) * dt * (0.25 + 0.75 * float(self.body.hunger()))
+            got_total, got_carcass = world.consume_food(
+                self.x,
+                self.y,
+                amount=want_kg,
+                prefer_carcass=True,
+            )
+            got_bio = max(0.0, float(got_total) - float(got_carcass))
+    
+        return float(got_bio), float(got_carcass)
+    
+    
+    def _activity_proxy(
+        self,
+        speed: float,
+        allow_eat: float,
+        food_bio_kg: float,
+        food_carcass_kg: float,
+    ) -> float:
+        speed_n = clamp(speed / max(float(self.AP.v_max), 1e-9), 0.0, 1.0)
+        ate = 1.0 if (allow_eat > 0.20 and (food_bio_kg + food_carcass_kg) > 0.0) else 0.0
+        return 0.03 + 0.45 * speed_n + 0.10 * ate
+        
     def apply_outputs(
         self,
         world: World,
@@ -1814,244 +2224,108 @@ class Agent:
     
         dt = float(ctx.dt)
     
-        # --- bookkeeping (agent-level clocks) ---
-        self.age_s += dt
-        self.repro_cd_s = max(0.0, float(self.repro_cd_s) - dt)
-
         # ---------------------------------------------------------
-        # 0) Splitta policy-output i aktioner (y) och nytt minnestillstånd (h)
-        # Nätverket producerar concat(y, h_raw); h_new = tanh(h_raw) ∈ (−1,+1).
+        # 0) Clocks + recurrent state
         # ---------------------------------------------------------
-        _h_dim = int(self._h.shape[0])
-        _out_dim = int(self.OUT_DIM)
-        if _h_dim > 0:
-            h_raw = y[_out_dim : _out_dim + _h_dim]
-            self._h = np.tanh(h_raw).astype(np.float32)
-            y = y[:_out_dim]          # rena aktioner, identiskt med tidigare API
-
+        self._update_agent_clocks(dt)
+        y = self._split_recurrent_output(y)
+    
         # ---------------------------------------------------------
         # 1) Decode policy outputs
         # ---------------------------------------------------------
-        turn = float(np.tanh(y[0]))  # [-1,1]
-        thrust = float(1.0 / (1.0 + np.exp(-float(y[1]))))         # [0,1]
-        inh_move = float(1.0 / (1.0 + np.exp(-float(y[2]))))       # [0,1]
-        inh_eat = float(1.0 / (1.0 + np.exp(-float(y[3]))))        # [0,1]
-        explore_drive = float(1.0 / (1.0 + np.exp(-float(y[4]))))  # [0,1]
-    
-        allow_move = 1.0 - inh_move
-        allow_eat = 1.0 - inh_eat
+        turn, thrust, allow_move, allow_eat, explore_drive = self._decode_action_outputs(y)
     
         # ---------------------------------------------------------
-        # 2) Temperature + local target assessment
+        # 2) Local context + detected local target
         # ---------------------------------------------------------
         Tloc = float(world.temperature_at(self.x, self.y)) if hasattr(world, "temperature_at") else 0.0
-
+    
         soc = float(getattr(self.pheno, "sociability", 0.0))
         pred = float(getattr(self.pheno, "predation", 0.0))
-        N, Nu, Nd, hit_id = self._cached_agent_hit
+        N, Nu, Nd, hit_slot, hit_id = self._cached_agent_hit
         in_mating_mode = self.ready_to_reproduce()
-
-        # Lokal agent-utvärdering: bara den agent som faktiskt detekterades via sensing.
-        best_prey        = None
-        best_prey_score  = -1e9
-        best_threat      = None
-        best_threat_score = -1e9
-        best_mate        = None
-        hunt_state       = 0.0
-        flee_state       = 0.0
-        self._desired_mate_id = 0
-
-        # hunt_eff: jaktförmåga skalas med dietanpassning.
-        # En herbivore (diet≈0) kan inte jaga lönsamt oavsett predation-trait.
-        _hunt_diet_exp = float(getattr(self.AP, 'hunt_diet_exp', 1.5))
-        _diet_val      = float(getattr(self.pheno, 'diet', 0.5))
-        hunt_eff       = pred * (_diet_val ** _hunt_diet_exp)
-
-        if N > 0.5 and hit_id > 0:
-            detected = world._agent_by_id.get(int(hit_id))
-            if detected is not None and detected.body.alive and detected is not self:
-                dx, dy, dist = self._torus_delta_to(detected)
-                other_pred = float(getattr(detected.pheno, "predation", 0.0))
-                other_diet = float(getattr(detected.pheno, "diet", 0.5))
-                other_hunt_eff = other_pred * (other_diet ** _hunt_diet_exp)
-                if other_hunt_eff >= float(self.AP.threat_predation_min):
-                    sc_th = detected.attack_score(self, dist)
-                    if sc_th > float(self.AP.hunt_score_min):
-                        best_threat = (detected, dx, dy, dist)
-                        best_threat_score = sc_th
-                if hunt_eff >= float(self.AP.predator_trait_min):
-                    sc = self.attack_score(detected, dist)
-                    if sc > float(self.AP.hunt_score_min):
-                        best_prey = (detected, dx, dy, dist)
-                        best_prey_score = sc
-                if in_mating_mode and detected.ready_to_reproduce():
-                    best_mate = (detected, dx, dy, dist)
-                    self._desired_mate_id = int(hit_id)
-
-
-        # ---------------------------------------------------------
-        # 3) Reflexiva drivkrafter: flykt, jakt, parning, socialt, föda
-        # PRIORITET: flee > hunt > mating > social > food > explore
-        # ---------------------------------------------------------
-        if best_threat is not None and hunt_eff < float(self.AP.threat_predation_min) and best_threat_score > float(self.AP.hunt_score_min):
-            other, dx, dy, dist = best_threat
-            a_th = math.atan2(dy, dx)
-            err = self._signed_angle(a_th - self.heading)
-            bias = clamp(err / math.pi, -1.0, 1.0)
-            turn = clamp(turn - 0.95 * bias, -1.0, 1.0)
-            thrust = clamp(max(thrust, 0.95), 0.0, 1.0)
-            explore_drive *= 0.10
-            flee_state = 1.0
-
-        elif best_prey is not None and hunt_eff >= float(self.AP.predator_trait_min) and best_prey_score > float(self.AP.hunt_score_min):
-            other, dx, dy, dist = best_prey
-            a_hit = math.atan2(dy, dx)
-            errN = self._signed_angle(a_hit - self.heading)
-            biasN = clamp(errN / math.pi, -1.0, 1.0)
-            hs = clamp(hunt_eff, 0.0, 1.0)
-            turn = clamp(turn + 0.90 * hs * biasN, -1.0, 1.0)
-            thrust = clamp(max(thrust, 0.85), 0.0, 1.0)
-            explore_drive *= 0.25
-            hunt_state = 1.0
-
-        elif in_mating_mode and best_mate is not None:
-            other, dx, dy, dist = best_mate
-            a_hit = math.atan2(dy, dx)
-            errN = self._signed_angle(a_hit - self.heading)
-            biasN = clamp(errN / math.pi, -1.0, 1.0)
-            turn = clamp(0.95 * biasN, -1.0, 1.0)
-            thrust = max(thrust, 0.95)
-            explore_drive = 0.0
-
-        elif N > 0.5:
-            a_hit = self.heading + (2.0 * math.pi * float(Nu))
-            errN = self._signed_angle(a_hit - self.heading)
-            biasN = clamp(errN / math.pi, -1.0, 1.0)
-            Nd_f = float(Nd)
-            REP_ZONE = 0.35
-            if Nd_f < REP_ZONE:
-                rs = 1.0 - (Nd_f / REP_ZONE)
-                turn = clamp(turn - 0.70 * rs * biasN, -1.0, 1.0)
-                explore_drive = explore_drive * (1.0 - 0.3 * rs)
-            else:
-                soc_bias = 2.0 * soc - 1.0
-                if abs(soc_bias) > 1e-6:
-                    wdist = clamp(1.0 - Nd_f, 0.0, 1.0)
-                    turn = clamp(turn + 0.70 * soc_bias * wdist * biasN, -1.0, 1.0)
-                    explore_drive = explore_drive * (1.0 - 0.60 * abs(soc_bias) * wdist)
-
-        hunger_now = float(self.body.hunger())
-        if flee_state < 0.5 and hunger_now > 0.4:
-            sensors = getattr(self, "sensors", None)
-            if sensors is not None:
-                accB = getattr(sensors, "_accB", None)
-                accC = getattr(sensors, "_accC", None)
-                ang = getattr(sensors, "_ang_base", None)
-                if accB is not None and ang is not None and len(accB) > 0:
-                    _diet    = float(getattr(self.pheno, "diet", 0.5))
-                    herb_eff = (1.0 - _diet) ** 0.7
-                    scav_eff = _diet ** 0.7
-                    # combo viktas med faktiskt energiutbyte per diettyp —
-                    # en scavenger reagerar starkare på carcass-signal än en generalist.
-                    combo = accB * herb_eff + accC * scav_eff
-                    i_best = int(np.argmax(combo))
-                    sig = float(combo[i_best])
-                    if sig > 0.05:
-                        food_angle = float(ang[i_best]) + float(self.heading)
-                        err_food = self._signed_angle(food_angle - self.heading)
-                        bias_food = clamp(err_food / math.pi, -1.0, 1.0)
-                        fd = clamp(hunger_now - 0.4, 0.0, 0.6) * sig
-                        turn = clamp(turn + 0.60 * fd * bias_food, -1.0, 1.0)
-                        thrust = clamp(thrust + 0.3 * fd, 0.0, 1.0)
-
-        # ---------------------------------------------------------
-        # Lokal mat dämpar utforskning: hungrig agent stannar vid mat.
-        # food_local: dietviktat lokalt matutbud direkt under agenten (B0/C0).
-        # hunger_now=1, food_local=1 → explore_drive → 0  (svältande, stå kvar)
-        # hunger_now=1, food_local=0 → ingen dämpning     (svältande, ingen mat här)
-        # hunger_now=0, food_local=1 → ingen dämpning     (mätt, utforska fritt)
-        _diet_local  = float(getattr(self.pheno, "diet", 0.5))
-        _herb_local  = (1.0 - _diet_local) ** 0.7
-        _scav_local  = _diet_local ** 0.7
-        food_local   = clamp(float(B0) * _herb_local + float(C0) * _scav_local, 0.0, 1.0)
-        explore_drive *= 1.0 - hunger_now * food_local
-
-
-        # ---------------------------------------------------------
-        # 4) Heading integration (turn + exploration jitter)
-        # ---------------------------------------------------------
-        jitter = float(ctx.rng.normal(0.0, 0.65)) * explore_drive
-        self.heading = float(self.heading) + dt * float(self.AP.turn_rate) * (
-            0.85 * allow_move * turn + 0.25 * jitter
+    
+        _hunt_diet_exp = float(getattr(self.AP, "hunt_diet_exp", 1.5))
+        _diet_val = float(getattr(self.pheno, "diet", 0.5))
+        hunt_eff = pred * (_diet_val ** _hunt_diet_exp)
+    
+        detected = self._resolve_detected_agent(hit_slot, hit_id, N)
+    
+        (
+            best_prey,
+            best_prey_score,
+            best_threat,
+            best_threat_score,
+            best_mate,
+        ) = self._evaluate_local_agent_drives(
+            detected,
+            hunt_eff,
+            in_mating_mode,
         )
-        self.heading = self._signed_angle(self.heading)
-
+    
         # ---------------------------------------------------------
-        # 5) Locomotion control u in [0,1]
+        # 3) Reflexive drives
         # ---------------------------------------------------------
-        fatigue = float(self.body.Fg)
-        fatigue_factor = clamp(1.0 - 0.9 * fatigue, 0.05, 1.0)
-        weak_move = float(self.body.move_factor())
-        u = clamp(allow_move * thrust * fatigue_factor * weak_move, 0.0, 1.0)
-
+        turn, thrust, explore_drive, flee_state, hunt_state = self._apply_reflex_drives(
+            turn=turn,
+            thrust=thrust,
+            explore_drive=explore_drive,
+            soc=soc,
+            hunt_eff=hunt_eff,
+            in_mating_mode=in_mating_mode,
+            N=N,
+            Nu=Nu,
+            Nd=Nd,
+            best_prey=best_prey,
+            best_prey_score=best_prey_score,
+            best_threat=best_threat,
+            best_threat_score=best_threat_score,
+            best_mate=best_mate,
+        )
+    
         # ---------------------------------------------------------
-        # 6) Locomotion dynamics
+        # 4) Food steering
         # ---------------------------------------------------------
-        v_prev = max(0.0, float(self.last_speed))
-        M_pre = max(1e-9, float(self.body.M))
-
-        F0_cap = float(self.AP.F0)
-        alpha = float(self.AP.force_mass_exp)
-        F_prop = u * F0_cap * (M_pre ** alpha)
-
-        c1 = float(self.AP.drag_lin)
-        c2 = float(self.AP.drag_quad)
-
-        F_drag_prev = c1 * v_prev + c2 * v_prev * v_prev
-        a = (F_prop - F_drag_prev) / M_pre
-        v_euler = max(0.0, v_prev + dt * a)
-
-        speed = min(v_euler, float(self.AP.v_max))
-        v_mid = 0.5 * (v_prev + speed)
-        self.last_speed = float(speed)
-
+        turn, thrust, explore_drive = self._apply_food_steering(
+            ctx=ctx,
+            turn=turn,
+            thrust=thrust,
+            explore_drive=explore_drive,
+            flee_state=flee_state,
+            B0=B0,
+            C0=C0,
+        )
+    
         # ---------------------------------------------------------
-        # 7) Locomotion energy (J)
+        # 5) Motion integration
         # ---------------------------------------------------------
-        eta = clamp(float(self.AP.locomotion_eff), 1e-6, 1.0)
-        P_mech = max(0.0, F_prop * v_mid)
-        E_move = (dt * P_mech) / eta
-
+        speed, E_move = self._integrate_motion(
+            ctx=ctx,
+            turn=turn,
+            thrust=thrust,
+            allow_move=allow_move,
+            explore_drive=explore_drive,
+        )
+    
         # ---------------------------------------------------------
-        # 8) Apply translation (torus)
+        # 6) Feeding
         # ---------------------------------------------------------
-        x_new = float(self.x) + dt * speed * math.cos(self.heading)
-        y_new = float(self.y) + dt * speed * math.sin(self.heading)
-
-        self.x, self.y = self.grid.wrap_pos(x_new, y_new)
-            
+        food_bio_kg, food_carcass_kg = self._perform_feeding(
+            world=world,
+            dt=dt,
+            allow_eat=allow_eat,
+        )
+    
         # ---------------------------------------------------------
-        # 9) Feeding (kg)
+        # 7) Activity proxy + body dynamics
         # ---------------------------------------------------------
-        got_bio = 0.0
-        got_carcass = 0.0
-        if allow_eat > 0.20:
-            want_kg = float(self.AP.eat_rate) * dt * (0.25 + 0.75 * float(self.body.hunger()))
-            got_total, got_carcass = world.consume_food(self.x, self.y, amount=want_kg, prefer_carcass=True)
-            got_bio = max(0.0, float(got_total) - float(got_carcass))
-
-        food_bio_kg = float(got_bio)
-        food_carcass_kg = float(got_carcass)
-
-        # ---------------------------------------------------------
-        # 10) Activity proxy
-        # ---------------------------------------------------------
-        speed_n = clamp(speed / max(float(self.AP.v_max), 1e-9), 0.0, 1.0)
-        ate = 1.0 if (allow_eat > 0.20 and (food_bio_kg + food_carcass_kg) > 0.0) else 0.0
-        activity = 0.03 + 0.45 * speed_n + 0.10 * ate
-        # ---------------------------------------------------------
-        # 11) Body dynamics (includes gestation build model: "Väg 2")
-        # ---------------------------------------------------------
+        activity = self._activity_proxy(
+            speed=speed,
+            allow_eat=allow_eat,
+            food_bio_kg=food_bio_kg,
+            food_carcass_kg=food_carcass_kg,
+        )
+    
         self.body.step(
             ctx,
             speed=speed,
@@ -2065,7 +2339,7 @@ class Agent:
         )
     
         # ---------------------------------------------------------
-        # 12) Tracking
+        # 8) Tracking
         # ---------------------------------------------------------
         self.last_B0 = float(B0)
         self.last_C0 = float(C0)
@@ -2139,7 +2413,6 @@ class Agent:
         want_J = max(0.0, float(cost_E_J))
         paid_J = float(self.body.take_energy(want_J))
         return paid_J
-    
     
     def init_newborn_state(
         self,

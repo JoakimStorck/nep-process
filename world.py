@@ -88,8 +88,6 @@ class World:
         self.consume_food_hook = None
 
         # occupancy cache for current fauna pipeline
-        self.A = np.zeros((s, s), dtype=np.int32)
-        self._agent_by_id: dict[int, object] = {}        
         self.C = np.zeros((s, s), dtype=np.float32)  # carcass biomass
 
         # time
@@ -168,26 +166,6 @@ class World:
         t0 = float(self.Ty[y0])
         t1 = float(self.Ty[y1])
         return (1.0 - fy) * t0 + fy * t1
-
-    # -------------------------
-    # Agent occupancy
-    # -------------------------
-    def rebuild_agent_layer(self, agents: Iterable) -> None:
-        A = self.A
-        A.fill(0)
-        s = int(self.WP.size)
-        by_id: dict[int, object] = {}
-        for ag in agents:
-            if not ag.body.alive:
-                continue
-            aid = int(ag.id)
-            by_id[aid] = ag
-
-            cell = int(self.grid.cell_of(float(ag.x), float(ag.y)))
-            iy, ix = divmod(cell, s)
-            A[iy, ix] = aid
-
-        self._agent_by_id = by_id
 
 
     # -------------------------

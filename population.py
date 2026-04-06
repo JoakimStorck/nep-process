@@ -138,6 +138,7 @@ class Population:
     _banks: dict[tuple, "ParamBank"] = field(init=False, default_factory=dict)
 
     _next_store_id: int = field(init=False, default=1)
+    _slot_to_agent: list[Agent | None] = field(init=False, default_factory=list)
 
     # agent sampling
     _next_sample_t: float = 0.0
@@ -152,9 +153,8 @@ class Population:
     _last_flora_established: int = 0
     _last_flora_dispersed_mass: float = 0.0
     
-    _flora_by_cell_cache: dict[int, list[int]] = field(init=False, default_factory=dict)
     _flora_summary_cache: dict[str, float] | None = field(init=False, default=None)
-    
+
     world_log_with_percentiles: bool = True
 
     def __post_init__(self) -> None:
@@ -172,13 +172,13 @@ class Population:
             capacity=int(self.PP.max_pop),
             world_size=int(self.WP.size),
         )
-        
+        self._slot_to_agent = [None] * int(self.PP.max_pop)        
+
         self._next_sample_t = 0.0
         self._recent_sample_ids = []
         self._births_total = 0
         self._deaths_total = 0
 
-        self._flora_by_cell_cache = {}
         self._flora_summary_cache = None
 
         # ensure MC uses PP.n_traits (single source of truth for this run)
@@ -231,6 +231,8 @@ class Population:
             )
             a.bind_grid(self.grid)
             a.bind_world(self.world)
+            a.bind_store(self.store)
+            a.bind_wrapper_lookup(self._agent_for_slot)
 
             # --- Warm start: åldersstrukturerad population ---
             # Ålder uniform från nyfödd till 3× mognadsåldern —
@@ -290,7 +292,8 @@ class Population:
             store_slot = self.store.alloc_slot()
             a.store_slot = int(store_slot)
             self.store.write_agent(store_slot, a, self.grid)            
-            
+            self._slot_to_agent[int(store_slot)] = a
+
             self._emit_birth(self.t, a, parent=None)
             self.agents.append(a)
 
@@ -299,6 +302,7 @@ class Population:
         _ = self._seed_initial_flora(
             n_flora=max(16, int(self.PP.max_pop) // 2),
         )
+        self.store.rebuild_spatial_index()        
 
     # -----------------------
     # logging helpers
@@ -485,7 +489,37 @@ class Population:
         if act == "softsign":
             return x / (1.0 + np.abs(x))
         return np.tanh(x)
+        
+    # -----------------------
+    # look-up
+    # -----------------------
+    def _agent_for_slot(self, slot: int) -> Agent | None:
+        s = int(slot)
+        if s < 0 or s >= len(self._slot_to_agent):
+            return None
+    
+        ag = self._slot_to_agent[s]
+        if ag is None:
+            return None
+        if ag.store_slot != s:
+            return None
+        if not ag.body.alive:
+            return None
+    
+        return ag
 
+    def _pair_distance(self, a: Agent, b: Agent) -> float:
+        return self.grid.distance_pos(
+            float(a.x), float(a.y),
+            float(b.x), float(b.y),
+        )
+
+    def _pair_distance2(self, a: Agent, b: Agent) -> float:
+        return self.grid.distance2_pos(
+            float(a.x), float(a.y),
+            float(b.x), float(b.y),
+        )
+        
     # -----------------------
     # births
     # -----------------------
@@ -519,6 +553,9 @@ class Population:
         )
         child.bind_grid(self.grid)
         child.bind_world(self.world)
+        child.bind_store(self.store)        
+        child.bind_wrapper_lookup(self._agent_for_slot)
+
         child.birth_t = float(self.t)
 
         key = (tuple(g_child.layer_sizes), str(g_child.act))
@@ -543,6 +580,7 @@ class Population:
         store_slot = self.store.alloc_slot()
         child.store_slot = int(store_slot)
         self.store.write_agent(store_slot, child, self.grid)
+        self._slot_to_agent[int(store_slot)] = child
         
         self._emit_birth(self.t, child, parent)
         return child
@@ -550,47 +588,55 @@ class Population:
     def _try_mating(self, agent: Agent, ctx: StepCtx, candidates: list | None = None) -> None:
         """
         Sexuell reproduktion: verkställer parning med den agent som apply_outputs()
-        lokalt detekterade och markerade via _desired_mate_id.
+        lokalt detekterade och markerade via sensing-cachen.
         Ingen global sökning — agenten kan bara para sig med någon den uppfattat via sensing.
         """
         if not agent.body.alive or agent.body.gestating:
             return
         if not agent.ready_to_reproduce():
             return
-
-        desired_id = int(getattr(agent, '_desired_mate_id', 0))
-        if desired_id <= 0:
+    
+        hit = getattr(agent, "_cached_agent_hit", None)
+        if not isinstance(hit, tuple) or len(hit) < 5:
             return
-
-        best = self.world._agent_by_id.get(desired_id)
-        if best is None or not best.body.alive or best is agent:
+    
+        _, _, _, hit_slot, desired_id = hit[:5]
+        if int(hit_slot) < 0 or int(desired_id) <= 0:
+            return
+    
+        store = self.store
+        s = int(hit_slot)
+        if s >= int(store.n):
+            return
+        if not bool(store.alive[s]) or int(store.kind[s]) != 0:
+            return
+        if int(store.id[s]) != int(desired_id):
+            return
+    
+        best = self._agent_for_slot(s)
+        if best is None or best is agent:
             return
         if not best.ready_to_reproduce():
             return
-
-        # Avståndskontroll via Grid: Population ska inte bära egen torusmatematik.
+    
         if self._pair_distance2(agent, best) > float(self.PP.mating_radius) ** 2:
             return
-
-        # Genetisk kompatibilitet: P(parning lyckas) = exp(-d2_norm / 2*sigma2)
+    
         if self.PP.compat_enabled:
             compat = genetic_compatibility(
                 agent.genome, best.genome, sigma=float(self.PP.compat_sigma)
             )
             if self.rng.random() > compat:
-                return  # genetiskt inkompatibla denna omgång — försök igen senare
-
-        # Den tyngste bär fostret — mer resurser → bättre förälder
+                return
+    
         if best.body.M > agent.body.M:
             bearer, partner = best, agent
         else:
             bearer, partner = agent, best
-
-        # Starta gestation på bäraren med rekombinerat genom
-        bearer._mating_partner = partner   # temporär referens för _try_birth
+    
+        bearer._mating_partner = partner
         bearer.start_gestation()
-
-        # Partnern betalar liten parningskostnad och får cooldown
+    
         mating_cost = 0.05 * partner.body.E_cap()
         partner.pay_repro_cost(mating_cost)
         partner.repro_cd_s = float(self.AP.repro_cooldown_s)
@@ -653,208 +699,7 @@ class Population:
         parent.repro_cd_s = float(self.AP.repro_cooldown_s)
         return child
 
-    def _pair_distance(self, a: Agent, b: Agent) -> float:
-        return self.grid.distance_pos(
-            float(a.x), float(a.y),
-            float(b.x), float(b.y),
-        )
 
-    def _pair_distance2(self, a: Agent, b: Agent) -> float:
-        return self.grid.distance2_pos(
-            float(a.x), float(a.y),
-            float(b.x), float(b.y),
-        )
-
-
-    def _rebuild_flora_caches(self) -> None:
-        """
-        Bygg per-tick-cacher för flora-tailen:
-          - flora per cell
-          - summeringar för world-logg
-        """
-        by_cell: dict[int, list[int]] = {}
-    
-        flora_n = 0
-        flora_mass = 0.0
-        flora_energy = 0.0
-    
-        vals_growth = 0.0
-        vals_adult_mass = 0.0
-        vals_temp_opt = 0.0
-        vals_temp_width = 0.0
-        vals_dispersal = 0.0
-    
-        for slot in range(int(self.store.n)):
-            if not bool(self.store.alive[slot]):
-                continue
-            if int(self.store.kind[slot]) != 1:
-                continue
-    
-            cell = int(self.store.cell_idx[slot])
-            if cell >= 0:
-                by_cell.setdefault(cell, []).append(int(slot))
-    
-            flora_n += 1
-    
-            m = float(self.store.mass[slot])
-            e = float(self.store.energy[slot])
-            flora_mass += m
-            flora_energy += e
-    
-            vals_growth += float(self.store.flora_growth_rate[slot])
-            vals_adult_mass += float(self.store.flora_adult_mass[slot])
-            vals_temp_opt += float(self.store.flora_temp_opt[slot])
-            vals_temp_width += float(self.store.flora_temp_width[slot])
-            vals_dispersal += float(self.store.flora_dispersal_rate[slot])
-    
-        self._flora_by_cell_cache = by_cell
-    
-        if flora_n <= 0:
-            nan = float("nan")
-            self._flora_summary_cache = {
-                "flora_n": 0,
-                "flora_mass_store": 0.0,
-                "flora_energy_store": 0.0,
-                "flora_mean_growth_rate": nan,
-                "flora_mean_adult_mass": nan,
-                "flora_mean_temp_opt": nan,
-                "flora_mean_temp_width": nan,
-                "flora_mean_dispersal_rate": nan,
-            }
-        else:
-            inv = 1.0 / float(flora_n)
-            self._flora_summary_cache = {
-                "flora_n": int(flora_n),
-                "flora_mass_store": float(flora_mass),
-                "flora_energy_store": float(flora_energy),
-                "flora_mean_growth_rate": float(vals_growth * inv),
-                "flora_mean_adult_mass": float(vals_adult_mass * inv),
-                "flora_mean_temp_opt": float(vals_temp_opt * inv),
-                "flora_mean_temp_width": float(vals_temp_width * inv),
-                "flora_mean_dispersal_rate": float(vals_dispersal * inv),
-            }
-
-    def _flora_slots_grouped_by_cell(self) -> dict[int, list[int]]:
-        if not self._flora_by_cell_cache:
-            self._rebuild_flora_caches()
-        return self._flora_by_cell_cache
-    
-    
-    def _flora_summary(self) -> dict[str, float]:
-        if self._flora_summary_cache is None:
-            self._rebuild_flora_caches()
-        return self._flora_summary_cache
-        
-    def _consume_flora_from_store(self, x: float, y: float, amount: float, max_radius: int = 1) -> float:
-        """
-        Konsumera växtmassa från diskret flora i OrganismStore.
-        Returnerar faktiskt konsumerad kg.
-        """
-        amt = float(amount)
-        if not math.isfinite(amt) or amt <= 0.0:
-            return 0.0
-    
-        cell0 = int(self.grid.cell_of(float(x), float(y)))
-        flora_by_cell = self._flora_slots_grouped_by_cell()
-    
-        got = 0.0
-        e_per_kg = float(self.WP.E_plant_J_per_kg)
-    
-        # Börja i aktuell cell, gå sedan utåt i topologiskt avstånd
-        candidate_cells: list[int] = [cell0]
-        for r in range(1, int(max_radius) + 1):
-            for cell in self.grid.cells_within(cell0, r):
-                if cell != cell0:
-                    candidate_cells.append(int(cell))
-    
-        seen: set[int] = set()
-        ordered_cells: list[int] = []
-        for c in candidate_cells:
-            if c not in seen:
-                seen.add(c)
-                ordered_cells.append(c)
-    
-        for cell in ordered_cells:
-            slots = flora_by_cell.get(cell)
-            if not slots:
-                continue
-    
-            for slot in list(slots):
-                if amt <= 1e-12:
-                    break
-                if not bool(self.store.alive[slot]) or int(self.store.kind[slot]) != 1:
-                    continue
-    
-                m = float(self.store.mass[slot])
-                if m <= 1e-12:
-                    continue
-    
-                take = m if m < amt else amt
-                new_m = m - take
-    
-                self.store.mass[slot] = np.float32(new_m)
-                self.store.energy[slot] = np.float32(max(0.0, new_m * e_per_kg))
-                got += take
-                amt -= take
-    
-                # Dö/frigör flora som blivit i praktiken tom
-                if new_m <= 1e-12:
-                    old_cell = int(cell)                    
-                    self.store.release_slot(slot)
-
-            if amt <= 1e-12:
-                break
-                
-        if got > 0.0:
-            self._flora_summary_cache = None
-            
-        return float(got)
-
-    def _add_or_create_flora_in_cell(
-        self,
-        cell: int,
-        add_mass: float,
-        traits: np.ndarray | None = None,
-    ) -> bool:
-        dm = float(add_mass)
-        if not math.isfinite(dm) or dm <= 0.0:
-            return False
-    
-        e_per_kg = float(self.WP.E_plant_J_per_kg)
-    
-        flora_by_cell = self._flora_slots_grouped_by_cell()
-        slots = flora_by_cell.get(int(cell), None)
-        if slots:
-            for slot in slots:
-                if not bool(self.store.alive[slot]):
-                    continue
-                if int(self.store.kind[slot]) != 1:
-                    continue
-        
-                new_m = float(self.store.mass[slot]) + dm
-                self.store.mass[slot] = np.float32(new_m)
-                self.store.energy[slot] = np.float32(new_m * e_per_kg)
-        
-                self._flora_summary_cache = None
-                return True
-    
-        try:
-            slot = self.store.alloc_slot()
-        except RuntimeError:
-            return False
-    
-        if traits is None:
-            traits = init_organism_traits(
-                self.rng,
-                int(self.PP.n_traits),
-                mode="flora",
-            )
-    
-        self._init_flora_slot(slot, int(cell), dm, traits)
-        self._flora_by_cell_cache.setdefault(int(cell), []).append(int(slot))
-        self._flora_summary_cache = None        
-        return True
-        
     def _flora_growth_rate(self, traits: np.ndarray | None) -> float:
         return trait_lerp(traits, 26, 0.005, 0.050, default=0.0)
     
@@ -878,7 +723,8 @@ class Population:
         # sexual_mode nära 0 => asexuell flora med hög lokal reproduktionsbenägenhet
         sexual = trait_lerp(traits, 30, 0.0, 1.0, default=0.0)
         return float(max(0.0, 1.0 - sexual))
-        
+
+
     def _init_flora_slot(
         self,
         slot: int,
@@ -971,6 +817,108 @@ class Population:
             created += 1
     
         return created
+        
+            
+    def _consume_flora_from_store(self, x: float, y: float, amount: float, max_radius: int = 1) -> float:
+        """
+        Konsumera växtmassa från diskret flora i OrganismStore via gemensamt spatialindex.
+        Returnerar faktiskt konsumerad kg.
+        """
+        amt = float(amount)
+        if not math.isfinite(amt) or amt <= 0.0:
+            return 0.0
+    
+        cell0 = int(self.grid.cell_of(float(x), float(y)))
+        got = 0.0
+        e_per_kg = float(self.WP.E_plant_J_per_kg)
+    
+        candidate_cells: list[int] = [cell0]
+        for r in range(1, int(max_radius) + 1):
+            for cell in self.grid.cells_within(cell0, r):
+                if cell != cell0:
+                    candidate_cells.append(int(cell))
+    
+        seen: set[int] = set()
+        ordered_cells: list[int] = []
+        for c in candidate_cells:
+            if c not in seen:
+                seen.add(c)
+                ordered_cells.append(c)
+    
+        for cell in ordered_cells:
+            for slot in self.store.slots_in_cell(cell):
+                s = int(slot)
+    
+                if amt <= 1e-12:
+                    break
+                if not bool(self.store.alive[s]) or int(self.store.kind[s]) != 1:
+                    continue
+    
+                m = float(self.store.mass[s])
+                if m <= 1e-12:
+                    continue
+    
+                take = m if m < amt else amt
+                new_m = m - take
+    
+                self.store.mass[s] = np.float32(new_m)
+                self.store.energy[s] = np.float32(max(0.0, new_m * e_per_kg))
+                got += take
+                amt -= take
+    
+                if new_m <= 1e-12:
+                    self.store.release_slot(s)
+    
+            if amt <= 1e-12:
+                break
+    
+        if got > 0.0:
+            self._flora_summary_cache = None
+    
+        return float(got)
+
+    def _add_or_create_flora_in_cell(
+        self,
+        cell: int,
+        add_mass: float,
+        traits: np.ndarray | None = None,
+    ) -> bool:
+        dm = float(add_mass)
+        if not math.isfinite(dm) or dm <= 0.0:
+            return False
+    
+        e_per_kg = float(self.WP.E_plant_J_per_kg)
+    
+        for slot in self.store.slots_in_cell(int(cell)):
+            s = int(slot)
+            if not bool(self.store.alive[s]):
+                continue
+            if int(self.store.kind[s]) != 1:
+                continue
+    
+            new_m = float(self.store.mass[s]) + dm
+            self.store.mass[s] = np.float32(new_m)
+            self.store.energy[s] = np.float32(new_m * e_per_kg)
+    
+            self._flora_summary_cache = None
+            return True
+    
+        try:
+            slot = self.store.alloc_slot()
+        except RuntimeError:
+            return False
+    
+        if traits is None:
+            traits = init_organism_traits(
+                self.rng,
+                int(self.PP.n_traits),
+                mode="flora",
+            )
+    
+        self._init_flora_slot(slot, int(cell), dm, traits)
+        self._flora_summary_cache = None
+        return True
+        
         
     def _growth_system_flora(self) -> float:
         """
@@ -1106,61 +1054,38 @@ class Population:
             dispersed_mass += seed_mass
     
         return established, float(dispersed_mass)
-        
+    
     # -----------------------
     # public methods
     # -----------------------    
     def sample_flora_local(self, x: float, y: float) -> float:
         """
-        Lokal biomassasampling av flora från store.
-        Just nu: summerad massa i aktuell cell.
+        Lokal flora-sampling från härlett perceptionsfält.
+        
+        Detta läser `store.flora_cell_mass`, som byggs om från levande flora i
+        OrganismStore. Source of truth för flora ligger fortfarande i store-slotsen.
         """
         cell = int(self.grid.cell_of(float(x), float(y)))
-        slots = self._flora_slots_grouped_by_cell().get(cell)
-        if not slots:
-            return 0.0
-    
-        total = 0.0
-        for slot in slots:
-            if not bool(self.store.alive[slot]):
-                continue
-            if int(self.store.kind[slot]) != 1:
-                continue
-            total += float(self.store.mass[slot])
-        return float(total)
+        return float(self.store.flora_cell_mass[cell])
 
     def sample_flora_rays(self, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
         """
-        Enkel ray-sampling av flora.
-        Returnerar biomassan i cellen för varje punkt (ingen bilinjär interpolation ännu).
+        Ray-sampling av flora från härlett perceptionsfält.
+        
+        Returnerar flora-massa per punkt via celllookup mot `store.flora_cell_mass`.
+        Detta är en sensing-cache; source of truth för flora ligger i store-slotsen.
         """
         xs = np.asarray(xs, dtype=np.float32)
         ys = np.asarray(ys, dtype=np.float32)
         if xs.shape != ys.shape:
             raise ValueError("xs and ys must have same shape")
     
-        out = np.zeros(xs.shape, dtype=np.float32)
-        flora_by_cell = self._flora_slots_grouped_by_cell()
+        out = np.empty(xs.shape, dtype=np.float32)
     
-        flat_x = xs.ravel()
-        flat_y = ys.ravel()
-        flat_o = out.ravel()
-    
-        for i in range(flat_x.size):
-            cell = int(self.grid.cell_of(float(flat_x[i]), float(flat_y[i])))
-            slots = flora_by_cell.get(cell)
-            if not slots:
-                continue
-    
-            total = 0.0
-            for slot in slots:
-                if not bool(self.store.alive[slot]):
-                    continue
-                if int(self.store.kind[slot]) != 1:
-                    continue
-                total += float(self.store.mass[slot])
-    
-            flat_o[i] = np.float32(total)
+        x0, y0, _, _, _, _ = self.grid.bilinear_indices_many(xs, ys)
+        size = int(self.WP.size)
+        cells = y0 * size + x0
+        out[:] = self.store.flora_cell_mass[cells]
     
         return out
         
@@ -1182,164 +1107,227 @@ class Population:
     
         got_f = float(self._consume_flora_from_store(x, y, amt, max_radius=1))
         return got_c + got_f, got_c
-        
-    # -----------------------
-    # main loop
-    # -----------------------
-    def step(self) -> Tuple[int, int]:
-        """
-        One global tick:
-          - world dynamics
-          - agent sensing + batched policy forward + apply outputs
-          - hazards -> acute damage D
-          - pain+repair (E -> D)
-          - metabolism/maintenance drain (E ->)
-          - aging (W)
-          - deaths -> carcass (+ death events)
-          - births -> children (+ birth events)
-          - emits: world/population/step/birth/death (gating in observers)
-        """
-        dt = float(self.WP.dt)
-        self.t += dt
-        ctx = StepCtx(t=float(self.t), dt=dt, rng=self.rng)
-    
-        # (A) world fields
-        self.world.step()
 
+    def _rebuild_flora_summary(self) -> None:
+        """
+        Bygg flora-summary-cache för loggning och diagnostik.
+        Spatialt uppslag sker nu via store.spatial_index, inte via separat flora-cache.
+        """
+        flora_n = 0
+        flora_mass = 0.0
+        flora_energy = 0.0
+    
+        vals_growth = 0.0
+        vals_adult_mass = 0.0
+        vals_temp_opt = 0.0
+        vals_temp_width = 0.0
+        vals_dispersal = 0.0
+    
+        for slot in range(int(self.store.n)):
+            if not bool(self.store.alive[slot]):
+                continue
+            if int(self.store.kind[slot]) != 1:
+                continue
+    
+            flora_n += 1
+    
+            flora_mass += float(self.store.mass[slot])
+            flora_energy += float(self.store.energy[slot])
+    
+            vals_growth += float(self.store.flora_growth_rate[slot])
+            vals_adult_mass += float(self.store.flora_adult_mass[slot])
+            vals_temp_opt += float(self.store.flora_temp_opt[slot])
+            vals_temp_width += float(self.store.flora_temp_width[slot])
+            vals_dispersal += float(self.store.flora_dispersal_rate[slot])
+    
+        if flora_n <= 0:
+            nan = float("nan")
+            self._flora_summary_cache = {
+                "flora_n": 0,
+                "flora_mass_store": 0.0,
+                "flora_energy_store": 0.0,
+                "flora_mean_growth_rate": nan,
+                "flora_mean_adult_mass": nan,
+                "flora_mean_temp_opt": nan,
+                "flora_mean_temp_width": nan,
+                "flora_mean_dispersal_rate": nan,
+            }
+        else:
+            inv = 1.0 / float(flora_n)
+            self._flora_summary_cache = {
+                "flora_n": int(flora_n),
+                "flora_mass_store": float(flora_mass),
+                "flora_energy_store": float(flora_energy),
+                "flora_mean_growth_rate": float(vals_growth * inv),
+                "flora_mean_adult_mass": float(vals_adult_mass * inv),
+                "flora_mean_temp_opt": float(vals_temp_opt * inv),
+                "flora_mean_temp_width": float(vals_temp_width * inv),
+                "flora_mean_dispersal_rate": float(vals_dispersal * inv),
+            }
+
+    def _flora_summary(self) -> dict[str, float]:
+        if self._flora_summary_cache is None:
+            self._rebuild_flora_summary()
+        return self._flora_summary_cache
+        
+    # -----------------------------
+    # step-methods
+    # -----------------------------
+    def _step_world_and_flora(self) -> tuple[float, int, float]:
+        """
+        Kör världspass + florapass och bygger avledda store-index.
+        Returnerar:
+          (dM_growth_flora, flora_established, flora_dispersed_mass)
+        """
+        self.world.step()
+    
         dM_growth_flora = self._growth_system_flora()
         flora_established, flora_dispersed_mass = self._dispersal_system_flora()
-        self._rebuild_flora_caches()        
-        
-        # (B) occupancy from current positions
-        self.world.rebuild_agent_layer(self.agents)
     
-        # (C) agent step (sense + policy + act)
-        alive: List[Agent] = [a for a in self.agents if a.body.alive]
-        if alive:
-            n = len(alive)
+        self.store.rebuild_spatial_index()
+        self._flora_summary_cache = None
     
-            # in_dim hämtas från nätverket — inkluderar h_dim om rekurrens är aktiv
-            in_dim = int(alive[0].genome.layer_sizes[0])
-            X = np.empty((n, in_dim), dtype=np.float32)
+        return float(dM_growth_flora), int(flora_established), float(flora_dispersed_mass)
     
-            # store (B0, C0) per-agent for apply_outputs
-            BC_list: List[Tuple[float, float]] = [None] * n  # type: ignore
     
-            for i, a in enumerate(alive):
-                x_in, B0, C0 = a.build_inputs(self.world, rng=self.rng)
+    def _step_agents_policy(self, ctx: "StepCtx") -> None:
+        """
+        Kör sensing + policy-forward + apply_outputs för alla levande agenter.
+        """
+        alive: list[Agent] = [a for a in self.agents if a.body.alive]
+        if not alive:
+            return
     
-                # build_inputs returns (None,0,0) for dead; but we filtered alive, so assert-ish:
-                if x_in is None:
-                    X[i] = 0.0
-                    BC_list[i] = (0.0, 0.0)
-                    self._emit_step_if_tracked(self.t, a, 0.0, 0.0)
-                    continue
+        n = len(alive)
+        in_dim = int(alive[0].genome.layer_sizes[0])
+        X = np.empty((n, in_dim), dtype=np.float32)
     
-                X[i] = x_in
-                BC_list[i] = (float(B0), float(C0))
-                self._emit_step_if_tracked(self.t, a, float(B0), float(C0))
+        BC_list: list[tuple[float, float]] = [None] * n  # type: ignore
     
-            # group by bank key
-            groups: dict[tuple, list[int]] = {}
-            for i, a in enumerate(alive):
-                groups.setdefault(a._policy_key, []).append(i)
+        for i, a in enumerate(alive):
+            x_in, B0, C0 = a.build_inputs(self.world, rng=self.rng)
     
-            out_dim = int(alive[0].genome.layer_sizes[-1])
-            Y = np.zeros((X.shape[0], out_dim), dtype=np.float32)
+            if x_in is None:
+                X[i] = 0.0
+                BC_list[i] = (0.0, 0.0)
+                self._emit_step_if_tracked(self.t, a, 0.0, 0.0)
+                continue
     
-            for key, idxs in groups.items():
-                bank = self._banks[key]
-                idxs_arr = np.asarray(idxs, dtype=np.int32)
-                H = X[idxs_arr]
-                slots = np.asarray([alive[i]._policy_slot for i in idxs], dtype=np.int32)
+            X[i] = x_in
+            BC_list[i] = (float(B0), float(C0))
+            self._emit_step_if_tracked(self.t, a, float(B0), float(C0))
     
-                L = len(bank.W)
-                for li in range(L):
-                    W = bank.W[li][slots]
-                    b = bank.b[li][slots]
-                    Z = np.einsum("noi,ni->no", W, H) + b
-                    H = self._act_hidden(Z, bank.act) if li < L - 1 else Z
+        groups: dict[tuple, list[int]] = {}
+        for i, a in enumerate(alive):
+            groups.setdefault(a._policy_key, []).append(i)
     
-                Y[idxs_arr] = H
+        out_dim = int(alive[0].genome.layer_sizes[-1])
+        Y = np.zeros((X.shape[0], out_dim), dtype=np.float32)
     
-            for i, a in enumerate(alive):
-                B0, C0 = BC_list[i]
-                _ = a.apply_outputs(self.world, ctx, Y[i], B0, C0)
-
-        # (C2) Predation: verkställ bara lokalt uppfattade mål.
-        # Populationen väljer inte byte globalt; den validerar bara den
-        # granne agenten faktiskt detekterade via sensing i samma tick.
+        for key, idxs in groups.items():
+            bank = self._banks[key]
+            idxs_arr = np.asarray(idxs, dtype=np.int32)
+            H = X[idxs_arr]
+            slots = np.asarray([alive[i]._policy_slot for i in idxs], dtype=np.int32)
+    
+            L = len(bank.W)
+            for li in range(L):
+                W = bank.W[li][slots]
+                b = bank.b[li][slots]
+                Z = np.einsum("noi,ni->no", W, H) + b
+                H = self._act_hidden(Z, bank.act) if li < L - 1 else Z
+    
+            Y[idxs_arr] = H
+    
+        for i, a in enumerate(alive):
+            B0, C0 = BC_list[i]
+            a.apply_outputs(self.world, ctx, Y[i], B0, C0)
+    
+    
+    def _step_predation(self, ctx: "StepCtx") -> None:
+        """
+        Verkställ predation mot lokalt detekterade mål.
+        """
+        dt = float(ctx.dt)
+    
         attack_range = float(self.AP.attack_range)
-        dmg_per_s    = float(self.AP.attack_damage_per_s)
-        cost_frac    = float(self.AP.attack_cost_per_s)
-        
-        attack_score_min = float(getattr(self.AP, 'attack_score_min', 0.18))
-        predator_trait_min = float(getattr(self.AP, 'predator_trait_min', 0.20))
-
-        by_id = getattr(self.world, "_agent_by_id", {})
+        dmg_per_s = float(self.AP.attack_damage_per_s)
+        cost_frac = float(self.AP.attack_cost_per_s)
+    
+        attack_score_min = float(getattr(self.AP, "attack_score_min", 0.18))
+        predator_trait_min = float(getattr(self.AP, "predator_trait_min", 0.20))
+    
         for predator in self.agents:
             if not predator.body.alive:
                 continue
-
+    
             pred_trait = float(getattr(predator.pheno, "predation", 0.0))
-            pred_diet  = float(getattr(predator.pheno, "diet",      0.5))
-            hunt_diet_exp = float(getattr(predator.AP, 'hunt_diet_exp', 1.5))
-            hunt_eff   = pred_trait * (pred_diet ** hunt_diet_exp)
+            pred_diet = float(getattr(predator.pheno, "diet", 0.5))
+            hunt_diet_exp = float(getattr(predator.AP, "hunt_diet_exp", 1.5))
+            hunt_eff = pred_trait * (pred_diet ** hunt_diet_exp)
             if hunt_eff < predator_trait_min:
                 continue
-
-            # build_inputs() cachear (N, Nu, Nd, hit_id) för faktiskt detekterad granne.
+    
             hit = getattr(predator, "_cached_agent_hit", None)
-            if not isinstance(hit, tuple) or len(hit) < 4:
+            if not isinstance(hit, tuple) or len(hit) < 5:
                 continue
-            _, _, _, hit_id = hit[:4]
-            if int(hit_id) < 0:
+    
+            _, _, _, hit_slot, hit_id = hit[:5]
+            if int(hit_slot) < 0:
                 continue
-
-            prey = by_id.get(int(hit_id))
-            if prey is None or prey is predator or (not prey.body.alive):
+    
+            store = self.store
+            s = int(hit_slot)
+            if s >= int(store.n):
                 continue
-
+            if not bool(store.alive[s]) or int(store.kind[s]) != 0:
+                continue
+            if int(store.id[s]) != int(hit_id):
+                continue
+    
+            prey = self._agent_for_slot(s)
+            if prey is None or prey is predator:
+                continue
+    
             dist = self._pair_distance(predator, prey)
             if dist > attack_range:
-                continue            
-
+                continue
+    
             score = predator.attack_score(prey, dist)
             if score <= attack_score_min:
                 continue
-
-            # Jakt kostar energi oavsett utfall.
-            # Mismatch-kostnad: herbivorer med hög predation betalar extra för otillräcklig utrustning.
-            mismatch_cost = float(getattr(predator.AP, 'hunt_mismatch_cost', 2.0))
+    
+            mismatch_cost = float(getattr(predator.AP, "hunt_mismatch_cost", 2.0))
             cost_mult = 1.0 + (mismatch_cost - 1.0) * max(0.0, 1.0 - pred_diet)
             predator.body.take_energy(
                 cost_frac * hunt_eff * cost_mult * float(predator.body.E_cap()) * dt
             )
-
+    
             dD = dmg_per_s * max(0.25, score) * hunt_eff * (float(predator.body.M) ** 0.5) * dt
             prey.body.D = min(float(prey.body.D) + dD, float(prey.body.AP.D_max))
-
-            # Om attacken driver bytet till dödströskeln dör det direkt.
-            # Energiutbytet sker via carcass-konsumtion efter död — inte direkttransfer.
+    
             if float(prey.body.D) >= float(prey.body.AP.D_max):
                 prey.body.alive = False
-
-        # (D) deaths -> carcass (kg) + release bank slot + emit death
+    
+    
+    def _step_deaths(self) -> int:
+        """
+        Hantera död, carcass, slot-release och death events.
+        Returnerar antal döda denna tick.
+        """
         deaths = 0
-        survivors: List[Agent] = []
+        survivors: list[Agent] = []
     
         for a in self.agents:
             if not a.body.alive:
-                # release policy slot
                 self._banks[a._policy_key].release(a._policy_slot)
-
+    
                 if a.store_slot >= 0:
+                    self._slot_to_agent[int(a.store_slot)] = None
                     self.store.release_slot(a.store_slot)
                 a.store_slot = -1
-                
-                body = a.body
     
-                # carcass mass = structural mass + energy buffer converted to kg
+                body = a.body
                 M_struct = float(body.M)
                 E_buf = float(body.E_total())
                 E_carcass = float(a.AP.E_carcass_J_per_kg)
@@ -1355,7 +1343,6 @@ class Population:
                         rad=int(self.PP.carcass_rad),
                     )
     
-                # Zero out body deterministically
                 body.M = 0.0
                 body.E_fast = 0.0
                 body.E_slow = 0.0
@@ -1368,75 +1355,128 @@ class Population:
                     carcass_amount=carcass_kg,
                     carcass_rad=int(self.PP.carcass_rad),
                 )
-    
             else:
                 survivors.append(a)
     
         self.agents = survivors
+        return int(deaths)
     
-        # (E) births (simple, deterministic pass; enforce cap)
+    
+    def _step_births(self, ctx: "StepCtx") -> int:
+        """
+        Hantera födslar och parningsförsök.
+        Returnerar antal födda denna tick.
+        """
         births = 0
-        if len(self.agents) < int(self.PP.max_pop):
-            children: List[Agent] = []
-            cap = int(self.PP.max_pop)
-
-            for a in self.agents:
-                if len(self.agents) + len(children) >= cap:
-                    break
-                if not a.body.alive:
-                    continue
-
-                # (1) om gravid och klar -> föd
-                child = self._try_birth(a, ctx)
-                if child is not None:
-                    children.append(child)
-                    continue
-
-                # (2) försök para sig — bygger på lokalt detekterad partner
-                self._try_mating(a, ctx)
-
-            if children:
-                self.agents.extend(children)
-            births = len(children)
-
-        self._births_total += births
-        self._deaths_total += deaths
-
-        # (F) sampling (one agent per sample_dt)
+        if len(self.agents) >= int(self.PP.max_pop):
+            return 0
+    
+        children: list[Agent] = []
+        cap = int(self.PP.max_pop)
+    
+        for a in self.agents:
+            if len(self.agents) + len(children) >= cap:
+                break
+            if not a.body.alive:
+                continue
+    
+            child = self._try_birth(a, ctx)
+            if child is not None:
+                children.append(child)
+                continue
+    
+            self._try_mating(a, ctx)
+    
+        if children:
+            self.agents.extend(children)
+        births = len(children)
+        return int(births)
+    
+    
+    def _step_sampling(self) -> None:
+        """
+        Emit sample event enligt samplinginställningar.
+        """
         sd = float(self.PP.sample_dt)
-        if sd > 0.0 and self.t + 1e-12 >= self._next_sample_t:
-            alive_now = [a for a in self.agents if a.body.alive]
-            if alive_now:
-                if int(self.PP.sample_avoid_repeat_k) > 0 and self._recent_sample_ids:
-                    k = int(self.PP.sample_avoid_repeat_k)
-                    recent = set(self._recent_sample_ids[-k:])
-                    pool = [a for a in alive_now if int(a.id) not in recent]
-                    if pool:
-                        alive_now = pool
+        if not (sd > 0.0 and self.t + 1e-12 >= self._next_sample_t):
+            return
     
-                a_pick = alive_now[int(self.rng.integers(0, len(alive_now)))]
-                self._emit_sample(self.t, a_pick)
+        alive_now = [a for a in self.agents if a.body.alive]
+        if alive_now:
+            if int(self.PP.sample_avoid_repeat_k) > 0 and self._recent_sample_ids:
+                k = int(self.PP.sample_avoid_repeat_k)
+                recent = set(self._recent_sample_ids[-k:])
+                pool = [a for a in alive_now if int(a.id) not in recent]
+                if pool:
+                    alive_now = pool
     
-                if int(self.PP.sample_avoid_repeat_k) > 0:
-                    self._recent_sample_ids.append(int(a_pick.id))
+            a_pick = alive_now[int(self.rng.integers(0, len(alive_now)))]
+            self._emit_sample(self.t, a_pick)
     
-            while self._next_sample_t <= self.t + 1e-12:
-                self._next_sample_t += sd
-
+            if int(self.PP.sample_avoid_repeat_k) > 0:
+                self._recent_sample_ids.append(int(a_pick.id))
+    
+        while self._next_sample_t <= self.t + 1e-12:
+            self._next_sample_t += sd
+    
+    
+    def _finalize_store_and_emit(
+        self,
+        *,
+        dM_growth_flora: float,
+        flora_established: int,
+        flora_dispersed_mass: float,
+        births: int,
+        deaths: int,
+    ) -> None:
+        """
+        Skriv tillbaka fauna till store, rebuild derived fields och emit loggar.
+        """
         for a in self.agents:
             if not a.body.alive:
                 continue
             if a.store_slot < 0:
                 continue
             self.store.write_agent(a.store_slot, a, self.grid)
-            
+    
+        self.store.rebuild_spatial_index()
+        self._flora_summary_cache = None
+    
         self._last_flora_growth = float(dM_growth_flora)
         self._last_flora_established = int(flora_established)
         self._last_flora_dispersed_mass = float(flora_dispersed_mass)
-
-        # (G) emit world + population
+    
         self._emit_world(self.t)
         self._emit_population(self.t, births=self._births_total, deaths=self._deaths_total)
+        
+    # -----------------------
+    # main loop
+    # -----------------------
+    def step(self) -> Tuple[int, int]:
+        dt = float(self.WP.dt)
+        self.t += dt
+        ctx = StepCtx(t=float(self.t), dt=dt, rng=self.rng)
+    
+        dM_growth_flora, flora_established, flora_dispersed_mass = self._step_world_and_flora()
+    
+        self._step_agents_policy(ctx)
+        self._step_predation(ctx)
+    
+        deaths = self._step_deaths()
+        births = self._step_births(ctx)
+    
+        self._births_total += births
+        self._deaths_total += deaths
+    
+        self._step_sampling()
+    
+        self._finalize_store_and_emit(
+            dM_growth_flora=dM_growth_flora,
+            flora_established=flora_established,
+            flora_dispersed_mass=flora_dispersed_mass,
+            births=births,
+            deaths=deaths,
+        )
     
         return births, deaths
 
