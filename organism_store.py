@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
+   
 from typing import Iterable
 
 import numpy as np
@@ -55,8 +56,11 @@ class OrganismStore:
     id_lookup_cap: int = field(init=False, default=0)
 
     energy: np.ndarray = field(init=False)
+    energy_cap: np.ndarray = field(init=False)
     mass: np.ndarray = field(init=False)
     age: np.ndarray = field(init=False)
+    damage: np.ndarray = field(init=False)
+    wear: np.ndarray = field(init=False)    
 
     repro_cd: np.ndarray = field(init=False)
     
@@ -108,8 +112,11 @@ class OrganismStore:
         self.cell_idx = np.full(cap, -1, dtype=np.int32)
 
         self.energy = np.zeros(cap, dtype=np.float32)
+        self.energy_cap = np.zeros(cap, dtype=np.float32)
         self.mass = np.zeros(cap, dtype=np.float32)
         self.age = np.zeros(cap, dtype=np.float32)
+        self.damage = np.zeros(cap, dtype=np.float32)
+        self.wear = np.zeros(cap, dtype=np.float32)
 
         self.repro_cd = np.zeros((self.capacity,), dtype=np.float32)
         
@@ -165,30 +172,76 @@ class OrganismStore:
         new_arr[:self.id_lookup_cap] = self.id_to_slot_arr
         self.id_to_slot_arr = new_arr
         self.id_lookup_cap = new_cap
+
+    def _grow_array(self, arr: np.ndarray, new_cap: int) -> np.ndarray:
+        """
+        Allokera större array med samma dtype och trailing shape, och kopiera över innehåll.
+        """
+        old_cap = int(arr.shape[0])
+        if new_cap <= old_cap:
+            return arr
     
+        new_shape = (int(new_cap),) + tuple(arr.shape[1:])
+        out = np.zeros(new_shape, dtype=arr.dtype)
+        out[:old_cap] = arr
+        return out
+
+    def grow(self, new_capacity: int) -> None:
+        old_cap = int(self.capacity)
+        new_cap = int(new_capacity)
+    
+        if new_cap <= old_cap:
+            return
+    
+        skip_names = {"id_to_slot_arr"}
+    
+        for f in fields(self):
+            name = f.name
+            if name in skip_names:
+                continue
+    
+            arr = getattr(self, name, None)
+            if not isinstance(arr, np.ndarray):
+                continue
+    
+            if arr.ndim < 1:
+                continue
+    
+            if int(arr.shape[0]) != old_cap:
+                continue
+    
+            setattr(self, name, self._grow_array(arr, new_cap))
+    
+        self.free_slots.extend(range(new_cap - 1, old_cap - 1, -1))
+        self.capacity = new_cap
+        
     def alloc_slot(self) -> int:
         if not self.free_slots:
-            raise RuntimeError("OrganismStore full")
+            raise RuntimeError("OrganismStore has no free slots; caller must grow store before alloc_slot().")
         slot = self.free_slots.pop()
         if slot >= self.n:
             self.n = slot + 1
-        return slot    
+        return slot
     
     def write_agent(self, slot: int, a, grid) -> None:
-        body = a.body
-        x = float(a.x)
-        y = float(a.y)
+        """
+        Init/write-once-ish store population for fauna wrappers.
     
+        Denna metod används nu främst vid initialisering och spawn för att skriva
+        statisk eller långlivad metadata. Löpande fauna-state skrivs i subsystempassen
+        och inte via central tick-writeback.
+        """
+        body = a.body
+
         self.id[slot] = int(a.id)
         self.alive[slot] = bool(body.alive)
-    
-        self.pos_x[slot] = x
-        self.pos_y[slot] = y
-        self.cell_idx[slot] = int(grid.cell_of(x, y))
-    
+        
         self.energy[slot] = float(body.E_total())
+        self.energy_cap[slot] = float(body.E_cap())
         self.mass[slot] = float(body.M)
-    
+        self.damage[slot] = float(body.D)
+        self.wear[slot] = float(body.W)
+
         self.genome_idx[slot] = slot
     
         ph = a.pheno
@@ -217,11 +270,15 @@ class OrganismStore:
         self.pos_x[slot] = 0.0
         self.pos_y[slot] = 0.0
         self.cell_idx[slot] = -1
-        self.energy[slot] = 0.0
-        self.mass[slot] = 0.0
-        self.age[slot] = 0.0
         self.genome_idx[slot] = -1
         self.traits[slot, :] = 0.0
+        
+        self.energy[slot] = 0.0
+        self.energy_cap[slot] = 0.0
+        self.mass[slot] = 0.0
+        self.age[slot] = 0.0
+        self.damage[slot] = 0.0
+        self.wear[slot] = 0.0
 
         self.repro_cd[slot] = np.float32(0.0)
         

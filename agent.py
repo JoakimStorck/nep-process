@@ -1594,8 +1594,6 @@ class Agent:
     pheno: Phenotype = field(init=False)
 
     last_speed: float = 0.0
-    age_s: float = 0.0
-    repro_cd_s: float = 0.0
 
     last_B0: float = 0.0
     last_C0: float = 0.0
@@ -1614,6 +1612,7 @@ class Agent:
     _sense_m_eff: int = field(init=False, default=0)     # effektivt stråldjup nästa skanning
     _cached_agent_hit: tuple = field(init=False)         # (N, Nu, Nd, hit_slot, hit_id) från senaste see_agent_first_hit
     _cached_predator_hit: tuple = field(init=False)      # (pred_bearing, pred_dist) — närmaste hotande predator
+    _mating_mode: bool = field(init=False, default=False)
 
     def __post_init__(self) -> None:
         self.AP = replace(self.AP)
@@ -1621,8 +1620,6 @@ class Agent:
         self.body = Body(self.AP)
         self.obs_trace = np.zeros((8,), dtype=np.float32)
 
-        self.age_s = 0.0
-        self.repro_cd_s = 0.0
         self.birth_t = float(getattr(self, "birth_t", 0.0))
 
         self.apply_traits()
@@ -1654,6 +1651,8 @@ class Agent:
         self._sense_m_eff = 0
         self._cached_agent_hit = (0.0, 0.0, 0.0, -1, 0)
         self._cached_predator_hit = (0.0, 0.0)
+
+        self._mating_mode = False
 
     def _init_body_state_from_AP(self) -> None:
         self.body.M = max(0.0, float(self.AP.M0))
@@ -1873,7 +1872,7 @@ class Agent:
         m_eff = self._sense_m_eff
     
         # Parningsläge: tvinga full räckvidd
-        if self.ready_to_reproduce():
+        if self._mating_mode:
             m_eff = m_full
             self._sense_cd = 0
     
@@ -2015,7 +2014,7 @@ class Agent:
                 best_prey = (detected, dx, dy, dist)
                 best_prey_score = sc
     
-        if in_mating_mode and detected.ready_to_reproduce():
+        if in_mating_mode and bool(getattr(detected, "_mating_mode", False)):
             best_mate = (detected, dx, dy, dist)
     
         return best_prey, best_prey_score, best_threat, best_threat_score, best_mate
@@ -2263,7 +2262,7 @@ class Agent:
         soc = float(getattr(self.pheno, "sociability", 0.0))
         pred = float(getattr(self.pheno, "predation", 0.0))
         N, Nu, Nd, hit_slot, hit_id = self._cached_agent_hit
-        in_mating_mode = self.ready_to_reproduce()
+        in_mating_mode = bool(self._mating_mode)
     
         _hunt_diet_exp = float(getattr(self.AP, "hunt_diet_exp", 1.5))
         _diet_val = float(getattr(self.pheno, "diet", 0.5))
@@ -2371,59 +2370,6 @@ class Agent:
         
     # --- reproduction hooks (Population uses these) ---
     
-    def ready_to_reproduce(self) -> bool:
-        # OBS: repro_cd_s och body.gestating synkas nu från store före passen.
-        # Under migrationen används de här som kompatibilitetsyta.        
-        if not self.body.alive:
-            return False
-    
-        # already pregnant => don't start a new one
-        if bool(getattr(self.body, "gestating", False)):
-            return False
-    
-        # cooldown gate  (FIX: repro_cd_s is on Agent, not Body)
-        if float(getattr(self, "repro_cd_s", 0.0)) > 0.0:
-            return False
-    
-        # maturity gate
-        if float(self.age_s) < float(self.pheno.A_mature):
-            return False
-    
-        # hard resource gates (parent must have buffer above minimum)
-        M = float(self.body.M)
-        Mreq = max(float(self.AP.M_min), float(self.pheno.M_repro_min))
-        if M < Mreq:
-            return False
-    
-        Et = float(self.body.E_total())
-        Ecap = float(self.body.E_cap())
-        efrac = Et / max(Ecap, 1e-12)
-        if efrac < float(self.pheno.E_repro_min):
-            return False
-    
-        return True
-    
-    def wants_to_reproduce(self, rng: np.random.Generator) -> bool:
-        # Hard gates (alive, cooldown, maturity, M, energy fraction)
-        if not self.ready_to_reproduce():
-            return False
-    
-        # Pain / regulation gates — lösgjorda från föregående körning:
-        # hunger > 0.7 blockerade 83% av populationen (kronisk svält, mean hunger=0.84)
-        # D > 0.25 blockerade ytterligare 32% — för aggressivt givet att D stiger normalt
-        if float(self.body.hunger()) > 0.85:
-            return False
-        if float(self.body.D) > 0.50:
-            return False
-        if float(self.body.Fg) > 0.85:
-            return False
-    
-        # Stochastic trigger
-        dt = float(self.AP.dt)
-        lam = float(self.pheno.repro_rate)
-        p = 1.0 - math.exp(-lam * dt)
-        return bool(rng.random() < p)
-    
     def start_gestation(self) -> bool:
         # child mass target from phenotype (absolute units)
         M_target = float(getattr(self.pheno, "child_M", 0.0))
@@ -2503,7 +2449,3 @@ class Agent:
 
         # Nollställ rekurrent minnestillstånd — nyfödd börjar utan minne
         self._h.fill(0.0)
-
-        # newborn: start with cooldown so they can't instantly reproduce
-        self.repro_cd_s = float(self.AP.repro_cooldown_s)
-        self.age_s = 0.0

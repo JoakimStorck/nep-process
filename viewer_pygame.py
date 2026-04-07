@@ -46,7 +46,27 @@ def _is_alive(agent) -> bool:
     alive = getattr(b, "alive", getattr(agent, "alive", True))
     return bool(alive)
 
+def _is_repro_ready(pop, agent) -> bool:
+    """
+    Viewer-helper: fråga Populations store-first reproduktionsgate.
+    """
+    try:
+        slot = int(getattr(agent, "store_slot", -1))
+    except Exception:
+        return False
 
+    if slot < 0:
+        return False
+
+    fn = getattr(pop, "_ready_to_reproduce_slot", None)
+    if callable(fn):
+        try:
+            return bool(fn(slot))
+        except Exception:
+            return False
+
+    return False
+    
 def _hsv_to_rgb(h: float, s: float, v: float) -> Tuple[int, int, int]:
     """HSV (0-1 each) → RGB tuple (0-255 each)."""
     if s == 0.0:
@@ -486,11 +506,7 @@ class WorldViewer:
             color, radius = _agent_visuals(a)
             pygame.draw.circle(self._screen, color, (px, py), radius)
 
-            ready = False
-            try:
-                ready = a.ready_to_reproduce()
-            except Exception:
-                pass
+            ready = _is_repro_ready(pop, a)
             if ready:
                 pulse = 0.5 + 0.5 * math.sin(self._step * 0.25)
                 ring_alpha = int(120 + 120 * pulse)
