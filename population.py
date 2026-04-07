@@ -568,17 +568,32 @@ class Population:
         if len(self._slot_to_agent) < target:
             self._slot_to_agent.extend([None] * (target - len(self._slot_to_agent)))
             
-    def _pair_distance(self, a: Agent, b: Agent) -> float:
-        return self.grid.distance_pos(
-            float(a.x), float(a.y),
-            float(b.x), float(b.y),
-        )
-
-    def _pair_distance2(self, a: Agent, b: Agent) -> float:
-        return self.grid.distance2_pos(
-            float(a.x), float(a.y),
-            float(b.x), float(b.y),
-        )
+    def _slot_distance(self, slot_a: int, slot_b: int, *, squared: bool = False) -> float:
+        """
+        Store-first geometrihjälpare för fauna-interaktioner.
+    
+        Interaction-systemet ska läsa position från OrganismStore, inte från wrapperns
+        x/y. Wrapperposition finns tills vidare kvar för agentintern logik.
+        """
+        sa = int(slot_a)
+        sb = int(slot_b)
+        store = self.store
+    
+        if sa < 0 or sb < 0:
+            return float("inf")
+        if sa >= int(store.n) or sb >= int(store.n):
+            return float("inf")
+        if not bool(store.alive[sa]) or not bool(store.alive[sb]):
+            return float("inf")
+    
+        xa = float(store.pos_x[sa])
+        ya = float(store.pos_y[sa])
+        xb = float(store.pos_x[sb])
+        yb = float(store.pos_y[sb])
+    
+        if squared:
+            return float(self.grid.distance2_pos(xa, ya, xb, yb))
+        return float(self.grid.distance_pos(xa, ya, xb, yb))
 
     def _write_spatial_to_store(self, slot: int, x: float, y: float) -> None:
         """
@@ -818,7 +833,7 @@ class Population:
         if not self._ready_to_reproduce_slot(b_slot):
             return
     
-        if self._pair_distance2(agent, best) > float(self.PP.mating_radius) ** 2:
+        if self._slot_distance(a_slot, b_slot, squared=True) > float(self.PP.mating_radius) ** 2:
             return
     
         if self.PP.compat_enabled:
@@ -1611,6 +1626,8 @@ class Population:
         uppdaterat position och kroppstillstånd för ticken, men ännu inte har
         städats bort via death/birth-pass.
         """
+        # Interaction-systemets geometri ska nu läsas store-first via slotar.
+        # Wrapperobjekten används här främst för kvarvarande intern biologilogik.
         self._step_predation(ctx)
     
         for a in self.agents:
@@ -1662,8 +1679,11 @@ class Population:
             prey = self._agent_for_slot(s)
             if prey is None or prey is predator:
                 continue
-    
-            dist = self._pair_distance(predator, prey)
+            
+            pred_slot = int(predator.store_slot)
+            prey_slot = int(prey.store_slot)
+            
+            dist = self._slot_distance(pred_slot, prey_slot)
             if dist > attack_range:
                 continue
     
