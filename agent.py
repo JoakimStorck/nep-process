@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math, random
 from dataclasses import dataclass, field, replace
-from typing import Iterable, Optional, Tuple
+from typing import ClassVar, Iterable, Optional, Tuple
 
 import numpy as np
 
@@ -1534,6 +1534,31 @@ class RaySensors:
     
         return 0.0, 0.0, 0.0, -1, -1, 0
 
+
+
+@dataclass
+class ActionPlan:
+    turn: float
+    thrust: float
+    allow_move: float
+    allow_eat: float
+    explore_drive: float
+    B0: float
+    C0: float
+    Tloc: float
+
+
+@dataclass
+class BodyStepInput:
+    speed: float
+    activity: float
+    food_bio_kg: float
+    food_carcass_kg: float
+    E_move: float
+    Tloc: float
+    B0: float
+    C0: float
+    
 # -------------------------
 # Agent
 # -------------------------
@@ -1569,8 +1594,6 @@ class Agent:
     pheno: Phenotype = field(init=False)
 
     last_speed: float = 0.0
-    age_s: float = 0.0
-    repro_cd_s: float = 0.0
 
     last_B0: float = 0.0
     last_C0: float = 0.0
@@ -1589,6 +1612,7 @@ class Agent:
     _sense_m_eff: int = field(init=False, default=0)     # effektivt stråldjup nästa skanning
     _cached_agent_hit: tuple = field(init=False)         # (N, Nu, Nd, hit_slot, hit_id) från senaste see_agent_first_hit
     _cached_predator_hit: tuple = field(init=False)      # (pred_bearing, pred_dist) — närmaste hotande predator
+    _mating_mode: bool = field(init=False, default=False)
 
     def __post_init__(self) -> None:
         self.AP = replace(self.AP)
@@ -1596,8 +1620,6 @@ class Agent:
         self.body = Body(self.AP)
         self.obs_trace = np.zeros((8,), dtype=np.float32)
 
-        self.age_s = 0.0
-        self.repro_cd_s = 0.0
         self.birth_t = float(getattr(self, "birth_t", 0.0))
 
         self.apply_traits()
@@ -1629,6 +1651,8 @@ class Agent:
         self._sense_m_eff = 0
         self._cached_agent_hit = (0.0, 0.0, 0.0, -1, 0)
         self._cached_predator_hit = (0.0, 0.0)
+
+        self._mating_mode = False
 
     def _init_body_state_from_AP(self) -> None:
         self.body.M = max(0.0, float(self.AP.M0))
@@ -1848,7 +1872,7 @@ class Agent:
         m_eff = self._sense_m_eff
     
         # Parningsläge: tvinga full räckvidd
-        if self.ready_to_reproduce():
+        if self._mating_mode:
             m_eff = m_full
             self._sense_cd = 0
     
@@ -1893,10 +1917,6 @@ class Agent:
     # ------------------------------
     # apply_outputs: Helpers
     # ------------------------------
-    def _update_agent_clocks(self, dt: float) -> None:
-        self.age_s += float(dt)
-        self.repro_cd_s = max(0.0, float(self.repro_cd_s) - float(dt))
-    
     
     def _split_recurrent_output(self, y: np.ndarray) -> np.ndarray:
         _h_dim = int(self._h.shape[0])
@@ -1994,7 +2014,7 @@ class Agent:
                 best_prey = (detected, dx, dy, dist)
                 best_prey_score = sc
     
-        if in_mating_mode and detected.ready_to_reproduce():
+        if in_mating_mode and bool(getattr(detected, "_mating_mode", False)):
             best_mate = (detected, dx, dy, dist)
     
         return best_prey, best_prey_score, best_threat, best_threat_score, best_mate
@@ -2210,40 +2230,39 @@ class Agent:
         speed_n = clamp(speed / max(float(self.AP.v_max), 1e-9), 0.0, 1.0)
         ate = 1.0 if (allow_eat > 0.20 and (food_bio_kg + food_carcass_kg) > 0.0) else 0.0
         return 0.03 + 0.45 * speed_n + 0.10 * ate
-        
-    def apply_outputs(
+
+    
+    def plan_actions(
         self,
         world: World,
         ctx: StepCtx,
         y: np.ndarray,
         B0: float,
         C0: float,
-    ) -> Tuple[float, float]:
-        if not self.body.alive:
-            return 0.0, 0.0
+    ) -> ActionPlan:
+        """
+        Planeringsdel av gamla apply_outputs():
+          - tolka policy-output
+          - lokala reflexer/social steering
+          - food steering
     
-        dt = float(ctx.dt)
+        Ingen state-exekvering här:
+          - ingen rörelse
+          - ingen feeding
+          - ingen body.step()
     
-        # ---------------------------------------------------------
-        # 0) Clocks + recurrent state
-        # ---------------------------------------------------------
-        self._update_agent_clocks(dt)
+        Returnerar ett litet beslutspaket som move_system senare verkställer.
+        """
         y = self._split_recurrent_output(y)
     
-        # ---------------------------------------------------------
-        # 1) Decode policy outputs
-        # ---------------------------------------------------------
         turn, thrust, allow_move, allow_eat, explore_drive = self._decode_action_outputs(y)
     
-        # ---------------------------------------------------------
-        # 2) Local context + detected local target
-        # ---------------------------------------------------------
         Tloc = float(world.temperature_at(self.x, self.y)) if hasattr(world, "temperature_at") else 0.0
     
         soc = float(getattr(self.pheno, "sociability", 0.0))
         pred = float(getattr(self.pheno, "predation", 0.0))
         N, Nu, Nd, hit_slot, hit_id = self._cached_agent_hit
-        in_mating_mode = self.ready_to_reproduce()
+        in_mating_mode = bool(self._mating_mode)
     
         _hunt_diet_exp = float(getattr(self.AP, "hunt_diet_exp", 1.5))
         _diet_val = float(getattr(self.pheno, "diet", 0.5))
@@ -2263,9 +2282,6 @@ class Agent:
             in_mating_mode,
         )
     
-        # ---------------------------------------------------------
-        # 3) Reflexive drives
-        # ---------------------------------------------------------
         turn, thrust, explore_drive, flee_state, hunt_state = self._apply_reflex_drives(
             turn=turn,
             thrust=thrust,
@@ -2283,9 +2299,6 @@ class Agent:
             best_mate=best_mate,
         )
     
-        # ---------------------------------------------------------
-        # 4) Food steering
-        # ---------------------------------------------------------
         turn, thrust, explore_drive = self._apply_food_steering(
             ctx=ctx,
             turn=turn,
@@ -2296,108 +2309,66 @@ class Agent:
             C0=C0,
         )
     
-        # ---------------------------------------------------------
-        # 5) Motion integration
-        # ---------------------------------------------------------
-        speed, E_move = self._integrate_motion(
-            ctx=ctx,
-            turn=turn,
-            thrust=thrust,
-            allow_move=allow_move,
-            explore_drive=explore_drive,
+        return ActionPlan(
+            turn=float(turn),
+            thrust=float(thrust),
+            allow_move=float(allow_move),
+            allow_eat=float(allow_eat),
+            explore_drive=float(explore_drive),
+            B0=float(B0),
+            C0=float(C0),
+            Tloc=float(Tloc),
         )
     
-        # ---------------------------------------------------------
-        # 6) Feeding
-        # ---------------------------------------------------------
+    def execute_action_plan(
+        self,
+        world: World,
+        ctx: StepCtx,
+        plan: ActionPlan,
+    ) -> BodyStepInput:
+        """
+        Exekveringsdel av action plan:
+          - rörelse
+          - feeding
+          - activity proxy
+    
+        Returnerar ett explicit underlag för body_system.
+        """
+        dt = float(ctx.dt)
+    
+        speed, E_move = self._integrate_motion(
+            ctx=ctx,
+            turn=float(plan.turn),
+            thrust=float(plan.thrust),
+            allow_move=float(plan.allow_move),
+            explore_drive=float(plan.explore_drive),
+        )
+    
         food_bio_kg, food_carcass_kg = self._perform_feeding(
             world=world,
             dt=dt,
-            allow_eat=allow_eat,
+            allow_eat=float(plan.allow_eat),
         )
     
-        # ---------------------------------------------------------
-        # 7) Activity proxy + body dynamics
-        # ---------------------------------------------------------
         activity = self._activity_proxy(
             speed=speed,
-            allow_eat=allow_eat,
+            allow_eat=float(plan.allow_eat),
             food_bio_kg=food_bio_kg,
             food_carcass_kg=food_carcass_kg,
         )
     
-        self.body.step(
-            ctx,
-            speed=speed,
-            activity=activity,
-            food_bio_kg=food_bio_kg,
-            food_carcass_kg=food_carcass_kg,
-            pheno=self.pheno,
-            extra_drain=E_move,
-            T_env=Tloc,
-            age_s=self.age_s,
+        return BodyStepInput(
+            speed=float(speed),
+            activity=float(activity),
+            food_bio_kg=float(food_bio_kg),
+            food_carcass_kg=float(food_carcass_kg),
+            E_move=float(E_move),
+            Tloc=float(plan.Tloc),
+            B0=float(plan.B0),
+            C0=float(plan.C0),
         )
-    
-        # ---------------------------------------------------------
-        # 8) Tracking
-        # ---------------------------------------------------------
-        self.last_B0 = float(B0)
-        self.last_C0 = float(C0)
-    
-        return float(B0), float(C0)
-
+        
     # --- reproduction hooks (Population uses these) ---
-    
-    def ready_to_reproduce(self) -> bool:
-        if not self.body.alive:
-            return False
-    
-        # already pregnant => don't start a new one
-        if bool(getattr(self.body, "gestating", False)):
-            return False
-    
-        # cooldown gate  (FIX: repro_cd_s is on Agent, not Body)
-        if float(getattr(self, "repro_cd_s", 0.0)) > 0.0:
-            return False
-    
-        # maturity gate
-        if float(self.age_s) < float(self.pheno.A_mature):
-            return False
-    
-        # hard resource gates (parent must have buffer above minimum)
-        M = float(self.body.M)
-        Mreq = max(float(self.AP.M_min), float(self.pheno.M_repro_min))
-        if M < Mreq:
-            return False
-    
-        Et = float(self.body.E_total())
-        Ecap = float(self.body.E_cap())
-        efrac = Et / max(Ecap, 1e-12)
-        if efrac < float(self.pheno.E_repro_min):
-            return False
-    
-        return True
-    
-    def wants_to_reproduce(self, rng: np.random.Generator) -> bool:
-        # Hard gates (alive, cooldown, maturity, M, energy fraction)
-        if not self.ready_to_reproduce():
-            return False
-    
-        # Pain / regulation gates — lösgjorda från föregående körning:
-        # hunger > 0.7 blockerade 83% av populationen (kronisk svält, mean hunger=0.84)
-        # D > 0.25 blockerade ytterligare 32% — för aggressivt givet att D stiger normalt
-        if float(self.body.hunger()) > 0.85:
-            return False
-        if float(self.body.D) > 0.50:
-            return False
-        if float(self.body.Fg) > 0.85:
-            return False
-    
-        # Stochastic trigger
-        dt = float(self.AP.dt)
-        lam = float(self.pheno.repro_rate)
-        p = 1.0 - math.exp(-lam * dt)
-        return bool(rng.random() < p)
     
     def start_gestation(self) -> bool:
         # child mass target from phenotype (absolute units)
@@ -2478,7 +2449,3 @@ class Agent:
 
         # Nollställ rekurrent minnestillstånd — nyfödd börjar utan minne
         self._h.fill(0.0)
-
-        # newborn: start with cooldown so they can't instantly reproduce
-        self.repro_cd_s = float(self.AP.repro_cooldown_s)
-        self.age_s = 0.0

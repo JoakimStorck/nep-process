@@ -104,9 +104,8 @@ def _iter_live_flora_slots(pop):
     store = getattr(pop, "store", None)
     if store is None:
         return
-    n0 = int(getattr(store, "n_agents", 0))
-    n1 = int(getattr(store, "n", 0))
-    for slot in range(n0, n1):
+    n = int(getattr(store, "n", 0))
+    for slot in range(n):
         if not bool(store.alive[slot]):
             continue
         if int(store.kind[slot]) != 1:
@@ -129,12 +128,13 @@ def _flora_mass_field(pop) -> np.ndarray:
     n0 = int(getattr(store, "n_agents", 0))
     n1 = int(getattr(store, "n", 0))
 
-    for slot in range(n0, n1):
+    n = int(getattr(store, "n", 0))
+    
+    for slot in range(n):
         if not bool(store.alive[slot]):
             continue
         if int(store.kind[slot]) != 1:
             continue
-
         cell = int(store.cell_idx[slot])
         if cell < 0:
             continue
@@ -338,7 +338,7 @@ class WorldViewer:
             m = float(store.mass[slot])
     
             try:
-                m_cap = float(pop._flora_adult_mass[slot])
+                m_cap = float(store.flora_adult_mass[slot])
             except Exception:
                 m_cap = max(m, 1e-9)
             frac = max(0.0, min(1.0, m / max(m_cap, 1e-9)))
@@ -349,21 +349,21 @@ class WorldViewer:
     
             try:
                 if color_by == "temp_opt":
-                    val = float(pop._flora_temp_opt[slot])
+                    val = float(store.flora_temp_opt[slot])
                     u = max(0.0, min(1.0, (val + 5.0) / 40.0))
-    
+                
                 elif color_by == "dispersal":
-                    val = float(pop._flora_dispersal_rate[slot])
+                    val = float(store.flora_dispersal_rate[slot])
                     u = max(0.0, min(1.0, (val - 0.0002) / (0.0200 - 0.0002)))
-    
+                
                 elif color_by == "adult_mass":
-                    val = float(pop._flora_adult_mass[slot])
+                    val = float(store.flora_adult_mass[slot])
                     lo = 0.25 * float(pop.WP.B_K)
                     hi = 4.0 * float(pop.WP.B_K)
                     u = max(0.0, min(1.0, (val - lo) / max(hi - lo, 1e-9)))
-    
+                
                 elif color_by == "growth":
-                    val = float(pop._flora_growth_rate[slot])
+                    val = float(store.flora_growth_rate[slot])
                     u = max(0.0, min(1.0, (val - 0.005) / (0.050 - 0.005)))
     
             except Exception:
@@ -488,9 +488,12 @@ class WorldViewer:
 
             ready = False
             try:
-                ready = a.ready_to_reproduce()
+                slot = int(getattr(a, "store_slot", -1))
+                if slot >= 0 and hasattr(pop, "_ready_to_reproduce_slot"):
+                    ready = bool(pop._ready_to_reproduce_slot(slot))
             except Exception:
-                pass
+                ready = False
+            
             if ready:
                 pulse = 0.5 + 0.5 * math.sin(self._step * 0.25)
                 ring_alpha = int(120 + 120 * pulse)
