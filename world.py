@@ -15,7 +15,6 @@ except ImportError:
     _numba = None
     _NUMBA_AVAILABLE = False
 
-from abiotic import step_carcass_field
 from grid import Grid
 
 def clamp(x: float, lo: float, hi: float) -> float:
@@ -57,11 +56,25 @@ class WorldParams:
     T1: float = 20.0
 
     # -------------------------
-    # Carcass field C [kg per cell]
+    # Hydrology / terrain / world fields
     # -------------------------
-    C_K: float = 1e-3        # kg/cell "practical cap" for numerics (optional)
-    C_decay: float = 0.077   # 1% kvar efter 60s: ln(100)/60 ≈ 0.077 (var 0.03 → halveringstid 23s)
-    C_diff: float = 0.00     # diffusion coefficient
+    sea_level: float = 0.0
+    submerged_threshold: float = 1e-6
+
+    elevation_init: float = 0.0
+    water_init: float = 0.0
+    nutrient_init: float = 0.0
+    detritus_init: float = 0.0
+
+    rain_input_base: float = 0.0
+    spring_input_base: float = 0.0
+    infiltration_base: float = 0.0
+    evaporation_base: float = 0.0
+
+    # -------------------------
+    # Detritus / decay
+    # -------------------------
+    detritus_decay: float = 0.077
 
     # --- Perception scaling ---
     C_sense_K: float = 5e-4
@@ -87,8 +100,32 @@ class World:
         self.sample_flora_rays_hook = None        
         self.consume_food_hook = None
 
-        # occupancy cache for current fauna pipeline
-        self.C = np.zeros((s, s), dtype=np.float32)  # carcass biomass
+        # -------------------------
+        # Primary world fields
+        # -------------------------
+        self.elevation = np.full((s, s), np.float32(self.WP.elevation_init), dtype=np.float32)
+        self.water = np.full((s, s), np.float32(self.WP.water_init), dtype=np.float32)
+        self.nutrient = np.full((s, s), np.float32(self.WP.nutrient_init), dtype=np.float32)
+        self.detritus = np.full((s, s), np.float32(self.WP.detritus_init), dtype=np.float32)
+
+        # Deprecated compatibility alias.
+        # Source of truth is self.detritus; self.C exists only so older callers keep working.
+        self.C = self.detritus
+
+        # -------------------------
+        # External forcing fields
+        # -------------------------
+        self.rain_input = np.full((s, s), np.float32(self.WP.rain_input_base), dtype=np.float32)
+        self.spring_input = np.full((s, s), np.float32(self.WP.spring_input_base), dtype=np.float32)
+        self.infiltration = np.full((s, s), np.float32(self.WP.infiltration_base), dtype=np.float32)
+        self.evaporation = np.full((s, s), np.float32(self.WP.evaporation_base), dtype=np.float32)
+
+        # -------------------------
+        # Derived hydro fields
+        # -------------------------
+        self.surface_level = np.zeros((s, s), dtype=np.float32)
+        self.submerged = np.zeros((s, s), dtype=np.bool_)
+        self.flow_strength = np.zeros((s, s), dtype=np.float32)
 
         # time
         self.t = 0.0
@@ -96,6 +133,11 @@ class World:
             "dM_growth": 0.0,
             "dM_wither": 0.0,
             "dM_decay": 0.0,
+            "dM_detritus_decay": 0.0,
+            "dM_nutrient_from_detritus": 0.0,
+            "dM_water_added": 0.0,
+            "dM_water_removed": 0.0,
+            "dM_transport": 0.0,
             "E_in_growth": 0.0,
             "E_loss_wither": 0.0,
             "E_loss_decay": 0.0,
@@ -171,27 +213,77 @@ class World:
     # -------------------------
     # Abiotiska världspass
     # -------------------------
-    def _step_temperature(self) -> np.ndarray:
+    def temperature_pass(self) -> np.ndarray:
         """
         Uppdatera temperaturprofilen för aktuell tid och returnera temperaturfältet T.
         """
         self._update_temperature()
         return self.temperature_field()
 
-    def _step_carcass(self) -> float:
+    def hydro_pass(self) -> tuple[float, float]:
         """
-        Kadaverpass:
-          - decay + diffusion för C
-          - returnera dM_decay för flux/loggning
-        """
-        self.C, dM_decay = step_carcass_field(
-            self.C,
-            WP=self.WP,
-            dt=float(self.WP.dt),
-        )
-        return dM_decay
+        Minimal hydro-skelett för fas 1.5.
 
-    def _update_world_flux(self, dM_growth: float, dM_wither: float, dM_decay: float) -> None:
+        Patch 1 gör ännu inget grannflöde. Hydro äger dock redan sina härledda fält:
+          - water uppdateras av forcing-termer
+          - surface_level, submerged och flow_strength lämnas i konsistent skick
+        """
+        dt = np.float32(self.WP.dt)
+
+        water_before = self.water.copy()
+        dwater = dt * (self.rain_input + self.spring_input - self.infiltration - self.evaporation)
+        self.water = np.maximum(self.water + dwater, np.float32(0.0)).astype(np.float32, copy=False)
+
+        self.surface_level = (self.elevation + self.water).astype(np.float32, copy=False)
+        self.submerged = self.water > np.float32(self.WP.submerged_threshold)
+        self.flow_strength.fill(np.float32(0.0))
+
+        delta = self.water - water_before
+        dM_water_added = float(np.sum(np.maximum(delta, 0.0), dtype=np.float64))
+        dM_water_removed = float(np.sum(np.maximum(-delta, 0.0), dtype=np.float64))
+        return dM_water_added, dM_water_removed
+
+    def transport_pass(self) -> float:
+        """
+        Placeholder för framtida transport/diffusion av lösta ämnen.
+        Ingen transport ännu i patch 1.
+        """
+        return 0.0
+
+    def decomposition_pass(self) -> tuple[float, float]:
+        """
+        Minimal decomposition för fas 1.5.
+
+        I patch 1 görs endast enkel decay av detritus. Ingen diffusion och ingen
+        överföring till nutrient ännu. Source of truth är self.detritus.
+        """
+        dt = float(self.WP.dt)
+        rate = float(self.WP.detritus_decay)
+
+        decay = np.float32(rate) * self.detritus
+        self.detritus = np.maximum(
+            self.detritus - np.float32(dt) * decay,
+            np.float32(0.0),
+        ).astype(np.float32, copy=False)
+
+        # håll kompatibilitetsaliaset pekande på source-of-truth-arrayen
+        self.C = self.detritus
+
+        dM_detritus_decay = float(np.sum(np.float64(dt) * np.float64(decay)))
+        dM_nutrient_from_detritus = 0.0
+        return dM_detritus_decay, dM_nutrient_from_detritus
+
+    def update_flux(
+        self,
+        *,
+        dM_growth: float = 0.0,
+        dM_wither: float = 0.0,
+        dM_detritus_decay: float = 0.0,
+        dM_nutrient_from_detritus: float = 0.0,
+        dM_water_added: float = 0.0,
+        dM_water_removed: float = 0.0,
+        dM_transport: float = 0.0,
+    ) -> None:
         """
         Uppdatera världens öppna-system-ledger för senaste tick.
         """
@@ -202,34 +294,42 @@ class World:
         self.last_flux = {
             "dM_growth": max(0.0, dM_growth),
             "dM_wither": max(0.0, dM_wither),
-            "dM_decay": max(0.0, dM_decay),
+            "dM_decay": max(0.0, dM_detritus_decay),
+            "dM_detritus_decay": max(0.0, dM_detritus_decay),
+            "dM_nutrient_from_detritus": max(0.0, dM_nutrient_from_detritus),
+            "dM_water_added": max(0.0, dM_water_added),
+            "dM_water_removed": max(0.0, dM_water_removed),
+            "dM_transport": float(dM_transport),
             "E_in_growth": max(0.0, dM_growth) * e_plant,
             "E_loss_wither": max(0.0, dM_wither) * e_plant,
-            "E_loss_decay": max(0.0, dM_decay) * e_carc,
+            "E_loss_decay": max(0.0, dM_detritus_decay) * e_carc,
         }
-        
-       
+
     def step(self) -> None:
         dt = float(self.WP.dt)
-    
-        # (1) Temperatur / säsong
-        self._step_temperature()
-    
-        # (2) Kadaverfält
-        dM_decay = self._step_carcass()
-    
-        # (3) Flux / öppen-system-ledger
-        self._update_world_flux(0.0, 0.0, dM_decay)
-    
-        # (4) Tid
+
+        self.temperature_pass()
+        dM_water_added, dM_water_removed = self.hydro_pass()
+        dM_transport = self.transport_pass()
+        dM_detritus_decay, dM_nutrient_from_detritus = self.decomposition_pass()
+        self.update_flux(
+            dM_growth=0.0,
+            dM_wither=0.0,
+            dM_detritus_decay=dM_detritus_decay,
+            dM_nutrient_from_detritus=dM_nutrient_from_detritus,
+            dM_water_added=dM_water_added,
+            dM_water_removed=dM_water_removed,
+            dM_transport=dM_transport,
+        )
+
         self.t += dt
 
     # -------------------------
     # Sampling (renodlad)
     # -------------------------
     def sample_carcass(self, x: float, y: float) -> float:
-        """Bilinear sampling of carcass field C at a single point."""
-        return _bilinear_scalar_C(self.C, x, y, self.grid)
+        """Bilinear sampling of detritus field at a single point."""
+        return _bilinear_scalar_C(self.detritus, x, y, self.grid)
 
     def sample_many_carcass(
         self,
@@ -239,11 +339,11 @@ class World:
         tmp: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """
-        Vectorized bilinear sampling for carcass field C only.
+        Vectorized bilinear sampling for detritus field only.
         Returns float32 array.
         """
         return _bilinear_many_C(
-            self.C,
+            self.detritus,
             xs, ys,
             self.grid,
             outC=outC, tmp=tmp,
@@ -257,13 +357,13 @@ class World:
     
     def sample_food_local(self, x: float, y: float) -> tuple[float, float]:
         """
-        Returns (B_kg, C_kg) from current world interfaces:
+        Returns (B_kg, detritus_kg) from current world interfaces:
           - B via flora provider
-          - C via carcass field
+          - detritus via world detritus field
         """
         B = float(self.sample_flora_local(x, y))
         C = float(self.sample_carcass(x, y))
-        return B, C    
+        return B, C
 
     def sample_flora_rays(self, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
         hook = getattr(self, "sample_flora_rays_hook", None)
@@ -327,9 +427,9 @@ class World:
 
     def consume_food(self, x: float, y: float, amount: float, prefer_carcass: bool = True) -> Tuple[float, float]:
         """
-        Fallback-consumption in World: carcass only.
+        Fallback-consumption in World: detritus only.
         Plant food is handled by Population via consume_food_hook.
-        Returns (got_total_kg, got_carcass_kg).
+        Returns (got_total_kg, got_detritus_kg).
         """
         hook = getattr(self, "consume_food_hook", None)
         if hook is not None:
@@ -339,12 +439,12 @@ class World:
         if not math.isfinite(amt) or amt <= 0.0:
             return 0.0, 0.0
     
-        got_c = float(self._consume_bilinear_from(self.C, x, y, amt))
+        got_c = float(self._consume_bilinear_from(self.detritus, x, y, amt))
         return got_c, got_c
 
     def add_carcass(self, x: float, y: float, amount_kg: float, rad: int = 3) -> None:
         """
-        Add carcass mass to C (kg/cell). amount_kg is TOTAL kg deposited.
+        Add carcass mass to detritus field (kg/cell).
         """
         amt = float(amount_kg)
         if not math.isfinite(amt) or amt <= 0.0:
@@ -374,14 +474,14 @@ class World:
                 wsum += w
     
         if wsum <= 1e-12:
-            self.C[cy, cx] = np.float32(float(self.C[cy, cx]) + amt)
+            self.detritus[cy, cx] = np.float32(float(self.detritus[cy, cx]) + amt)
             return
     
         scale = amt / wsum
         for dx, dy, w in weights:
             cell = self.grid.cell_from_rowcol(cy + dy, cx + dx)
             iy, ix = self.grid.rowcol_of(cell)
-            self.C[iy, ix] = np.float32(float(self.C[iy, ix]) + scale * w)
+            self.detritus[iy, ix] = np.float32(float(self.detritus[iy, ix]) + scale * w)
 
 
 def _bilinear_scalar_C(C: np.ndarray, x: float, y: float, grid: Grid) -> float:

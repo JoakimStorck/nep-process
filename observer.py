@@ -134,8 +134,8 @@ class WorldObserver:
         return True
 
     def log_now(self, t: float, world: World) -> None:
-        F = world.F
-        C = world.C
+        surface = world.surface_level
+        detritus = world.detritus
 
         def stats(A: np.ndarray) -> Dict[str, float]:
             flat = A.ravel()
@@ -150,7 +150,9 @@ class WorldObserver:
 
         s = {
             "t": float(t),
-            "F": {**stats(F), "hazard_frac_0p35": float((F >= 0.35).mean())},
-            "C": {"mean": float(C.mean()), "sum": float(C.sum())},
+            "surface_level": {**stats(surface)},
+            "submerged_frac": float(world.submerged.mean()),
+            "C": {"mean": float(detritus.mean()), "sum": float(detritus.sum())},
+            "detritus": {"mean": float(detritus.mean()), "sum": float(detritus.sum())},
         }
         self.w.write({"event": "world", "summary": s})

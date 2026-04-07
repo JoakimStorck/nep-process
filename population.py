@@ -80,6 +80,9 @@ class PopParams:
     init_pop: int = 12
     max_pop: int = 500   # höjt — naturlig matbrist sätter taket nu, inte detta
 
+    store_growth_min_chunk: int = 256
+    store_growth_factor: float = 2.0
+    
     n_traits: int = 32   # +2 arkitekturtraits (hidden_1=23, hidden_2=24)
 
     spawn_jitter_r: float = 1.5
@@ -112,6 +115,25 @@ class PopParams:
     compat_enabled: bool = True  # False = alla kan para sig med alla (debug)
 
 
+@dataclass
+class SenseBatch:
+    alive: list[Agent]
+    alive_slots: np.ndarray
+    X: np.ndarray
+    BC_list: list[tuple[float, float]]
+
+
+@dataclass
+class DecisionBatch:
+    plans: list[tuple[Agent, object]]
+    plan_slots: np.ndarray
+
+
+@dataclass
+class BodyBatch:
+    body_inputs: list[tuple[Agent, object]]
+    body_slots: np.ndarray
+    
 @dataclass
 class Population:
     WP: WorldParams
@@ -239,7 +261,6 @@ class Population:
             # ger realistisk blandning av unga, vuxna och gamla.
             A_mature  = float(a.pheno.A_mature)
             age_s     = float(self.rng.uniform(0.0, 3.0 * A_mature))
-            a.age_s   = age_s
             a.birth_t = float(self.t - age_s)
 
             # Massa korrelerad med ålder och M_target
@@ -273,7 +294,7 @@ class Population:
             a.body.clamp_energy_to_cap()
 
             # Cooldown: spridd
-            a.repro_cd_s = float(
+            init_repro_cd = float(
                 self.rng.uniform(0.0, float(self.AP.repro_cooldown_s)))
 
             # allocate slot in bank and write genome params once
@@ -289,10 +310,19 @@ class Population:
             a._policy_key = key
             a._policy_slot = slot
 
+            self._ensure_store_capacity(1)
             store_slot = self.store.alloc_slot()
             a.store_slot = int(store_slot)
-            self.store.write_agent(store_slot, a, self.grid)            
+            self.store.write_agent(store_slot, a, self.grid)
+            self._write_spatial_to_store(store_slot, a.x, a.y)
+            self.store.age[store_slot] = np.float32(age_s)
             self._slot_to_agent[int(store_slot)] = a
+
+            self.store.repro_cd[store_slot] = np.float32(init_repro_cd)
+            self.store.gestating[store_slot] = bool(a.body.gestating)
+            self.store.gest_M[store_slot] = np.float32(a.body.gest_M)
+            self.store.gest_E_J[store_slot] = np.float32(a.body.gest_E_J)
+            self.store.gest_M_target[store_slot] = np.float32(a.body.gest_M_target)
 
             self._emit_birth(self.t, a, parent=None)
             self.agents.append(a)
@@ -433,7 +463,7 @@ class Population:
             with_percentiles=self.world_log_with_percentiles,
         )
         if isinstance(payload, dict):
-            C_sum = float(np.nansum(self.world.C))
+            detritus_sum = float(np.nansum(self.world.detritus))
             e_plant = float(getattr(self.AP, "E_plant_J_per_kg", getattr(self.AP, "E_bio_J_per_kg", 0.0)))
             e_carc = float(getattr(self.AP, "E_carcass_J_per_kg", 0.0))
             wf = getattr(self.world, "last_flux", {})
@@ -446,10 +476,10 @@ class Population:
             payload.update({
                 # Flora-store är source of truth
                 "E_B": e_plant * flora_mass,
-                "E_C": e_carc * C_sum,
-                "BC_sum": flora_mass + C_sum,
+                "E_C": e_carc * detritus_sum,
+                "BC_sum": flora_mass + detritus_sum,
                 "M_B": flora_mass,
-                "M_C": C_sum,
+                "M_C": detritus_sum,
     
                 "flora_n": flora_n,
                 "flora_mass_store": flora_mass,
@@ -508,17 +538,181 @@ class Population:
     
         return ag
 
-    def _pair_distance(self, a: Agent, b: Agent) -> float:
-        return self.grid.distance_pos(
-            float(a.x), float(a.y),
-            float(b.x), float(b.y),
+    def _ensure_store_capacity(self, extra_slots: int = 1) -> None:
+        """
+        Säkerställ att OrganismStore har minst `extra_slots` lediga slots.
+    
+        Detta växer bara den tekniska store-kapaciteten för flora + fauna.
+        Det ändrar inte djurtaket PP.max_pop.
+        """
+        need = int(extra_slots)
+        if need <= 0:
+            return
+    
+        free_now = len(self.store.free_slots)
+        if free_now >= need:
+            return
+    
+        old_cap = int(self.store.capacity)
+        min_chunk = int(self.PP.store_growth_min_chunk)
+        growth_factor = max(1.1, float(self.PP.store_growth_factor))
+    
+        target = max(
+            old_cap + min_chunk,
+            int(math.ceil(old_cap * growth_factor)),
+            old_cap + (need - free_now),
         )
+    
+        self.store.grow(target)
+    
+        if len(self._slot_to_agent) < target:
+            self._slot_to_agent.extend([None] * (target - len(self._slot_to_agent)))
+            
+    def _slot_distance(self, slot_a: int, slot_b: int, *, squared: bool = False) -> float:
+        """
+        Store-first geometrihjälpare för fauna-interaktioner.
+    
+        Interaction-systemet ska läsa position från OrganismStore, inte från wrapperns
+        x/y. Wrapperposition finns tills vidare kvar för agentintern logik.
+        """
+        sa = int(slot_a)
+        sb = int(slot_b)
+        store = self.store
+    
+        if sa < 0 or sb < 0:
+            return float("inf")
+        if sa >= int(store.n) or sb >= int(store.n):
+            return float("inf")
+        if not bool(store.alive[sa]) or not bool(store.alive[sb]):
+            return float("inf")
+    
+        xa = float(store.pos_x[sa])
+        ya = float(store.pos_y[sa])
+        xb = float(store.pos_x[sb])
+        yb = float(store.pos_y[sb])
+    
+        if squared:
+            return float(self.grid.distance2_pos(xa, ya, xb, yb))
+        return float(self.grid.distance_pos(xa, ya, xb, yb))
 
-    def _pair_distance2(self, a: Agent, b: Agent) -> float:
-        return self.grid.distance2_pos(
-            float(a.x), float(a.y),
-            float(b.x), float(b.y),
-        )
+    def _write_spatial_to_store(self, slot: int, x: float, y: float) -> None:
+        """
+        Uppdatera den rumsliga fauna-klungan direkt i store.
+    
+        Detta gör store till source of truth för position/cell efter move_system.
+        Wrappern hålls tills vidare kvar som kompatibilitetsyta.
+        """
+        s = int(slot)
+        if s < 0 or s >= int(self.store.n):
+            return
+    
+        self.store.pos_x[s] = np.float32(float(x))
+        self.store.pos_y[s] = np.float32(float(y))
+        self.store.cell_idx[s] = np.int32(self.grid.cell_of(float(x), float(y)))
+
+    def _write_alive_to_store(self, slot: int, alive: bool) -> None:
+        """
+        Uppdatera levande-status direkt i store.
+    
+        Detta gör store.alive till omedelbar sanning under ticken, i stället för att
+        vänta på senare writeback eller slot-release.
+        """
+        s = int(slot)
+        if s < 0 or s >= int(self.store.n):
+            return
+        self.store.alive[s] = bool(alive)
+
+    def _write_body_surface_to_store(self, slot: int, a: Agent) -> None:
+        """
+        Uppdatera kroppens yttre store-state direkt från wrappern.
+    
+        Detta omfattar nu den fysiologiska surface som andra pass kan läsa:
+          - mass
+          - total energy
+          - energy capacity
+          - damage
+          - wear
+        """
+        s = int(slot)
+        if s < 0 or s >= int(self.store.n):
+            return
+    
+        self.store.mass[s] = np.float32(float(a.body.M))
+        self.store.energy[s] = np.float32(float(a.body.E_total()))
+        self.store.energy_cap[s] = np.float32(float(a.body.E_cap()))
+        self.store.damage[s] = np.float32(float(a.body.D))
+        self.store.wear[s] = np.float32(float(a.body.W))
+
+    def _ready_to_reproduce_slot(self, slot: int) -> bool:
+        """
+        Store-first reproduktionsgate för fauna.
+    
+        Detta är nu den enda reproduktionsreadiness-källan i den heta loopen.
+        """
+        s = int(slot)
+        store = self.store
+    
+        if s < 0 or s >= int(store.n):
+            return False
+        if not bool(store.alive[s]):
+            return False
+        if int(store.kind[s]) != 0:
+            return False
+    
+        ag = self._agent_for_slot(s)
+        if ag is None:
+            return False
+    
+        if bool(store.gestating[s]):
+            return False
+        if float(store.repro_cd[s]) > 0.0:
+            return False
+    
+        if float(store.age[s]) < float(ag.pheno.A_mature):
+            return False
+    
+        M = float(store.mass[s])
+        Mreq = max(float(ag.AP.M_min), float(ag.pheno.M_repro_min))
+        if M < Mreq:
+            return False
+    
+        E = float(store.energy[s])
+        Ecap = max(float(store.energy_cap[s]), 1e-12)
+        efrac = E / Ecap
+        if efrac < float(ag.pheno.E_repro_min):
+            return False
+    
+        return True
+
+    def _mating_mode_slot(self, slot: int) -> bool:
+        """
+        Mjuk store-baserad signal för mating-orienterat beteende.
+    
+        Detta används för sensing/steering, inte som slutlig biologisk gate.
+        Den hårda gaten ligger i _ready_to_reproduce_slot().
+        """
+        s = int(slot)
+        store = self.store
+    
+        if s < 0 or s >= int(store.n):
+            return False
+        if not bool(store.alive[s]):
+            return False
+        if int(store.kind[s]) != 0:
+            return False
+    
+        ag = self._agent_for_slot(s)
+        if ag is None:
+            return False
+    
+        if bool(store.gestating[s]):
+            return False
+        if float(store.repro_cd[s]) > 0.0:
+            return False
+        if float(store.age[s]) < float(ag.pheno.A_mature):
+            return False
+    
+        return True
         
     # -----------------------
     # births
@@ -577,11 +771,20 @@ class Population:
             child_E_slow_J=child_E_slow_J,
         )
 
+        self._ensure_store_capacity(1)
         store_slot = self.store.alloc_slot()
         child.store_slot = int(store_slot)
         self.store.write_agent(store_slot, child, self.grid)
+        self._write_spatial_to_store(store_slot, child.x, child.y)
+        self.store.age[store_slot] = np.float32(0.0)
         self._slot_to_agent[int(store_slot)] = child
-        
+
+        self.store.repro_cd[store_slot] = np.float32(float(self.AP.repro_cooldown_s))
+        self.store.gestating[store_slot] = False
+        self.store.gest_M[store_slot] = np.float32(0.0)
+        self.store.gest_E_J[store_slot] = np.float32(0.0)
+        self.store.gest_M_target[store_slot] = np.float32(0.0)
+
         self._emit_birth(self.t, child, parent)
         return child
 
@@ -591,9 +794,16 @@ class Population:
         lokalt detekterade och markerade via sensing-cachen.
         Ingen global sökning — agenten kan bara para sig med någon den uppfattat via sensing.
         """
-        if not agent.body.alive or agent.body.gestating:
+        if not agent.body.alive:
             return
-        if not agent.ready_to_reproduce():
+        
+        a_slot = int(agent.store_slot)
+        if a_slot < 0:
+            return
+        
+        store = self.store
+        
+        if not self._ready_to_reproduce_slot(a_slot):
             return
     
         hit = getattr(agent, "_cached_agent_hit", None)
@@ -616,10 +826,14 @@ class Population:
         best = self._agent_for_slot(s)
         if best is None or best is agent:
             return
-        if not best.ready_to_reproduce():
+        
+        b_slot = int(best.store_slot)
+        if b_slot < 0:
+            return
+        if not self._ready_to_reproduce_slot(b_slot):
             return
     
-        if self._pair_distance2(agent, best) > float(self.PP.mating_radius) ** 2:
+        if self._slot_distance(a_slot, b_slot, squared=True) > float(self.PP.mating_radius) ** 2:
             return
     
         if self.PP.compat_enabled:
@@ -636,27 +850,53 @@ class Population:
     
         bearer._mating_partner = partner
         bearer.start_gestation()
-    
+        
+        b_slot = int(bearer.store_slot)
+        p_slot = int(partner.store_slot)
+        
+        if b_slot >= 0:
+            store.gestating[b_slot] = bool(bearer.body.gestating)
+            store.gest_M[b_slot] = np.float32(bearer.body.gest_M)
+            store.gest_E_J[b_slot] = np.float32(bearer.body.gest_E_J)
+            store.gest_M_target[b_slot] = np.float32(bearer.body.gest_M_target)
+        
         mating_cost = 0.05 * partner.body.E_cap()
         partner.pay_repro_cost(mating_cost)
-        partner.repro_cd_s = float(self.AP.repro_cooldown_s)
+        
+        if p_slot >= 0:
+            self._write_body_surface_to_store(p_slot, partner)
+            store.repro_cd[p_slot] = np.float32(float(self.AP.repro_cooldown_s))
         
     def _try_birth(self, parent: Agent, ctx: StepCtx) -> Optional[Agent]:
         if not parent.body.alive:
             return None
 
-        b = parent.body
-
-        # Body är den enda auktoriteten: gestation_ready() kontrollerar gest_M >= gest_M_target.
-        if not b.gestation_ready():
+        p_slot = int(parent.store_slot)
+        if p_slot < 0:
             return None
-
-        # Hämta den massa som Body byggt upp under gestationen.
-        child_M = float(b.gest_M)
-
-        # Återställ gestationstillstånd via Body innan spawn
-        # (abort_gestation() nollställer gestating, gest_M, gest_E_J, gest_M_target).
+        
+        store = self.store
+        b = parent.body
+        
+        if not bool(store.gestating[p_slot]):
+            return None
+        if not (float(store.gest_M[p_slot]) >= float(store.gest_M_target[p_slot]) > 0.0):
+            return None
+        
+        # synka wrapper till store innan vi använder den gamla födelsekoden
+        b.gestating = bool(store.gestating[p_slot])
+        b.gest_M = float(store.gest_M[p_slot])
+        b.gest_E_J = float(store.gest_E_J[p_slot])
+        b.gest_M_target = float(store.gest_M_target[p_slot])
+        
+        child_M = float(store.gest_M[p_slot])
+        
         b.abort_gestation()
+        
+        store.gestating[p_slot] = False
+        store.gest_M[p_slot] = np.float32(0.0)
+        store.gest_E_J[p_slot] = np.float32(0.0)
+        store.gest_M_target[p_slot] = np.float32(0.0)
 
         # --- 1.4: Energi till barnet (dras från föräldern) ---
         # child_E_fast/slow är fraktioner av barnets energikapacitet — en livshistoriestrategi.
@@ -669,19 +909,18 @@ class Population:
         # pay_repro_cost() anropar body.take_energy() — aldrig mer än vad som finns.
         total_child_E = child_E_fast_J + child_E_slow_J
         paid_to_child = float(parent.pay_repro_cost(total_child_E))
-
-        # Skala ner proportionellt om föräldern inte hade råd.
+        
         if total_child_E > 1e-12:
             scale = paid_to_child / total_child_E
         else:
             scale = 0.0
         child_E_fast_J *= scale
         child_E_slow_J *= scale
-
-        # --- 1.5: Reproduktionskostnad (extra föräldrastress vid födseln) ---
-        # repro_cost är en fraktion av förälderns Ecap — kostnad utöver energin till barnet.
+        
         repro_cost_J = float(parent.pheno.repro_cost) * float(parent.body.E_cap())
         parent.pay_repro_cost(repro_cost_J)
+        
+        self._write_body_surface_to_store(p_slot, parent)
 
         other_parent = getattr(parent, "_mating_partner", None)
         # Rensa referensen så den inte hänger kvar
@@ -696,7 +935,7 @@ class Population:
             other_parent=other_parent,
         )
 
-        parent.repro_cd_s = float(self.AP.repro_cooldown_s)
+        store.repro_cd[p_slot] = np.float32(float(self.AP.repro_cooldown_s))
         return child
 
 
@@ -801,10 +1040,8 @@ class Population:
     
         created = 0
         for cell in cells:
-            try:
-                slot = self.store.alloc_slot()
-            except RuntimeError:
-                break
+            self._ensure_store_capacity(1)
+            slot = self.store.alloc_slot()
     
             traits = init_organism_traits(
                 self.rng,
@@ -903,10 +1140,8 @@ class Population:
             self._flora_summary_cache = None
             return True
     
-        try:
-            slot = self.store.alloc_slot()
-        except RuntimeError:
-            return False
+        self._ensure_store_capacity(1)
+        slot = self.store.alloc_slot()
     
         if traits is None:
             traits = init_organism_traits(
@@ -1102,7 +1337,7 @@ class Population:
     
         got_c = 0.0
         if prefer_carcass:
-            got_c = float(self.world._consume_bilinear_from(self.world.C, x, y, amt))
+            got_c = float(self.world._consume_bilinear_from(self.world.detritus, x, y, amt))
             amt = max(0.0, amt - got_c)
     
         got_f = float(self._consume_flora_from_store(x, y, amt, max_radius=1))
@@ -1188,21 +1423,35 @@ class Population:
         self._flora_summary_cache = None
     
         return float(dM_growth_flora), int(flora_established), float(flora_dispersed_mass)
-    
-    
-    def _step_agents_policy(self, ctx: "StepCtx") -> None:
+        
+    def _step_sense_system(
+        self,
+        ctx: "StepCtx",
+    ) -> SenseBatch:
         """
-        Kör sensing + policy-forward + apply_outputs för alla levande agenter.
+        Kör sensing/input-byggande för alla levande agenter.
+    
+        Returnerar ett explicit batch-objekt för nästa pass.
         """
         alive: list[Agent] = [a for a in self.agents if a.body.alive]
+        alive_slots = np.asarray([int(a.store_slot) for a in alive], dtype=np.int32)
+        
+        for a in alive:
+            a._mating_mode = self._mating_mode_slot(a.store_slot)
+        
         if not alive:
-            return
+            return SenseBatch(
+                alive=[],
+                alive_slots=np.zeros((0,), dtype=np.int32),
+                X=np.zeros((0, 0), dtype=np.float32),
+                BC_list=[],
+            )
     
         n = len(alive)
         in_dim = int(alive[0].genome.layer_sizes[0])
         X = np.empty((n, in_dim), dtype=np.float32)
     
-        BC_list: list[tuple[float, float]] = [None] * n  # type: ignore
+        BC_list: list[tuple[float, float]] = [(0.0, 0.0)] * n
     
         for i, a in enumerate(alive):
             x_in, B0, C0 = a.build_inputs(self.world, rng=self.rng)
@@ -1216,6 +1465,36 @@ class Population:
             X[i] = x_in
             BC_list[i] = (float(B0), float(C0))
             self._emit_step_if_tracked(self.t, a, float(B0), float(C0))
+    
+        return SenseBatch(
+            alive=alive,
+            alive_slots=alive_slots,
+            X=X,
+            BC_list=BC_list,
+        )
+        
+    def _step_decision_system(
+        self,
+        ctx: "StepCtx",
+        sense_batch: SenseBatch,
+    ) -> DecisionBatch:
+        """
+        Kör decision-systemet för de agenter som redan passerat sensing:
+          - policy-forward
+          - action planning
+    
+        Returnerar ett explicit batch-objekt för move_system.
+        """
+        alive = sense_batch.alive
+        X = sense_batch.X
+        BC_list = sense_batch.BC_list
+        alive_slots = sense_batch.alive_slots
+    
+        if not alive:
+            return DecisionBatch(
+                plans=[],
+                plan_slots=np.zeros((0,), dtype=np.int32),
+            )
     
         groups: dict[tuple, list[int]] = {}
         for i, a in enumerate(alive):
@@ -1238,12 +1517,124 @@ class Population:
                 H = self._act_hidden(Z, bank.act) if li < L - 1 else Z
     
             Y[idxs_arr] = H
-    
+
+        plans = []
+        plan_slots: list[int] = []
+        
         for i, a in enumerate(alive):
             B0, C0 = BC_list[i]
-            a.apply_outputs(self.world, ctx, Y[i], B0, C0)
+            plan = a.plan_actions(self.world, ctx, Y[i], B0, C0)
+            plans.append((a, plan))
+            plan_slots.append(int(alive_slots[i]))
+        
+        return DecisionBatch(
+            plans=plans,
+            plan_slots=np.asarray(plan_slots, dtype=np.int32),
+        )
+
+           
+    def _step_move_system(
+        self,
+        ctx: "StepCtx",
+        decision_batch: DecisionBatch,
+    ) -> BodyBatch:
+        """
+        Verkställ rörelse och feeding för planerade agenter.
     
+        Returnerar ett explicit batch-objekt för body_system.
+        """
+        plans = decision_batch.plans
+        plan_slots = decision_batch.plan_slots
+        if not plans:
+            return BodyBatch(
+                body_inputs=[],
+                body_slots=np.zeros((0,), dtype=np.int32),
+            )
     
+        body_inputs = []
+        body_slots: list[int] = []
+        
+        for i, (a, plan) in enumerate(plans):
+            if not a.body.alive:
+                continue
+        
+            body_in = a.execute_action_plan(self.world, ctx, plan)
+            self._write_spatial_to_store(a.store_slot, a.x, a.y)
+        
+            body_inputs.append((a, body_in))
+            body_slots.append(int(plan_slots[i]))
+        
+        return BodyBatch(
+            body_inputs=body_inputs,
+            body_slots=np.asarray(body_slots, dtype=np.int32),
+        )
+
+    def _step_body_system(
+        self,
+        ctx: "StepCtx",
+        body_batch: BodyBatch,
+    ) -> None:
+        """
+        Kör fysiologisk kroppsdynamik som eget pass efter move_system.
+    
+        Detta håller fortfarande Body.step() intakt, men flyttar subsystemgränsen
+        ut ur move_system så att rörelse och fysiologi inte längre är samma pass.
+        """
+        body_inputs = body_batch.body_inputs
+        body_slots = body_batch.body_slots
+        if not body_inputs:
+            return
+    
+        for i, (a, body_in) in enumerate(body_inputs):
+            if not a.body.alive:
+                continue
+        
+            slot = int(body_slots[i])
+            age_s = float(self.store.age[slot]) if slot >= 0 else 0.0
+            
+            a.body.step(
+                ctx,
+                speed=body_in.speed,
+                activity=body_in.activity,
+                food_bio_kg=body_in.food_bio_kg,
+                food_carcass_kg=body_in.food_carcass_kg,
+                pheno=a.pheno,
+                extra_drain=body_in.E_move,
+                T_env=body_in.Tloc,
+                age_s=age_s,
+            )
+            
+            self._write_alive_to_store(slot, a.body.alive)
+            self._write_body_surface_to_store(slot, a)
+            
+            a.last_B0 = float(body_in.B0)
+            a.last_C0 = float(body_in.C0)
+            
+            if slot >= 0:
+                self.store.gestating[slot] = bool(a.body.gestating)
+                self.store.gest_M[slot] = np.float32(a.body.gest_M)
+                self.store.gest_E_J[slot] = np.float32(a.body.gest_E_J)
+                self.store.gest_M_target[slot] = np.float32(a.body.gest_M_target)     
+
+    def _step_interaction_system(self, ctx: "StepCtx") -> None:
+        """
+        Hantera organism–organism-interaktioner efter movement/body:
+          - predation
+          - mating-initiering
+    
+        Detta pass ska innehålla sådant som kräver att individerna redan har
+        uppdaterat position och kroppstillstånd för ticken, men ännu inte har
+        städats bort via death/birth-pass.
+        """
+        # Interaction-systemets geometri ska nu läsas store-first via slotar.
+        # Wrapperobjekten används här främst för kvarvarande intern biologilogik.
+        self._step_predation(ctx)
+    
+        for a in self.agents:
+            if not a.body.alive:
+                continue
+            self._try_mating(a, ctx)
+            
     def _step_predation(self, ctx: "StepCtx") -> None:
         """
         Verkställ predation mot lokalt detekterade mål.
@@ -1288,8 +1679,11 @@ class Population:
             prey = self._agent_for_slot(s)
             if prey is None or prey is predator:
                 continue
-    
-            dist = self._pair_distance(predator, prey)
+            
+            pred_slot = int(predator.store_slot)
+            prey_slot = int(prey.store_slot)
+            
+            dist = self._slot_distance(pred_slot, prey_slot)
             if dist > attack_range:
                 continue
     
@@ -1302,12 +1696,15 @@ class Population:
             predator.body.take_energy(
                 cost_frac * hunt_eff * cost_mult * float(predator.body.E_cap()) * dt
             )
+            self._write_body_surface_to_store(predator.store_slot, predator)
     
             dD = dmg_per_s * max(0.25, score) * hunt_eff * (float(predator.body.M) ** 0.5) * dt
             prey.body.D = min(float(prey.body.D) + dD, float(prey.body.AP.D_max))
-    
+            self._write_body_surface_to_store(prey.store_slot, prey)
+            
             if float(prey.body.D) >= float(prey.body.AP.D_max):
                 prey.body.alive = False
+                self._write_alive_to_store(prey.store_slot, False)
     
     
     def _step_deaths(self) -> int:
@@ -1323,6 +1720,7 @@ class Population:
                 self._banks[a._policy_key].release(a._policy_slot)
     
                 if a.store_slot >= 0:
+                    self._write_alive_to_store(a.store_slot, False)
                     self._slot_to_agent[int(a.store_slot)] = None
                     self.store.release_slot(a.store_slot)
                 a.store_slot = -1
@@ -1364,7 +1762,7 @@ class Population:
     
     def _step_births(self, ctx: "StepCtx") -> int:
         """
-        Hantera födslar och parningsförsök.
+        Hantera enbart födslar från redan etablerad gestation.
         Returnerar antal födda denna tick.
         """
         births = 0
@@ -1383,16 +1781,46 @@ class Population:
             child = self._try_birth(a, ctx)
             if child is not None:
                 children.append(child)
-                continue
-    
-            self._try_mating(a, ctx)
     
         if children:
             self.agents.extend(children)
         births = len(children)
         return int(births)
     
+    def _step_metabolism_system(self, ctx: StepCtx) -> None:
+        """
+        Store-first metabolism-pass för enkel fauna-state.
+        
+        I detta steg ägs nu:
+          - store.age
+          - store.repro_cd
+        
+        Båda uppdateras direkt här och läses senare från store av övriga pass.
+        """
+        dt = float(ctx.dt)
+        if dt <= 0.0:
+            return
     
+        store = self.store
+        n = int(store.n)
+    
+        for slot in range(n):
+            if not bool(store.alive[slot]):
+                continue
+            if int(store.kind[slot]) != 0:
+                continue
+    
+            store.age[slot] = np.float32(float(store.age[slot]) + dt)
+    
+        for slot in range(n):
+            if not bool(store.alive[slot]):
+                continue
+            if int(store.kind[slot]) != 0:
+                continue
+        
+            store.repro_cd[slot] = np.float32(max(0.0, float(store.repro_cd[slot]) - dt))
+            
+            
     def _step_sampling(self) -> None:
         """
         Emit sample event enligt samplinginställningar.
@@ -1432,12 +1860,12 @@ class Population:
         """
         Skriv tillbaka fauna till store, rebuild derived fields och emit loggar.
         """
-        for a in self.agents:
-            if not a.body.alive:
-                continue
-            if a.store_slot < 0:
-                continue
-            self.store.write_agent(a.store_slot, a, self.grid)
+        # OBS:
+        # Faunas löpande store-state skrivs nu i subsystempassen:
+        #   - spatial state i move_system
+        #   - alive i body/interaction/death
+        #   - mass/energy/damage/wear i body_system samt relevanta händelsepass
+        # Därför görs ingen generell fauna-writeback här längre.
     
         self.store.rebuild_spatial_index()
         self._flora_summary_cache = None
@@ -1458,9 +1886,13 @@ class Population:
         ctx = StepCtx(t=float(self.t), dt=dt, rng=self.rng)
     
         dM_growth_flora, flora_established, flora_dispersed_mass = self._step_world_and_flora()
-    
-        self._step_agents_policy(ctx)
-        self._step_predation(ctx)
+
+        self._step_metabolism_system(ctx)
+        sense_batch = self._step_sense_system(ctx)
+        decision_batch = self._step_decision_system(ctx, sense_batch)
+        body_batch = self._step_move_system(ctx, decision_batch)
+        self._step_body_system(ctx, body_batch)
+        self._step_interaction_system(ctx)
     
         deaths = self._step_deaths()
         births = self._step_births(ctx)
