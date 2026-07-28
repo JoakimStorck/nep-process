@@ -188,7 +188,10 @@ class Population:
         random.seed(self.seed)
         self.rng = np.random.default_rng(self.seed)
         self.world = World(self.WP)
-        self.grid = Grid(size=int(self.WP.size))
+        # Geometrin är en enda: dela världens Grid i stället för att instansiera
+        # en andra med samma parametrar. Grid bär förberäknade tabeller och ska
+        # inte finnas i två exemplar.
+        self.grid = self.world.grid
         self._banks = {}
 
         self.world.consume_food_hook = self.consume_food

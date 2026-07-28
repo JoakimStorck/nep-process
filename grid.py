@@ -1,12 +1,80 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
+
+import numpy as np
 
 
 @dataclass(frozen=True)
 class Grid:
+    """
+    Världens geometri. Enda plats i systemet där cellform, grannrelationer och
+    kopplingen mellan kontinuerlig position och cell-ID är känd.
+
+    Utöver de topologiska metoderna exponerar Grid förberäknade tabeller som
+    gör topologiska pass vektoriserbara utan Python-loop:
+
+        n_cells         antal celler
+        neighbor_idx    (n_cells, k) int32 — grannarnas cell-ID
+        neighbor_mask   (n_cells, k) bool  — vilka grannplatser som är giltiga
+        cell_lat        (n_cells,) float32 — normerad latitud i [-1, +1]
+        cell_center_x   (n_cells,) float32 — cellcentrums kontinuerliga position
+        cell_center_y   (n_cells,) float32
+
+    Tabellerna är geometrispecifika men gränssnittet är det inte: en hex-
+    implementation fyller samma tabeller med k=6 utan att någon anropare ändras.
+
+    `cell_lat` är en geometrisk egenskap — cellens normerade läge längs världens
+    andra axel. Vad latituden betyder klimatologiskt ägs av världslagret, inte
+    här.
+    """
+
     size: int
+
+    n_cells: int = field(init=False, repr=False, compare=False)
+    neighbor_idx: np.ndarray = field(init=False, repr=False, compare=False)
+    neighbor_mask: np.ndarray = field(init=False, repr=False, compare=False)
+    cell_lat: np.ndarray = field(init=False, repr=False, compare=False)
+    cell_center_x: np.ndarray = field(init=False, repr=False, compare=False)
+    cell_center_y: np.ndarray = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        s = int(self.size)
+        n = s * s
+
+        cells = np.arange(n, dtype=np.int64)
+        row = cells // s
+        col = cells % s
+
+        # Von Neumann-grannar i samma ordning som neighbors(): upp, ned, vänster, höger.
+        up = ((row - 1) % s) * s + col
+        down = ((row + 1) % s) * s + col
+        left = row * s + ((col - 1) % s)
+        right = row * s + ((col + 1) % s)
+
+        neighbor_idx = np.stack((up, down, left, right), axis=1).astype(np.int32, copy=False)
+
+        # På en torus är alla grannplatser giltiga. Masken finns för geometrier
+        # där de inte är det, så att anropare kan skrivas en gång.
+        neighbor_mask = np.ones(neighbor_idx.shape, dtype=np.bool_)
+
+        denom = float(max(1, s - 1))
+        cell_lat = (2.0 * (row.astype(np.float32) / np.float32(denom)) - np.float32(1.0)).astype(
+            np.float32, copy=False
+        )
+
+        object.__setattr__(self, "n_cells", int(n))
+        object.__setattr__(self, "neighbor_idx", neighbor_idx)
+        object.__setattr__(self, "neighbor_mask", neighbor_mask)
+        object.__setattr__(self, "cell_lat", cell_lat)
+        object.__setattr__(self, "cell_center_x", (col + 0.5).astype(np.float32, copy=False))
+        object.__setattr__(self, "cell_center_y", (row + 0.5).astype(np.float32, copy=False))
+
+    @property
+    def neighbor_count(self) -> int:
+        """Antal grannplatser per cell. 4 för kvadratisk von Neumann, 6 för hex."""
+        return int(self.neighbor_idx.shape[1])
 
     def wrap_pos(self, x: float, y: float) -> tuple[float, float]:
         s = float(self.size)
@@ -81,8 +149,6 @@ class Grid:
 
         med samma semantik som bilinear_corners(), men för hela fält av punkter.
         """
-        import numpy as np
-
         s = int(self.size)
         xs = np.asarray(xs, dtype=np.float32)
         ys = np.asarray(ys, dtype=np.float32)
