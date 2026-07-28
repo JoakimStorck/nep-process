@@ -87,7 +87,7 @@ Det är verklig arkitektur och motsvarar manifestets Fas 4-ordning. Tillståndet
 
 **Speglade från Body:** `mass`, `energy`, `energy_cap`, `damage`, `wear`. En synkhjälpare kopierar från `a.body.*`. `Body` är source of truth. Ärligt men omigrerat.
 
-**Delat ägarskap:** `gestating`, `gest_M`, `gest_E_J`. Skrivs från `a.body.*` och läses som auktoritativa ur store. Två skrivare till samma fält är exakt det mönster manifestet förbjuder. Det är i dag tre fält; det bör lösas innan det blir tio.
+**Gestationscache:** `gestating`, `gest_M`, `gest_E_J`, `gest_M_target`. `Body` äger dem fram till Steg 5, eftersom `gest_M` ackumuleras inne i `Body.step()`:s energibudget där fostermassan också belastar buren massa. Store-fälten är en envägscache för de slotbaserade reproduktionsgrindarna, skriven via `_write_gestation_to_store()` och bevakad av en invariant.
 
 ## B3. Aktiva delmängder finns inte
 
@@ -141,7 +141,7 @@ Locuskartan ägs korrekt av `phenotype.py`, som definierar `_T_*` för samtliga 
 
 ## B8. Testinfrastruktur
 
-`run_headless.py` kör utan pygame med exitkod vid invariantbrott. `invariants.py` prövar sju invarianter: slotbokföring, arrayernas indexdomäner, `cell_idx`-konsistens, id-unikhet och id→slot-bijektion, finita och icke-negativa storheter, spatialindexets integritet, samt `Agent.store_slot`-bindning.
+`run_headless.py` kör utan pygame med exitkod vid invariantbrott. `invariants.py` prövar åtta invarianter: slotbokföring, speglingen mellan `Body` och store, arrayernas indexdomäner, `cell_idx`-konsistens, id-unikhet och id→slot-bijektion, finita och icke-negativa storheter, spatialindexets integritet, samt `Agent.store_slot`-bindning.
 
 Massa- och energibalans är ännu diagnostik, inte assertion: systemet är öppet by construction och får en sluten balans först när näringskretsloppet finns.
 
@@ -194,9 +194,9 @@ Bilinjär sampling har ingen naturlig hexmotsvarighet och bör tas bort snarare 
 - ~~Indexdomäner vid dynamisk store-tillväxt.~~ **Klart** — latent krasch när `capacity` sammanföll med `n_cells`.
 - ~~Floras traitsemantik flyttad till `phenotype.py`.~~ **Klart.**
 - ~~Arbetsgrenen insmält i `main`.~~ **Klart.** Långlivade parallella grenar är avvecklade som arbetssätt.
-- Lös delat ägarskap för `gestating`, `gest_M`, `gest_E_J`. Välj en ägare per fält och dokumentera valet.
+- ~~Entydigt ägarskap för gestationstillståndet.~~ **Klart** — `Body` äger, store speglar envägs, divergens fångas av invariant.
 
-**Klart när:** ett kommando kör 10 000 tick headless med godkänd invariantsvit, och inget fält har två skrivare.
+**Steg 0 är avslutat.** `python run_headless.py --ticks 12000 --check-every 500` kör grönt, och inget fält har två skrivare.
 
 ## Steg 1 — Cellindexerade fält och grannmatris
 
