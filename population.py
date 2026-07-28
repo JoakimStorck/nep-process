@@ -1822,8 +1822,8 @@ class Population:
                     )
     
                 body.M = 0.0
-                body.E_fast = 0.0
-                body.E_slow = 0.0
+                body.M_fast = 0.0
+                body.M_slow = 0.0
     
                 deaths += 1
     

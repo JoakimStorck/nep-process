@@ -359,8 +359,12 @@ class Body:
     _D_prev: float = 0.0  # for dD/dt
 
     # energy buffers (weighted in E_total)
-    E_fast: float = 0.0
-    E_slow: float = 0.0
+    # Reservmassa i kilo, uppdelad i en snabbt och en långsamt tillgänglig pool.
+    # Tidigare låg de i viktade energienheter, vilket gjorde att energi kunde
+    # skapas och förstöras utan att någon massa rörde sig. Med massa som enhet
+    # följer näringen med, och energin härleds ur E_labile.
+    M_fast: float = 0.0
+    M_slow: float = 0.0
 
     # structural state
     M: float = 0.0        # body mass
@@ -390,8 +394,13 @@ class Body:
     gest_E_J: float = 0.0        # accumulated fetal energy in J (weighted space)
     gest_M_target: float = 0.0   # target fetal mass
     
+    def M_reserve(self) -> float:
+        """Total mobiliserbar reservmassa i kilo."""
+        return float(self.M_fast) + float(self.M_slow)
+
     def E_total(self) -> float:
-        return 0.6 * self.E_fast + 0.4 * self.E_slow
+        """Tillgänglig energi, härledd ur reservmassan."""
+        return self.M_reserve() * float(self.AP.E_labile_J_per_kg)
 
     def E_cap(self) -> float:
         M = self.M
@@ -485,31 +494,32 @@ class Body:
 
     def scale_energy(self, factor: float) -> None:
         f = max(0.0, float(factor))
-        self.E_fast = float(self.E_fast) * f
-        self.E_slow = float(self.E_slow) * f
+        self.M_fast = float(self.M_fast) * f
+        self.M_slow = float(self.M_slow) * f
 
     def take_energy(self, amount: float) -> float:
         amt = float(max(0.0, amount))
         if amt <= 0.0:
             return 0.0
 
-        Et = float(self.E_total())
-        if Et <= 1e-12:
+        e_lab = float(self.AP.E_labile_J_per_kg)
+        Mr = self.M_reserve()
+        if Mr <= 1e-15:
             return 0.0
 
-        share_fast = (0.6 * float(self.E_fast)) / max(Et, 1e-12)
-        share_slow = (0.4 * float(self.E_slow)) / max(Et, 1e-12)
+        # Uttaget fördelas proportionellt mot poolernas massa. Skillnaden mellan
+        # snabb och långsam ligger tills vidare bara i insättningskvoten; att
+        # göra den till en åtkomsttakt är en egen ändring.
+        want_kg = amt / e_lab
+        take_kg = want_kg if want_kg < Mr else Mr
 
-        d_fast = (amt * share_fast) / 0.6
-        d_slow = (amt * share_slow) / 0.4
+        d_fast = take_kg * (float(self.M_fast) / Mr)
+        d_slow = take_kg - d_fast
 
-        d_fast = min(d_fast, float(self.E_fast))
-        d_slow = min(d_slow, float(self.E_slow))
+        self.M_fast = max(0.0, float(self.M_fast) - d_fast)
+        self.M_slow = max(0.0, float(self.M_slow) - d_slow)
 
-        self.E_fast = max(0.0, float(self.E_fast) - d_fast)
-        self.E_slow = max(0.0, float(self.E_slow) - d_slow)
-
-        return float(0.6 * d_fast + 0.4 * d_slow)
+        return float(take_kg * e_lab)
         
     def start_gestation(self, M_target: float) -> bool:
         Mt = max(0.0, float(M_target))
@@ -547,8 +557,8 @@ class Body:
     def _guard_snapshot(self, where: str) -> dict:
         return {
             "where": where,
-            "E_fast": float(self.E_fast),
-            "E_slow": float(self.E_slow),
+            "M_fast": float(self.M_fast),
+            "M_slow": float(self.M_slow),
             "M": float(self.M),
             "D": float(self.D),
             "Fg": float(self.Fg),
@@ -617,8 +627,8 @@ class Body:
         # (0) Numerical guards (pre) — inlineat för att undvika metod-overhead
         # ---------------------------------------------------------
         if not (
-            math.isfinite(self.E_fast)
-            and math.isfinite(self.E_slow)
+            math.isfinite(self.M_fast)
+            and math.isfinite(self.M_slow)
             and math.isfinite(self.M)
             and math.isfinite(self.D)
             and math.isfinite(self.Fg)
@@ -748,10 +758,9 @@ class Body:
         dE_store = min(E_in, room)
 
         if dE_store > 0.0:
-            dE_fast_w = 0.85 * dE_store
-            dE_slow_w = 0.15 * dE_store
-            self.E_fast += dE_fast_w / WF
-            self.E_slow += dE_slow_w / WS
+            dM_store = dE_store / _E_labile
+            self.M_fast += 0.85 * dM_store
+            self.M_slow += 0.15 * dM_store
 
         E_to_M = max(0.0, E_in - dE_store)
         # OBS: energiöverskott lagras inte längre som massa här.
@@ -835,7 +844,7 @@ class Body:
                         if dM_cat_gest > 0.0:
                             self.M -= dM_cat_gest
                             E_from_M_gest = dM_cat_gest * _E_body * _cat_eff
-                            self.E_fast += E_from_M_gest / WF
+                            self.M_fast += E_from_M_gest / _E_labile
 
                         paid2 = float(self.take_energy(deficit_g))
 
@@ -915,7 +924,7 @@ class Body:
             if dM_cat > 0.0:
                 self.M   -= dM_cat
                 E_from_M  = dM_cat * _E_body * _cat_eff
-                self.E_fast += E_from_M / WF
+                self.M_fast += E_from_M / _E_labile
                 _k_cat_dmg = float(getattr(AP, 'k_cat_dmg', 1.0))
                 dD_cat = _k_cat_dmg * dM_cat / max(float(self.M), 1e-9)
                 self.D = clamp(float(self.D) + dD_cat, 0.0, _D_max)
@@ -1009,16 +1018,16 @@ class Body:
         if Et > Ecap:
             overflow = Et - Ecap
     
-            take_fast_w = min(WF * float(self.E_fast), overflow)
-            if take_fast_w > 0.0:
-                self.E_fast = float(self.E_fast) - (take_fast_w / WF)
-                overflow -= take_fast_w
+            take_fast = min(float(self.M_fast) * _E_labile, overflow)
+            if take_fast > 0.0:
+                self.M_fast = float(self.M_fast) - (take_fast / _E_labile)
+                overflow -= take_fast
     
             if overflow > 0.0:
-                take_slow_w = min(WS * float(self.E_slow), overflow)
-                if take_slow_w > 0.0:
-                    self.E_slow = float(self.E_slow) - (take_slow_w / WS)
-                    overflow -= take_slow_w
+                take_slow = min(float(self.M_slow) * _E_labile, overflow)
+                if take_slow > 0.0:
+                    self.M_slow = float(self.M_slow) - (take_slow / _E_labile)
+                    overflow -= take_slow
     
         # ---------------------------------------------------------
         # (5) Deterministic death conditions
@@ -1043,11 +1052,11 @@ class Body:
         # ---------------------------------------------------------
         clamped = False
     
-        if float(self.E_fast) < 0.0:
-            self.E_fast = 0.0
+        if float(self.M_fast) < 0.0:
+            self.M_fast = 0.0
             clamped = True
-        if float(self.E_slow) < 0.0:
-            self.E_slow = 0.0
+        if float(self.M_slow) < 0.0:
+            self.M_slow = 0.0
             clamped = True
         if float(self.M) < 0.0:
             self.M = 0.0
@@ -1069,8 +1078,8 @@ class Body:
             self.guard_last = self._guard_snapshot("post_clamp")
     
         if not (
-            math.isfinite(self.E_fast)
-            and math.isfinite(self.E_slow)
+            math.isfinite(self.M_fast)
+            and math.isfinite(self.M_slow)
             and math.isfinite(self.M)
             and math.isfinite(self.D)
             and math.isfinite(self.Fg)
@@ -1656,8 +1665,9 @@ class Agent:
         self.body.M = max(0.0, float(self.AP.M0))
 
         E0 = max(0.0, float(self.AP.E0))
-        self.body.E_fast = (0.85 * E0) / 0.6
-        self.body.E_slow = (0.15 * E0) / 0.4
+        e_lab = float(self.AP.E_labile_J_per_kg)
+        self.body.M_fast = (0.85 * E0) / e_lab
+        self.body.M_slow = (0.15 * E0) / e_lab
 
         self.body.Tb = float(getattr(self.AP, "Tb_init", 37.0))
         
@@ -2450,8 +2460,9 @@ class Agent:
         Ef_J = max(0.0, float(child_E_fast_J)) if child_E_fast_J is not None else 0.0
         Es_J = max(0.0, float(child_E_slow_J)) if child_E_slow_J is not None else 0.0
     
-        self.body.E_fast = Ef_J / float(self.WF)
-        self.body.E_slow = Es_J / float(self.WS)
+        e_lab = float(self.AP.E_labile_J_per_kg)
+        self.body.M_fast = Ef_J / e_lab
+        self.body.M_slow = Es_J / e_lab
     
         # ---- Clip to Ecap deterministiskt (weighted space) ----
         Et = float(self.body.E_total())
@@ -2459,17 +2470,17 @@ class Agent:
         overflow = Et - Ecap
         if overflow > 0.0:
             # take from fast first in weighted units
-            fast_w = float(self.WF) * float(self.body.E_fast)
+            fast_w = float(self.body.M_fast) * float(self.AP.E_labile_J_per_kg)
             take_fast_w = min(fast_w, overflow)
             if take_fast_w > 0.0:
-                self.body.E_fast = float(self.body.E_fast) - (take_fast_w / float(self.WF))
+                self.body.M_fast = float(self.body.M_fast) - (take_fast_w / float(self.AP.E_labile_J_per_kg))
                 overflow -= take_fast_w
     
             if overflow > 0.0:
-                slow_w = float(self.WS) * float(self.body.E_slow)
+                slow_w = float(self.body.M_slow) * float(self.AP.E_labile_J_per_kg)
                 take_slow_w = min(slow_w, overflow)
                 if take_slow_w > 0.0:
-                    self.body.E_slow = float(self.body.E_slow) - (take_slow_w / float(self.WS))
+                    self.body.M_slow = float(self.body.M_slow) - (take_slow_w / float(self.AP.E_labile_J_per_kg))
                     overflow -= take_slow_w
     
         # ---- Other body fields ----

@@ -39,8 +39,8 @@ def _body_state(a: Agent) -> Dict[str, float]:
     b = a.body
     return {
         "E": float(b.E_total()),
-        "E_fast": float(b.E_fast),
-        "E_slow": float(b.E_slow),
+        "M_fast": float(b.M_fast),
+        "M_slow": float(b.M_slow),
         "M": float(getattr(b, "M", float("nan"))),
         "Fg": float(b.Fg),
         "D": float(b.D),
@@ -60,8 +60,8 @@ def step_record(t: float, agent: Agent, B0: float, C0: float) -> Dict[str, Any]:
 
         # body
         "E": float(agent.body.E_total()),
-        "E_fast": float(agent.body.E_fast),
-        "E_slow": float(agent.body.E_slow),
+        "M_fast": float(agent.body.M_fast),
+        "M_slow": float(agent.body.M_slow),
         "M": float(getattr(agent.body, "M", float("nan"))),
         "D": float(agent.body.D),
         "Fg": float(agent.body.Fg),
@@ -126,8 +126,8 @@ def birth_record(t: float, child: Agent, parent: Optional[Agent]) -> Dict[str, A
 
         # include M at birth
         "state": {
-            "E_fast": float(child.body.E_fast),
-            "E_slow": float(child.body.E_slow),
+            "M_fast": float(child.body.M_fast),
+            "M_slow": float(child.body.M_slow),
             "M": float(getattr(child.body, "M", float("nan"))),
             "Fg": float(child.body.Fg),
             "D": float(child.body.D),

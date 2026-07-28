@@ -90,8 +90,8 @@ class LifeObserver:
             "policy": {"key": _policy_key(g), "layer_sizes": list(g.layer_sizes), "act": str(g.act)},
             "traits": None if g.traits is None else [float(x) for x in g.traits.tolist()],
             "state": {
-                "E_fast": float(child.body.E_fast),
-                "E_slow": float(child.body.E_slow),
+                "M_fast": float(child.body.M_fast),
+                "M_slow": float(child.body.M_slow),
                 "Fg": float(child.body.Fg),
                 "D": float(child.body.D),
             },
@@ -109,8 +109,8 @@ class LifeObserver:
             "pos": {"x": float(agent.x), "y": float(agent.y)},
             "state": {
                 "E": float(agent.body.E_total()),
-                "E_fast": float(agent.body.E_fast),
-                "E_slow": float(agent.body.E_slow),
+                "M_fast": float(agent.body.M_fast),
+                "M_slow": float(agent.body.M_slow),
                 "Fg": float(agent.body.Fg),
                 "D": float(agent.body.D),
                 "hunger": float(agent.body.hunger()),
