@@ -2219,7 +2219,40 @@ class Agent:
             amount=want_kg,
             prefer_detritus=True,
         )
+
+        self._excrete(world, got_l, e_l)
+        self._excrete(world, got_d, e_d)
+
         return float(got_l), float(got_d), float(e_l), float(e_d)
+
+    def _excrete(self, world: World, mass_kg: float, energy_J: float) -> None:
+        """
+        Återför den massa som inte assimileras till cellen som detritus.
+
+        Utan detta försvinner allt ätet ur modellen: kroppsmassan växer ur
+        energibudgeten och den ingesterade massan bokförs ingenstans.
+
+        Den assimilerade massandelen är den labila fraktion som faktiskt smälts,
+        alltså (1 - struktur) * matsmältningsverkningsgrad. Resten passerar
+        igenom. Eftersom strukturmaterialet passerar i sin helhet medan bara en
+        del av det labila gör det, är exkrementet mer strukturrikt än födan —
+        betning koncentrerar segt material i detrituspoolen.
+        """
+        m = float(mass_kg)
+        if m <= 1e-15:
+            return
+
+        e_lab = float(self.AP.E_labile_J_per_kg)
+        s_in = 1.0 - (float(energy_J) / max(m * e_lab, 1e-30))
+        s_in = min(1.0, max(0.0, s_in))
+
+        assim_frac = (1.0 - s_in) * digestion_efficiency(s_in)
+        out_kg = m * max(0.0, 1.0 - assim_frac)
+        if out_kg <= 1e-15:
+            return
+
+        s_out = min(1.0, max(0.0, m * s_in / out_kg))
+        world.excrete_at(self.x, self.y, out_kg, s_out)
     
     
     def _activity_proxy(

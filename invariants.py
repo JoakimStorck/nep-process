@@ -423,6 +423,8 @@ def check_sparse_fields(pop) -> list[Violation]:
     world = pop.world
     out: list[Violation] = []
 
+    if hasattr(world, "_detritus_flush"):
+        world._detritus_flush()
     member = getattr(world, "_detritus_member", None)
     active = getattr(world, "_detritus_active", None)
     if member is None or active is None:

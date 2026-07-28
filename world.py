@@ -158,6 +158,15 @@ class World:
         # långsammare. Samma kadensklass och samma aktiva mängd som detritus.
         self.detritus_structure = np.zeros(nc, dtype=np.float32)
 
+        # Ackumulerad exkreterad massa sedan senaste ledgeruppdatering.
+        self._dM_excreted = 0.0
+
+        # Aktiveringar och avaktiveringar samlas och slås ihop en gång per tick.
+        # Att göra dem direkt mot arrayen kostade O(n) per händelse, vilket dög
+        # för sällsynta kadaver men inte för exkretion i varje betningshändelse.
+        self._detritus_pending: list[int] = []
+        self._detritus_dirty = False
+
         # --- härledda: flödesstyrkan är noll tills hydro räknar grannflöde ---
         self.flow_strength = 0.0
 
@@ -293,11 +302,31 @@ class World:
         self._update_temperature()
 
     def _detritus_activate(self, cell: int) -> None:
-        """Markera en cell som nollskild. Idempotent."""
+        """Markera en cell som nollskild. Idempotent, O(1)."""
         c = int(cell)
         if not self._detritus_member[c]:
             self._detritus_member[c] = True
-            self._detritus_active = np.append(self._detritus_active, np.int32(c))
+            self._detritus_pending.append(c)
+
+    def _detritus_flush(self) -> None:
+        """
+        Slå ihop väntande aktiveringar och släpp avaktiverade celler.
+
+        Dedupliceringen är nödvändig och inte defensiv: en cell som töms och
+        fylls igen innan flush hinner köra hamnar annars två gånger i mängden,
+        eftersom medlemsflaggan är sann både före och efter.
+        """
+        if self._detritus_pending:
+            add = np.asarray(self._detritus_pending, dtype=np.int32)
+            self._detritus_active = np.concatenate((self._detritus_active, add))
+            self._detritus_pending = []
+            self._detritus_dirty = True
+        if self._detritus_dirty:
+            act = self._detritus_active
+            if act.size:
+                act = act[self._detritus_member[act]]
+                self._detritus_active = np.unique(act).astype(np.int32, copy=False)
+            self._detritus_dirty = False
 
     def _detritus_add(self, cell: int, amount: float, structure: float) -> None:
         """
@@ -328,12 +357,12 @@ class World:
             self.detritus[c] = np.float32(0.0)
             self.detritus_structure[c] = np.float32(0.0)
             self._detritus_member[c] = False
-            act = self._detritus_active
-            self._detritus_active = act[act != np.int32(c)]
+            self._detritus_dirty = True
 
     @property
     def detritus_active_cells(self) -> np.ndarray:
         """Celler med nollskilt detritus. Läsvy för pass och diagnostik."""
+        self._detritus_flush()
         return self._detritus_active
 
     @property
@@ -398,6 +427,7 @@ class World:
         I patch 1 görs endast enkel decay av detritus. Ingen diffusion och ingen
         överföring till nutrient ännu. Source of truth är self.detritus.
         """
+        self._detritus_flush()
         act = self._detritus_active
         if act.size == 0:
             return 0.0, 0.0
@@ -591,6 +621,23 @@ class World:
     
         got_d, e_d = self._consume_from_field(self.detritus, x, y, amt)
         return 0.0, float(got_d), 0.0, float(e_d)
+
+    def excrete_at(self, x: float, y: float, amount_kg: float, structure: float) -> float:
+        """
+        Återför icke assimilerad massa till cellen som detritus.
+
+        Till skillnad från add_carcass sprids inget: exkrementet hamnar där
+        organismen står. Returnerar tillförd massa för ledgern.
+        """
+        amt = float(amount_kg)
+        if not (math.isfinite(amt) and amt > 0.0):
+            return 0.0
+        if not (math.isfinite(float(x)) and math.isfinite(float(y))):
+            return 0.0
+        cell = int(self.grid.cell_of(float(x), float(y)))
+        self._detritus_add(cell, amt, float(structure))
+        self._dM_excreted += amt
+        return amt
 
     def add_carcass(self, x: float, y: float, amount_kg: float, rad: int = 3,
                     structure: float = 0.45) -> None:
