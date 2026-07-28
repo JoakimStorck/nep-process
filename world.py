@@ -151,9 +151,23 @@ class World:
             "E_loss_decay": 0.0,
         }
 
-        # Latitudprofilen är en geometrisk egenskap och kommer från Grid.
-        # Vad latituden betyder klimatologiskt ägs däremot här.
-        lat = np.asarray(self.grid.cell_lat, dtype=np.float32)
+        # Latitudprofilen är periodisk runt torusen: sydpol -> ekvator ->
+        # nordpol -> ekvator -> sydpol. Det ger två kalla band åtskilda av två
+        # tempererade zoner, med motfasiga årstider.
+        #
+        # Den tidigare linjära profilen gick -1 till +1 utan att sluta sig, och
+        # eftersom världen wrappar i y hamnade de båda polerna kant i kant med
+        # en säsongsdiskontinuitet på 24 degC emellan — tio gånger brantare än
+        # någon verklig klimatgradient i världen, och ett artefakt snarare än en
+        # barriär organismer kan anpassa sig till. Den gav dessutom ett enda
+        # sammanhängande kallt band, inte två isolerade.
+        #
+        # Grid.cell_lat bär cellens normerade radläge; klimatets tolkning av det
+        # ägs här.
+        H = max(1, int(self.grid.height))
+        W = max(1, int(self.grid.width))
+        rows = np.arange(int(self.grid.n_cells), dtype=np.int64) // W
+        lat = (-np.cos(2.0 * np.pi * rows.astype(np.float64) / float(H))).astype(np.float32)
         abs_lat = np.abs(lat)
 
         self._lat = lat
