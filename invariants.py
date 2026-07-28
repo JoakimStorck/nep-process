@@ -431,6 +431,80 @@ def check_all(pop, tick: int = -1) -> InvariantReport:
 # Diagnostik — spåras men assertas inte
 # ---------------------------------------------------------------------------
 
+def check_grid_reference(grid, sample_stride: int = 1) -> list[Violation]:
+    """
+    Referensegenskaper för en geometriimplementation.
+
+    Prövar en Grid mot egenskaper som måste hålla oavsett cellform, så att en ny
+    geometri kan valideras innan den kopplas in. Grafavståndet från
+    bredden-först-sökning är facit; en sluten avståndsformel måste stämma med
+    det, inte tvärtom.
+    """
+    from collections import deque
+
+    out: list[Violation] = []
+    n = int(grid.n_cells)
+    k = int(grid.neighbor_count)
+    idx = np.asarray(grid.neighbor_idx)
+
+    cells = range(0, n, max(1, int(sample_stride)))
+
+    for c in cells:
+        nbs = [int(v) for v in idx[c]]
+        if len(set(nbs)) != k:
+            out.append(Violation("grid_reference", f"cell {c} har {len(set(nbs))} distinkta grannar, förväntat {k}"))
+            break
+        if c in nbs:
+            out.append(Violation("grid_reference", f"cell {c} är sin egen granne"))
+            break
+        for nb in nbs:
+            if c not in [int(v) for v in idx[nb]]:
+                out.append(Violation("grid_reference", f"grannrelation {c}->{nb} är inte ömsesidig"))
+                break
+        else:
+            continue
+        break
+
+    cx = np.asarray(grid.cell_center_x, dtype=np.float64)
+    cy = np.asarray(grid.cell_center_y, dtype=np.float64)
+    back = np.asarray(grid.cell_of_many(cx, cy), dtype=np.int64)
+    bad = np.flatnonzero(back != np.arange(n))
+    if bad.size:
+        out.append(Violation("grid_reference", f"cell_of(cellcentrum) fel för {bad.size} celler, t.ex. {bad[:MAX_EXAMPLES].tolist()}"))
+
+    src = n // 3
+    dist = np.full(n, -1, dtype=np.int32)
+    dist[src] = 0
+    q = deque([src])
+    while q:
+        c = q.popleft()
+        for nb in idx[c]:
+            nb = int(nb)
+            if dist[nb] < 0:
+                dist[nb] = dist[c] + 1
+                q.append(nb)
+
+    if int(dist.min()) < 0:
+        out.append(Violation("grid_reference", "grafen är inte sammanhängande"))
+
+    for t in range(0, n, max(1, n // 200)):
+        if int(grid.distance(src, t)) != int(dist[t]):
+            out.append(Violation(
+                "grid_reference",
+                f"distance({src},{t})={int(grid.distance(src, t))} men grafavstånd {int(dist[t])}",
+            ))
+            break
+
+    for r in range(4):
+        want = set(np.flatnonzero(dist <= r).tolist())
+        got = set(int(v) for v in grid.cells_within(src, r))
+        if want != got:
+            out.append(Violation("grid_reference", f"cells_within(r={r}) ger {len(got)} celler, avstånd ger {len(want)}"))
+            break
+
+    return out
+
+
 def diagnostics(pop) -> dict[str, Any]:
     """
     Storheter som är intressanta att följa men som ännu inte har en sluten
