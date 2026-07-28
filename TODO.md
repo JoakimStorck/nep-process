@@ -263,7 +263,32 @@ Kadensklasserna ska in i manifestet innan hydro byggs, så att `hydro_pass` och 
 - Flera floraindivider per cell tillåts, konkurrerande om samma cellnäring.
 - Spridnings- och diffusionstakter kalibreras för sex grannar. Punkten låg först i Steg 2 men flyttades hit: `transport_pass()` returnerade noll, så det fanns ingen diffusion att kalibrera, och att finjustera floras spridningstakt i en modell utan mortalitet vore att kalibrera fel sak. Hela tillväxtdynamiken byter karaktär här ändå.
 
-**Klart när:** floran når ett stationärt tillstånd satt av näringstillgång; massan sluter sig i ledgern så att balansen kan bli hård invariant; och flora med olika `uptake_capacity` uppvisar mätbart olika överlevnad.
+### Substratets struktur
+
+*Underlag: `docs/substratets-struktur.md`.*
+
+När floran får mortalitet hamnar dött växtmaterial i samma `detritus` som kadaver. För att asätare och detritivorer ska kunna differentiera sig bär detritus en ärvd egenskap i stället för att delas i två fält — ett typfält vore just den artgräns manifestet säger att vi inte kodar.
+
+Egenskapen är **strukturandel**: hur stor del av vävnaden som är segt bärande material — lignin och cellulosa hos växter, kitin och ben hos djur — mot lättomsatt protein, socker och fett. Samma tal beskriver båda ontologierna, vilket är vad manifestet kräver.
+
+Manifestets `digestibility` utgår. Den har ingen uppsida: ingen organism vinner på att vara lättare att äta, så selektionen driver den mot noll och axeln dör. `defense` lämnas orörd — aktivt avskräckande är inte samma sak som passiv seghet.
+
+Följande konsekvenser införs i det här steget, alla med omedelbara läsare:
+
+- `structure` som locus, gemensamt för flora och fauna
+- byggkostnad i tillväxt: strukturmaterial kostar mer energi per kilo massa
+- energitäthet: strukturmassa lagrar ingen användbar energi, så reserven per kilo sjunker
+- nedbrytningstakt som avtar med strukturandel
+- näringsfrisättning som följer nedbrytningen, alltså utdragen i stället för pulsad
+- betningsutbyte per kilo som sjunker med strukturandel
+
+`detritus` får ett andra glest fält med massviktad medelstrukturandel i samma aktiva mängd och under samma kontrakt.
+
+Underhållskostnad som *sjunker* med strukturandel, och matsmältningskapacitet på konsumentsidan, hör till Steg 6 tillsammans med övriga kapacitetskostnader.
+
+**Krav på varje ny trait.** En trait med en enda konsekvens är ett reglage, inte en anpassning — selektionen hittar optimum och stannar. Diversitet uppstår först när samma tal har motverkande konsekvenser, så att olika nischer gynnar olika värden. Varje ny trait ska prövas mot det: kan den dras åt båda håll av olika selektionstryck? Kan den inte det är den antingen en konstant i förklädnad eller en axel som kommer att kollapsa.
+
+**Klart när:** floran når ett stationärt tillstånd satt av näringstillgång; massan sluter sig i ledgern så att balansen kan bli hård invariant; flora med olika `uptake_capacity` uppvisar mätbart olika överlevnad; och `structure` uppvisar spridning i stället för att kollapsa mot en ände.
 
 Här får Fas 2:s ekologiska hypotes sitt första riktiga svar. Blir svaret nej — revidera floramodellen, inte kärnan.
 
