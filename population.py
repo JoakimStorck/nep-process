@@ -1170,7 +1170,7 @@ class Population:
             if cell < 0:
                 continue
         
-            T = float(self.world.T_cell[cell])
+            T = self.world.temperature_of_cell(cell)
         
             m_cap = max(1e-12, float(self.store.flora_adult_mass[slot]))
             regen = max(0.0, float(self.store.flora_growth_rate[slot]))

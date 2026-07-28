@@ -58,6 +58,7 @@ class Grid:
     neighbor_idx: np.ndarray = field(init=False, repr=False, compare=False)
     neighbor_mask: np.ndarray = field(init=False, repr=False, compare=False)
     cell_lat: np.ndarray = field(init=False, repr=False, compare=False)
+    band_lat: np.ndarray = field(init=False, repr=False, compare=False)
     cell_center_x: np.ndarray = field(init=False, repr=False, compare=False)
     cell_center_y: np.ndarray = field(init=False, repr=False, compare=False)
 
@@ -103,7 +104,12 @@ class Grid:
         neighbor_idx = np.stack((west, east, nw, ne, sw, se), axis=1).astype(np.int32, copy=False)
         neighbor_mask = np.ones(neighbor_idx.shape, dtype=np.bool_)
 
-        lat = (-np.cos(2.0 * np.pi * row.astype(np.float64) / float(h))).astype(np.float32)
+        # Latitud är en bandegenskap: alla celler i samma band delar den. Bandet
+        # är den enhet klimatet varierar över, och att lagra profilen per band i
+        # stället för per cell är skillnaden mellan O(H) och O(H*W) arbete varje
+        # tick. cell_lat materialiseras för de anropare som behöver hela fältet.
+        band_lat = (-np.cos(2.0 * np.pi * np.arange(h, dtype=np.float64) / float(h))).astype(np.float32)
+        lat = band_lat[row]
 
         cx = ((col.astype(np.float64) + 0.5 + 0.5 * odd) * self.COL_SPACING).astype(np.float32)
         cy = ((row.astype(np.float64) + 0.5) * self.ROW_SPACING).astype(np.float32)
@@ -112,6 +118,7 @@ class Grid:
         object.__setattr__(self, "neighbor_idx", neighbor_idx)
         object.__setattr__(self, "neighbor_mask", neighbor_mask)
         object.__setattr__(self, "cell_lat", lat)
+        object.__setattr__(self, "band_lat", band_lat)
         object.__setattr__(self, "cell_center_x", cx)
         object.__setattr__(self, "cell_center_y", cy)
 
@@ -132,6 +139,27 @@ class Grid:
     @property
     def neighbor_count(self) -> int:
         return 6
+
+    @property
+    def n_bands(self) -> int:
+        """
+        Antal latitudband. Celler i samma band har identisk latitud och därmed
+        identiskt klimat, vilket låter världen lagra klimatfält per band i
+        stället för per cell.
+        """
+        return int(self.height)
+
+    def band_of_cell(self, cell: int) -> int:
+        """Bandindex för en cell. Skalär, ren Python — anropas i heta vägar."""
+        return (int(cell) % int(self.n_cells)) // int(self.width)
+
+    def bands_of_cells(self, cells: object) -> np.ndarray:
+        """
+        Vektoriserad bandindexering. Materialiserar avsiktligt ingen array med
+        längd n_cells: bandindex räknas ut ur cell-ID vid behov.
+        """
+        c = np.asarray(cells, dtype=np.int64) % np.int64(self.n_cells)
+        return (c // np.int64(self.width)).astype(np.int32, copy=False)
 
     def random_position(self, rng) -> tuple[float, float]:
         return (float(rng.uniform(0.0, self.extent_x)),

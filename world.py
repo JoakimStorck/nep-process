@@ -154,37 +154,33 @@ class World:
             "E_loss_decay": 0.0,
         }
 
+        # Klimatet är en bandegenskap: latituden varierar bara mellan band, och
+        # celler i samma band har identiskt klimat. Profilerna lagras därför per
+        # band, inte per cell — O(H) i stället för O(H*W) arbete varje tick.
+        #
         # Latitudprofilen är periodisk runt torusen: sydpol -> ekvator ->
-        # nordpol -> ekvator -> sydpol. Det ger två kalla band åtskilda av två
-        # tempererade zoner, med motfasiga årstider.
+        # nordpol -> ekvator -> sydpol. Den tidigare linjära profilen slöt sig
+        # inte, och eftersom världen wrappar i y hamnade båda polerna kant i
+        # kant med en säsongsdiskontinuitet emellan.
         #
-        # Den tidigare linjära profilen gick -1 till +1 utan att sluta sig, och
-        # eftersom världen wrappar i y hamnade de båda polerna kant i kant med
-        # en säsongsdiskontinuitet på 24 degC emellan — tio gånger brantare än
-        # någon verklig klimatgradient i världen, och ett artefakt snarare än en
-        # barriär organismer kan anpassa sig till. Den gav dessutom ett enda
-        # sammanhängande kallt band, inte två isolerade.
-        #
-        # Grid.cell_lat bär cellens normerade radläge; klimatets tolkning av det
+        # Grid äger bandindelningen och latituden; klimatets tolkning av den
         # ägs här.
-        H = max(1, int(self.grid.height))
-        W = max(1, int(self.grid.width))
-        rows = np.arange(int(self.grid.n_cells), dtype=np.int64) // W
-        lat = (-np.cos(2.0 * np.pi * rows.astype(np.float64) / float(H))).astype(np.float32)
+        lat = np.asarray(self.grid.band_lat, dtype=np.float32)
         abs_lat = np.abs(lat)
 
         self._lat = lat
         self._abs_lat = abs_lat
-        self._Tmean_cell = np.float32(self.WP.T_eq) - np.float32(self.WP.dT_pole) * (
+        self._Tmean_band = np.float32(self.WP.T_eq) - np.float32(self.WP.dT_pole) * (
             abs_lat ** np.float32(self.WP.lat_p)
         )
-        self._Amp_cell = np.float32(self.WP.A_eq) + (np.float32(self.WP.A_pole) - np.float32(self.WP.A_eq)) * (
+        self._Amp_band = np.float32(self.WP.A_eq) + (np.float32(self.WP.A_pole) - np.float32(self.WP.A_eq)) * (
             abs_lat ** np.float32(self.WP.amp_q)
         )
 
-        # Senast beräknade fält, per cell
-        self.T_cell = np.zeros(nc, dtype=np.float32)   # degC per cell
-        self.g_cell = np.ones(nc, dtype=np.float32)    # tillväxtgrind per cell i [0,1]
+        # Senast beräknade klimatfält, per band
+        n_bands = int(self.grid.n_bands)
+        self.T_band = np.zeros(n_bands, dtype=np.float32)   # degC per band
+        self.g_band = np.ones(n_bands, dtype=np.float32)    # tillväxtgrind per band
 
         # initialize temperature profiles at t=0
         self._update_temperature()
@@ -201,32 +197,48 @@ class World:
         phase -= float(WP.season_phase0)
 
         s = np.float32(math.sin(phase))
-        S_cell = self._lat * s  # (n_cells,)
+        S_band = self._lat * s  # (n_bands,)
 
-        T_cell = self._Tmean_cell + self._Amp_cell * S_cell
-        self.T_cell = T_cell.astype(np.float32, copy=False)
+        T_band = self._Tmean_band + self._Amp_band * S_band
+        self.T_band = T_band.astype(np.float32, copy=False)
 
         T0 = float(WP.T0)
         T1 = float(WP.T1)
         if T1 <= T0 + 1e-9:
-            g_cell = (T_cell >= np.float32(T0)).astype(np.float32)
+            g_band = (T_band >= np.float32(T0)).astype(np.float32)
         else:
-            g_cell = (T_cell - np.float32(T0)) / np.float32(T1 - T0)
-            g_cell = np.clip(g_cell, 0.0, 1.0).astype(np.float32, copy=False)
+            g_band = (T_band - np.float32(T0)) / np.float32(T1 - T0)
+            g_band = np.clip(g_band, 0.0, 1.0).astype(np.float32, copy=False)
 
-        self.g_cell = g_cell
-
-    def temperature_field(self) -> np.ndarray:
-        """Temperatur per cell, indexerad med cell_idx."""
-        return self.T_cell
-
-    def growth_gate_field(self) -> np.ndarray:
-        """Tillväxtgrind per cell, indexerad med cell_idx."""
-        return self.g_cell
+        self.g_band = g_band
 
     def temperature_of_cell(self, cell: int) -> float:
-        """Temperatur i en cell. Den form biologin bör använda."""
-        return float(self.T_cell[int(cell)])
+        """Temperatur i en cell. Den form biologin ska använda."""
+        return float(self.T_band[self.grid.band_of_cell(cell)])
+
+    def temperature_of_cells(self, cells: np.ndarray) -> np.ndarray:
+        """Temperatur för en mängd celler, utan att materialisera hela fältet."""
+        return self.T_band[self.grid.bands_of_cells(cells)]
+
+    def growth_gate_of_cell(self, cell: int) -> float:
+        return float(self.g_band[self.grid.band_of_cell(cell)])
+
+    def growth_gate_of_cells(self, cells: np.ndarray) -> np.ndarray:
+        return self.g_band[self.grid.bands_of_cells(cells)]
+
+    def temperature_field(self) -> np.ndarray:
+        """
+        Hela temperaturfältet per cell.
+
+        Materialiserar en array med längd n_cells och kostar därmed O(n_cells).
+        Avsedd för visning och diagnostik, inte för systempass — dessa ska
+        använda temperature_of_cell() eller temperature_of_cells().
+        """
+        return self.T_band[self.grid.bands_of_cells(np.arange(int(self.grid.n_cells)))]
+
+    def growth_gate_field(self) -> np.ndarray:
+        """Hela tillväxtgrindsfältet per cell. Samma kostnadsanmärkning som ovan."""
+        return self.g_band[self.grid.bands_of_cells(np.arange(int(self.grid.n_cells)))]
 
     def temperature_at(self, x: float, y: float) -> float:
         """
@@ -246,12 +258,16 @@ class World:
     # -------------------------
     # Abiotiska världspass
     # -------------------------
-    def temperature_pass(self) -> np.ndarray:
+    def temperature_pass(self) -> None:
         """
-        Uppdatera temperaturprofilen för aktuell tid och returnera temperaturfältet T.
+        Uppdatera klimatprofilerna för aktuell tid.
+
+        Returnerar inget fält. Att materialisera temperaturen per cell vore
+        O(n_cells) arbete varje tick för information som ryms i n_bands värden,
+        och ingen anropare behövde det. Läsare använder temperature_of_cell()
+        eller temperature_of_cells().
         """
         self._update_temperature()
-        return self.temperature_field()
 
     def hydro_pass(self) -> tuple[float, float]:
         """

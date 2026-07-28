@@ -274,10 +274,9 @@ class WorldViewer:
     @staticmethod
     def _temp_field(world, like: np.ndarray) -> np.ndarray:
         """Temperatur per cell, platt."""
-        T = getattr(world, "T_cell", None)
-        if T is None:
+        if not hasattr(world, "temperature_field"):
             return np.zeros_like(like, dtype=np.float32)
-        return np.asarray(T, dtype=np.float32)
+        return np.asarray(world.temperature_field(), dtype=np.float32)
 
     def _make_rgb(self, pop) -> np.ndarray:
         """Färg per cell, (n_cells, 3) uint8."""
@@ -560,19 +559,20 @@ class WorldViewer:
 
         tmean = tmin = tmax = float("nan")
         tmeanN = tmeanS = float("nan")
-        T = getattr(getattr(pop, "world", None), "T_cell", None)
-        if T is not None:
-            T = np.asarray(T, dtype=np.float32)
-            if T.size:
-                tmean = float(np.mean(T))
-                tmin = float(np.min(T))
-                tmax = float(np.max(T))
-                # Halvkloten avgörs av latitudens tecken, inte av radindex.
-                lat = np.asarray(pop.grid.cell_lat, dtype=np.float32)
+        Tb = getattr(getattr(pop, "world", None), "T_band", None)
+        if Tb is not None:
+            Tb = np.asarray(Tb, dtype=np.float32)
+            if Tb.size:
+                # Banden är likstora, så bandstatistik är cellstatistik.
+                tmean = float(np.mean(Tb))
+                tmin = float(np.min(Tb))
+                tmax = float(np.max(Tb))
+                # Halvkloten avgörs av latitudens tecken, inte av bandindex.
+                lat = np.asarray(pop.grid.band_lat, dtype=np.float32)
                 north = lat > 0.0
                 if north.any() and (~north).any():
-                    tmeanN = float(np.mean(T[north]))
-                    tmeanS = float(np.mean(T[~north]))
+                    tmeanN = float(np.mean(Tb[north]))
+                    tmeanS = float(np.mean(Tb[~north]))
 
         flora_n = 0
         flora_mass = 0.0

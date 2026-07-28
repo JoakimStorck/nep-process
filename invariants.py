@@ -358,7 +358,6 @@ WORLD_CELL_FIELDS = (
     "elevation", "water", "nutrient", "detritus",
     "rain_input", "spring_input", "infiltration", "evaporation",
     "surface_level", "submerged", "flow_strength",
-    "T_cell", "g_cell",
 )
 
 

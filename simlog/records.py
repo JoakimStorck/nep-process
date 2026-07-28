@@ -220,7 +220,7 @@ def world_record(t: float, world: World, with_percentiles: bool = True) -> Dict[
     }
 
     # Temperaturfältet är legitim world-data; per cell sedan geometrin blev abstrakt.
-    T = getattr(world, "T_cell", None)
+    T = getattr(world, "T_band", None)
     if T is not None:
         T = np.asarray(T, dtype=np.float32)
         s["T"] = stats(T) if with_percentiles else {"mean": float(T.mean()), "sum": float(T.sum())}
