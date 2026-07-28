@@ -81,7 +81,7 @@ class OrganismStore:
     """
 
     capacity: int
-    world_size: int
+    n_cells: int
 
     free_slots: list[int] = field(init=False, default_factory=list)
     
@@ -149,7 +149,7 @@ class OrganismStore:
     def __post_init__(self) -> None:
         cap = int(self.capacity)
 
-        n_cells = int(self.world_size) * int(self.world_size)
+        n_cells = int(self.n_cells)
         self.free_slots = list(range(cap - 1, -1, -1))
 
         self.id = np.full(cap, -1, dtype=np.int32)

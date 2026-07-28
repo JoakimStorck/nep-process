@@ -200,7 +200,7 @@ class Population:
         
         self.store = OrganismStore(
             capacity=int(self.PP.max_pop),
-            world_size=int(self.WP.size),
+            n_cells=int(self.grid.n_cells),
         )
         self._slot_to_agent = [None] * int(self.PP.max_pop)        
 
@@ -249,8 +249,7 @@ class Population:
             g.init_random(self.rng, init_traits_if_missing=False)
 
             # Sprid ut agenter över hela världen
-            x = float(self.rng.uniform(0.0, float(self.WP.size)))
-            y = float(self.rng.uniform(0.0, float(self.WP.size)))
+            x, y = self.grid.random_position(self.rng)
 
             a = Agent(
                 AP=self.AP,
@@ -1020,8 +1019,7 @@ class Population:
         """
         Skapa initial diskret flora direkt i OrganismStore, utan world.B som mellanlager.
         """
-        size = int(self.WP.size)
-        n_cells = size * size
+        n_cells = int(self.grid.n_cells)
         BK = float(self.WP.B_K)
         if BK <= 0.0:
             return 0

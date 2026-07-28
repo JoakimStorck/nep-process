@@ -72,6 +72,29 @@ class Grid:
         object.__setattr__(self, "cell_center_y", (row + 0.5).astype(np.float32, copy=False))
 
     @property
+    def extent_x(self) -> float:
+        """
+        Världens utsträckning i kontinuerligt rum längs x.
+
+        Sammanfaller med antalet celler bara för kvadratgeometri. På hex är
+        cellbredden inte 1, och utsträckningen skiljer sig därför från
+        cellantalet — anropare ska aldrig anta att de är samma tal.
+        """
+        return float(self.size)
+
+    @property
+    def extent_y(self) -> float:
+        """Världens utsträckning i kontinuerligt rum längs y."""
+        return float(self.size)
+
+    def random_position(self, rng) -> tuple[float, float]:
+        """Enhetligt fördelad position i världen. Geometrin äger sin egen form."""
+        return (
+            float(rng.uniform(0.0, self.extent_x)),
+            float(rng.uniform(0.0, self.extent_y)),
+        )
+
+    @property
     def neighbor_count(self) -> int:
         """Antal grannplatser per cell. 4 för kvadratisk von Neumann, 6 för hex."""
         return int(self.neighbor_idx.shape[1])
