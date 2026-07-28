@@ -21,6 +21,26 @@ import itertools as _itertools
 _organism_id_counter = _itertools.count(1)
 
 
+# ---------------------------------------------------------------------------
+# Arrayernas indexdomäner
+# ---------------------------------------------------------------------------
+# Store:n innehåller arrayer i tre olika indexdomäner. Bara den första växer
+# med slotkapaciteten.
+#
+#   slotindexerade   längd = capacity   (id, alive, mass, cell_slots, ...)
+#   cellindexerade   längd = n_cells    (cell_counts, flora_cell_mass)
+#                    längd = n_cells+1  (cell_offsets)
+#   id-indexerade    egen tillväxt      (id_to_slot_arr)
+#
+# Nya fält som inte är slotindexerade MÅSTE läggas till här.
+_NON_SLOT_ARRAYS = frozenset({
+    "id_to_slot_arr",
+    "cell_counts",
+    "cell_offsets",
+    "flora_cell_mass",
+})
+
+
 def next_organism_id() -> int:
     """Allokera nästa biologiska organism-id. Återanvänds aldrig."""
     return next(_organism_id_counter)
@@ -215,17 +235,25 @@ class OrganismStore:
         return out
 
     def grow(self, new_capacity: int) -> None:
+        """
+        Utöka store:ns slotkapacitet.
+
+        Endast slotindexerade arrayer växer. Arrayer med annan indexdomän —
+        per cell eller per organism-id — får aldrig växa med kapaciteten, och
+        identifieras med namn i _NON_SLOT_ARRAYS. Att i stället gissa på
+        `shape[0] == old_cap` är osäkert: när capacity råkar sammanfalla med
+        n_cells blir per-cell-arrayerna felaktigt förstorade och nästa
+        rebuild_spatial_index() kraschar.
+        """
         old_cap = int(self.capacity)
         new_cap = int(new_capacity)
     
         if new_cap <= old_cap:
             return
     
-        skip_names = {"id_to_slot_arr"}
-    
         for f in fields(self):
             name = f.name
-            if name in skip_names:
+            if name in _NON_SLOT_ARRAYS:
                 continue
     
             arr = getattr(self, name, None)
@@ -242,6 +270,37 @@ class OrganismStore:
     
         self.free_slots.extend(range(new_cap - 1, old_cap - 1, -1))
         self.capacity = new_cap
+    
+        self._assert_array_domains()
+
+    def _assert_array_domains(self) -> None:
+        """
+        Kontrollera att varje array ligger i rätt indexdomän. Billig nog att
+        köra efter varje grow() och fångar den vanligaste regressionen:
+        ett nytt fält som läggs till utan att klassificeras.
+        """
+        cap = int(self.capacity)
+        n_cells = int(self.cell_counts.shape[0])
+    
+        for name in ("cell_counts", "flora_cell_mass"):
+            got = int(getattr(self, name).shape[0])
+            if got != n_cells:
+                raise AssertionError(f"{name} har längd {got}, förväntat n_cells={n_cells}")
+    
+        if int(self.cell_offsets.shape[0]) != n_cells + 1:
+            raise AssertionError(
+                f"cell_offsets har längd {int(self.cell_offsets.shape[0])}, förväntat {n_cells + 1}"
+            )
+    
+        for f in fields(self):
+            name = f.name
+            if name in _NON_SLOT_ARRAYS:
+                continue
+            arr = getattr(self, name, None)
+            if not isinstance(arr, np.ndarray) or arr.ndim < 1:
+                continue
+            if int(arr.shape[0]) != cap:
+                raise AssertionError(f"{name} har längd {int(arr.shape[0])}, förväntat capacity={cap}")
         
     def alloc_slot(self) -> int:
         if not self.free_slots:

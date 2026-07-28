@@ -278,8 +278,29 @@ def check_agent_store_binding(pop) -> list[Violation]:
     return out
 
 
+def check_array_domains(pop) -> list[Violation]:
+    """
+    Varje store-array ska ligga i rätt indexdomän: slotindexerade arrayer har
+    längd capacity, cellindexerade har längd n_cells. Store:n växer dynamiskt,
+    och en array som växer i fel domän ger tyst korruption eller en krasch långt
+    från orsaken.
+    """
+    store = pop.store
+    out: list[Violation] = []
+
+    try:
+        store._assert_array_domains()
+    except AssertionError as exc:
+        out.append(Violation("array_domains", str(exc)))
+    except AttributeError:
+        pass
+
+    return out
+
+
 ALL_CHECKS = (
     check_slot_bookkeeping,
+    check_array_domains,
     check_cell_idx,
     check_identity,
     check_finite_and_nonnegative,
