@@ -411,7 +411,47 @@ def check_world_field_domains(pop) -> list[Violation]:
     return out
 
 
+def check_sparse_fields(pop) -> list[Violation]:
+    """
+    Glesa fälts kontrakt: en cell som inte är med i den aktiva mängden är exakt
+    noll.
+
+    Utan den här kontrollen är glesheten en optimering som kan vara fel — ett
+    pass som råkat skriva utanför den aktiva mängden ger ett värde som aldrig
+    bryts ner och aldrig syns. Med kontrollen är den en prövbar egenskap.
+    """
+    world = pop.world
+    out: list[Violation] = []
+
+    member = getattr(world, "_detritus_member", None)
+    active = getattr(world, "_detritus_active", None)
+    if member is None or active is None:
+        return out
+
+    detritus = np.asarray(world.detritus)
+    member = np.asarray(member)
+
+    stray = np.flatnonzero((~member) & (detritus != 0.0))
+    if stray.size:
+        out.append(Violation(
+            "sparse_fields",
+            f"{stray.size} inaktiva celler har nollskilt detritus, t.ex. "
+            f"{[(int(c), float(detritus[c])) for c in stray[:MAX_EXAMPLES]]}",
+        ))
+
+    act = np.asarray(active, dtype=np.int64)
+    if act.size != int(member.sum()):
+        out.append(Violation("sparse_fields", f"aktiv mängd har {act.size} poster, medlemsflaggan {int(member.sum())}"))
+    elif act.size and not np.all(member[act]):
+        out.append(Violation("sparse_fields", "aktiv mängd innehåller celler utan medlemsflagga"))
+    elif act.size != np.unique(act).size:
+        out.append(Violation("sparse_fields", "aktiv mängd innehåller dubbletter"))
+
+    return out
+
+
 ALL_CHECKS = (
+    check_sparse_fields,
     check_slot_bookkeeping,
     check_world_field_domains,
     check_body_store_mirror,

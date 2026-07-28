@@ -233,13 +233,23 @@ Mätt: 0 träffar på `rowcol_of`, `cell_from_rowcol`, `grid.size` och `bilinear
 
 Terrängburen hydrologi kräver en värld stor nog att bära höjdskillnader och vattendrag. Vid en miljon celler kostar världspasset ~26 ms per tick, och ungefär 15 av dem är representationsfel snarare än beräkning: temperaturen räknas om per cell trots att den bara beror på latitud, decomposition sveper hela världen för att multiplicera nollor, och samtliga fält lagras som arrayer trots att de är rumsligt konstanta.
 
-- Varje världsfält får en deklarerad **kadensklass** utöver sin ägarskapsklass: statisk, profilberoende, glest dynamisk eller tätt dynamisk.
-- Statiska fält sveps aldrig och lagras som skalär tills något faktiskt varierar dem.
-- `T_cell` och `g_cell` blir en profil med längd lika med antalet latitudband, läst via `Grid.cell_band`. Designen är profil plus eventuella per-cell-modifierare, så att kontinentalitet kan läggas till senare utan omtag.
-- `detritus` blir glest dynamiskt med aktiv mängd. Kontraktet är att inaktiva celler garanterat är noll — en prövbar invariant, inte ett antagande.
-- Ledgern underhålls inkrementellt i stället för via fulla summeringar per tick.
+- ~~Varje världsfält får en deklarerad **kadensklass**.~~ **Klart** — statisk, profilberoende, glest dynamisk eller tätt dynamisk.
+- ~~Statiska fält sveps aldrig och lagras som skalär.~~ **Klart** — `elevation` och de fyra forcing-fälten. `surface_level`, `submerged` och `flow_strength` beräknas vid läsning i stället för varje tick.
+- ~~Klimatet blir en profil per latitudband.~~ **Klart** — `T_band`/`g_band` med längd `n_bands`, lästa via `Grid.band_of_cell()` och `bands_of_cells()`.
+- ~~`detritus` blir glest dynamiskt med aktiv mängd.~~ **Klart** — kontraktet att inaktiva celler är exakt noll prövas av `invariants.check_sparse_fields()`.
+- ~~Ledgern underhålls inkrementellt.~~ **Klart** — hydro och decomposition räknar sina termer ur den aktiva mängden respektive analytiskt ur det konstanta tillskottet, utan fulla summeringar.
 
-**Klart när:** världspasset vid en miljon celler ligger i storleksordningen 10 ms i stället för 26, och en invariant visar att inaktiva celler i glesa fält är exakt noll.
+**Steg 3 är avslutat.** Världspasset vid en miljon celler gick från 14,4 ms till 0,047 ms — målet var storleksordningen 10.
+
+```
+                   före      efter
+temperature_pass   2,02  ->  0,010 ms
+hydro_pass         6,12  ->  0,000 ms   (0,17 med regn)
+decomposition      3,78  ->  0,029 ms   (1480 aktiva celler)
+hela step()       14,41  ->  0,047 ms
+```
+
+Bilden ändras i Steg 4, där `nutrient` blir tätt dynamiskt och transport införs. Det är avsiktligt: den klassen finns för fält där fullt svep är genuint motiverat.
 
 Kadensklasserna ska in i manifestet innan hydro byggs, så att `hydro_pass` och `transport_pass` skrivs mot rätt struktur från början. Glesning av hydro självt hör till Steg 8 — den kräver en tät referensimplementation att välja epsilon mot och validera massbevarande emot.
 

@@ -17,6 +17,11 @@ except ImportError:
 
 from grid import Grid
 
+# Under detta värde nollställs detritus exakt och cellen lämnar den aktiva
+# mängden. Utan en tröskel skulle exponentiellt avklingande celler aldrig bli
+# inaktiva, och glesheten vore verkningslös.
+_DETRITUS_EPS = 1e-12
+
 # Index i Grid.neighbor_idx. Ordningen är upp, ned, vänster, höger.
 _NEIGHBOR_DOWN = 1
 
@@ -133,7 +138,12 @@ class World:
         # --- dynamiska: per cell ---
         self.water = np.full(nc, np.float32(self.WP.water_init), dtype=np.float32)
         self.nutrient = np.full(nc, np.float32(self.WP.nutrient_init), dtype=np.float32)
+        # detritus är glest dynamiskt: nollskilt i en bråkdel av cellerna, och
+        # ett fullt svep skulle mest multiplicera nollor. Fältet bär därför en
+        # aktiv mängd, och kontraktet är att inaktiva celler är exakt noll.
         self.detritus = np.full(nc, np.float32(self.WP.detritus_init), dtype=np.float32)
+        self._detritus_member = self.detritus > _DETRITUS_EPS
+        self._detritus_active = np.flatnonzero(self._detritus_member).astype(np.int32, copy=False)
 
         # --- härledda: flödesstyrkan är noll tills hydro räknar grannflöde ---
         self.flow_strength = 0.0
@@ -269,6 +279,27 @@ class World:
         """
         self._update_temperature()
 
+    def _detritus_activate(self, cell: int) -> None:
+        """Markera en cell som nollskild. Idempotent."""
+        c = int(cell)
+        if not self._detritus_member[c]:
+            self._detritus_member[c] = True
+            self._detritus_active = np.append(self._detritus_active, np.int32(c))
+
+    def _detritus_deactivate_if_empty(self, cell: int) -> None:
+        """Nollställ exakt och lämna aktiva mängden om cellen tömts."""
+        c = int(cell)
+        if self._detritus_member[c] and float(self.detritus[c]) <= _DETRITUS_EPS:
+            self.detritus[c] = np.float32(0.0)
+            self._detritus_member[c] = False
+            act = self._detritus_active
+            self._detritus_active = act[act != np.int32(c)]
+
+    @property
+    def detritus_active_cells(self) -> np.ndarray:
+        """Celler med nollskilt detritus. Läsvy för pass och diagnostik."""
+        return self._detritus_active
+
     @property
     def surface_level(self) -> np.ndarray:
         """
@@ -331,17 +362,29 @@ class World:
         I patch 1 görs endast enkel decay av detritus. Ingen diffusion och ingen
         överföring till nutrient ännu. Source of truth är self.detritus.
         """
-        dt = float(self.WP.dt)
-        rate = float(self.WP.detritus_decay)
+        act = self._detritus_active
+        if act.size == 0:
+            return 0.0, 0.0
 
-        decay = np.float32(rate) * self.detritus
-        self.detritus = np.maximum(
-            self.detritus - np.float32(dt) * decay,
-            np.float32(0.0),
-        ).astype(np.float32, copy=False)
+        dt = np.float32(self.WP.dt)
+        rate = np.float32(self.WP.detritus_decay)
 
-        # håll kompatibilitetsaliaset pekande på source-of-truth-arrayen
-        dM_detritus_decay = float(np.sum(np.float64(dt) * np.float64(decay)))
+        d = self.detritus[act]
+        loss = dt * rate * d
+        new = np.maximum(d - loss, np.float32(0.0))
+
+        dM_detritus_decay = float(np.sum(np.float64(d) - np.float64(new)))
+
+        # Celler under tröskeln nollställs exakt och lämnar den aktiva mängden,
+        # så att kontraktet "inaktiv cell är noll" håller.
+        empty = new <= np.float32(_DETRITUS_EPS)
+        if empty.any():
+            new[empty] = np.float32(0.0)
+            self._detritus_member[act[empty]] = False
+            self._detritus_active = act[~empty]
+
+        self.detritus[act] = new
+
         dM_nutrient_from_detritus = 0.0
         return dM_detritus_decay, dM_nutrient_from_detritus
 
@@ -472,6 +515,8 @@ class World:
 
         got = amt if amt < avail else avail
         field[cell] = np.float32(avail - got)
+        if field is self.detritus:
+            self._detritus_deactivate_if_empty(cell)
         return float(got)
 
     def consume_food(self, x: float, y: float, amount: float, prefer_carcass: bool = True) -> Tuple[float, float]:
@@ -531,5 +576,6 @@ class World:
         scale = amt / wsum
         for cell, w in weights:
             self.detritus[cell] = np.float32(float(self.detritus[cell]) + scale * w)
+            self._detritus_activate(cell)
 
 
