@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from typing import ClassVar
 import math
 
+_SQRT3 = math.sqrt(3.0)
+
 import numpy as np
 
 
@@ -421,8 +423,42 @@ class HexGrid:
         return r % int(self.height), col % int(self.width)
 
     def cell_of(self, x: float, y: float) -> int:
-        r, c = self._pos_to_rowcol(float(x), float(y))
-        return int(int(r) * int(self.width) + int(c))
+        """
+        Position -> cell-ID, skalär.
+
+        Egen implementation i ren Python i stället för att gå via
+        _pos_to_rowcol(). Numpys overhead per anrop dominerar fullständigt för
+        skalärer, och den här metoden anropas i storleksordningen hundratals
+        gånger per tick i sensing och interaktion.
+        """
+        W = int(self.width)
+        H = int(self.height)
+        cw = self.COL_SPACING
+        rh = self.ROW_SPACING
+
+        xs = (float(x) - 0.5 * cw) % (W * cw)
+        ys = (float(y) - 0.5 * rh) % (H * rh)
+
+        R = cw / _SQRT3
+        qf = (_SQRT3 / 3.0 * xs - ys / 3.0) / R
+        rf = (2.0 / 3.0 * ys) / R
+
+        yf = -qf - rf
+        rx = round(qf)
+        ry = round(yf)
+        rz = round(rf)
+        dx = abs(rx - qf)
+        dy = abs(ry - yf)
+        dz = abs(rz - rf)
+        if dx > dy and dx > dz:
+            rx = -ry - rz
+        elif dz > dy:
+            rz = -rx - ry
+
+        q = int(rx)
+        r = int(rz)
+        col = q + ((r - (r & 1)) // 2)
+        return (r % H) * W + (col % W)
 
     def cell_of_many(self, xs: object, ys: object) -> np.ndarray:
         r, c = self._pos_to_rowcol(xs, ys)
@@ -471,6 +507,16 @@ class HexGrid:
                 if best is None or d < best:
                     best = d
         return int(best)
+
+    def distance_pos(self, x1: float, y1: float, x2: float, y2: float) -> float:
+        """Euklidiskt avstånd i kontinuerligt rum under toroidal wrap."""
+        dx, dy = self.torus_delta_pos(x1, y1, x2, y2)
+        return math.hypot(dx, dy)
+
+    def distance2_pos(self, x1: float, y1: float, x2: float, y2: float) -> float:
+        """Kvadrerat avstånd i kontinuerligt rum. Undviker roten i heta vägar."""
+        dx, dy = self.torus_delta_pos(x1, y1, x2, y2)
+        return dx * dx + dy * dy
 
     def cells_within(self, cell: int, r: int) -> tuple[int, ...]:
         """
