@@ -298,8 +298,65 @@ def check_array_domains(pop) -> list[Violation]:
     return out
 
 
+def check_body_store_mirror(pop) -> list[Violation]:
+    """
+    Store-fält som speglas från Body måste faktiskt stämma med Body.
+
+    Fram till Steg 5 är Body source of truth för fauna-fysiologin, medan store
+    bär en cache som passen läser slotbaserat. Skrivriktningen ska alltid vara
+    Body -> store. Divergens innebär att någon skrivit åt fel håll eller missat
+    en cacheuppdatering, och den vore annars tyst: grindarna skulle läsa ett
+    värde som inte längre motsvarar organismen.
+
+    Kontrolleras med float32-tolerans eftersom store lagrar float32 och Body
+    räknar i float64.
+    """
+    store = pop.store
+    out: list[Violation] = []
+
+    rtol = 1e-6
+    atol = 1e-12
+
+    bad: list[str] = []
+    for a in pop.agents:
+        if not a.body.alive:
+            continue
+        s = int(a.store_slot)
+        if s < 0 or s >= int(store.n):
+            continue
+
+        body = a.body
+
+        if bool(store.gestating[s]) != bool(body.gestating):
+            bad.append(
+                f"slot {s} (id {int(a.id)}): gestating store={bool(store.gestating[s])} "
+                f"body={bool(body.gestating)}"
+            )
+
+        pairs = (
+            ("gest_M", float(store.gest_M[s]), float(body.gest_M)),
+            ("gest_E_J", float(store.gest_E_J[s]), float(body.gest_E_J)),
+            ("gest_M_target", float(store.gest_M_target[s]), float(body.gest_M_target)),
+            ("mass", float(store.mass[s]), float(body.M)),
+            ("energy", float(store.energy[s]), float(body.E_total())),
+            ("damage", float(store.damage[s]), float(body.D)),
+            ("wear", float(store.wear[s]), float(body.W)),
+        )
+        for name, got, want in pairs:
+            if abs(got - want) > (atol + rtol * abs(want)):
+                bad.append(f"slot {s} (id {int(a.id)}): {name} store={got:.9g} body={want:.9g}")
+
+        if len(bad) >= MAX_EXAMPLES:
+            break
+
+    if bad:
+        out.append(Violation("body_store_mirror", "; ".join(bad[:MAX_EXAMPLES])))
+    return out
+
+
 ALL_CHECKS = (
     check_slot_bookkeeping,
+    check_body_store_mirror,
     check_array_domains,
     check_cell_idx,
     check_identity,

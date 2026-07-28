@@ -324,10 +324,7 @@ class Population:
             self._slot_to_agent[int(store_slot)] = a
 
             self.store.repro_cd[store_slot] = np.float32(init_repro_cd)
-            self.store.gestating[store_slot] = bool(a.body.gestating)
-            self.store.gest_M[store_slot] = np.float32(a.body.gest_M)
-            self.store.gest_E_J[store_slot] = np.float32(a.body.gest_E_J)
-            self.store.gest_M_target[store_slot] = np.float32(a.body.gest_M_target)
+            self._write_gestation_to_store(store_slot, a)
 
             self._emit_birth(self.t, a, parent=None)
             self.agents.append(a)
@@ -646,6 +643,29 @@ class Population:
         self.store.damage[s] = np.float32(float(a.body.D))
         self.store.wear[s] = np.float32(float(a.body.W))
 
+    def _write_gestation_to_store(self, slot: int, a: Agent) -> None:
+        """
+        Uppdatera store:ns gestationscache från Body.
+
+        Ägarskapet är entydigt: Body är source of truth för gestating, gest_M,
+        gest_E_J och gest_M_target fram till Steg 5, eftersom gest_M ackumuleras
+        inne i Body.step():s energibudget och fostermassan belastar buren massa
+        i samma beräkning. Store-fälten finns för att reproduktionsgrindarna ska
+        kunna arbeta slotbaserat utan att gå via wrapperobjektet.
+
+        Skrivriktningen är alltid Body -> store. Ingen kod får skriva åt andra
+        hållet; divergens fångas av invariants.check_body_store_mirror().
+        """
+        s = int(slot)
+        if s < 0 or s >= int(self.store.n):
+            return
+
+        body = a.body
+        self.store.gestating[s] = bool(body.gestating)
+        self.store.gest_M[s] = np.float32(body.gest_M)
+        self.store.gest_E_J[s] = np.float32(body.gest_E_J)
+        self.store.gest_M_target[s] = np.float32(body.gest_M_target)
+
     def _ready_to_reproduce_slot(self, slot: int) -> bool:
         """
         Store-first reproduktionsgate för fauna.
@@ -858,10 +878,7 @@ class Population:
         p_slot = int(partner.store_slot)
         
         if b_slot >= 0:
-            store.gestating[b_slot] = bool(bearer.body.gestating)
-            store.gest_M[b_slot] = np.float32(bearer.body.gest_M)
-            store.gest_E_J[b_slot] = np.float32(bearer.body.gest_E_J)
-            store.gest_M_target[b_slot] = np.float32(bearer.body.gest_M_target)
+            self._write_gestation_to_store(b_slot, bearer)
         
         mating_cost = 0.05 * partner.body.E_cap()
         partner.pay_repro_cost(mating_cost)
@@ -881,18 +898,16 @@ class Population:
         store = self.store
         b = parent.body
         
+        # Ägarskap: Body äger gestationstillståndet fram till Steg 5, eftersom
+        # gest_M ackumuleras inne i Body.step():s energibudget. Store-fälten är
+        # en envägscache som uppdateras efter body-passet och efter parning.
+        # Grinden nedan läser cachen; själva värdena tas ur Body, som är källan.
         if not bool(store.gestating[p_slot]):
             return None
         if not (float(store.gest_M[p_slot]) >= float(store.gest_M_target[p_slot]) > 0.0):
             return None
         
-        # synka wrapper till store innan vi använder den gamla födelsekoden
-        b.gestating = bool(store.gestating[p_slot])
-        b.gest_M = float(store.gest_M[p_slot])
-        b.gest_E_J = float(store.gest_E_J[p_slot])
-        b.gest_M_target = float(store.gest_M_target[p_slot])
-        
-        child_M = float(store.gest_M[p_slot])
+        child_M = float(b.gest_M)
         
         b.abort_gestation()
         
@@ -1588,10 +1603,7 @@ class Population:
             a.last_C0 = float(body_in.C0)
             
             if slot >= 0:
-                self.store.gestating[slot] = bool(a.body.gestating)
-                self.store.gest_M[slot] = np.float32(a.body.gest_M)
-                self.store.gest_E_J[slot] = np.float32(a.body.gest_E_J)
-                self.store.gest_M_target[slot] = np.float32(a.body.gest_M_target)     
+                self._write_gestation_to_store(slot, a)
 
     def _step_interaction_system(self, ctx: "StepCtx") -> None:
         """
