@@ -16,6 +16,7 @@ except ImportError:
     _NUMBA_AVAILABLE = False
 
 from grid import Grid
+from phenotype import DECAY_MIN_SCALE
 
 # Under detta värde nollställs detritus exakt och cellen lämnar den aktiva
 # mängden. Utan en tröskel skulle exponentiellt avklingande celler aldrig bli
@@ -93,8 +94,15 @@ class WorldParams:
     C_sense_K: float = 5e-4
 
     # Energy densities for open-system ledger diagnostics (J/kg)
-    E_plant_J_per_kg: float = 4.0e6
-    E_carcass_J_per_kg: float = 7.0e6
+    # Energi per kilo *labil* vävnad, gemensam för allt organiskt material.
+    # Den användbara energitätheten är detta gånger (1 - strukturandel);
+    # strukturmaterial lagrar ingen användbar energi.
+    #
+    # De tidigare skilda konstanterna för växt och kadaver, 4,0e6 och 7,0e6,
+    # kodade som typskillnad det som är en materialegenskap. Med initierad
+    # medelstruktur 0,57 för flora och 0,25 för fauna ger den här enda
+    # konstanten 4,00e6 respektive 6,98e6 — samma kvot, men härledd.
+    E_labile_J_per_kg: float = 9.302e6
 
 
 # -------------------------
@@ -144,6 +152,11 @@ class World:
         self.detritus = np.full(nc, np.float32(self.WP.detritus_init), dtype=np.float32)
         self._detritus_member = self.detritus > _DETRITUS_EPS
         self._detritus_active = np.flatnonzero(self._detritus_member).astype(np.int32, copy=False)
+
+        # Massviktad medelstrukturandel i cellens detritus, ärvd från det som
+        # dog. Styr nedbrytningstakten: högstrukturerat material bryts ner
+        # långsammare. Samma kadensklass och samma aktiva mängd som detritus.
+        self.detritus_structure = np.zeros(nc, dtype=np.float32)
 
         # --- härledda: flödesstyrkan är noll tills hydro räknar grannflöde ---
         self.flow_strength = 0.0
@@ -286,11 +299,34 @@ class World:
             self._detritus_member[c] = True
             self._detritus_active = np.append(self._detritus_active, np.int32(c))
 
+    def _detritus_add(self, cell: int, amount: float, structure: float) -> None:
+        """
+        Lägg till massa i en cells detritus och blanda in dess strukturandel
+        massviktat.
+
+        En stor kadaver dominerar cellens sammansättning; en liten i mycket
+        förna späds ut. Det är cellen som är miljöns enhet — samma val som
+        ligger bakom att all perception och konsumtion är cellvis.
+        """
+        c = int(cell)
+        add = float(amount)
+        if add <= 0.0:
+            return
+        old = float(self.detritus[c])
+        tot = old + add
+        if tot <= 0.0:
+            return
+        s_old = float(self.detritus_structure[c])
+        self.detritus_structure[c] = np.float32((s_old * old + float(structure) * add) / tot)
+        self.detritus[c] = np.float32(tot)
+        self._detritus_activate(c)
+
     def _detritus_deactivate_if_empty(self, cell: int) -> None:
         """Nollställ exakt och lämna aktiva mängden om cellen tömts."""
         c = int(cell)
         if self._detritus_member[c] and float(self.detritus[c]) <= _DETRITUS_EPS:
             self.detritus[c] = np.float32(0.0)
+            self.detritus_structure[c] = np.float32(0.0)
             self._detritus_member[c] = False
             act = self._detritus_active
             self._detritus_active = act[act != np.int32(c)]
@@ -370,7 +406,12 @@ class World:
         rate = np.float32(self.WP.detritus_decay)
 
         d = self.detritus[act]
-        loss = dt * rate * d
+        # Nedbrytningstakten avtar med strukturandelen: lignin och kitin bryts
+        # ner långsammare än protein och fett.
+        scale = np.float32(DECAY_MIN_SCALE) + np.float32(1.0 - DECAY_MIN_SCALE) * (
+            np.float32(1.0) - self.detritus_structure[act]
+        )
+        loss = dt * rate * scale * d
         new = np.maximum(d - loss, np.float32(0.0))
 
         dM_detritus_decay = float(np.sum(np.float64(d) - np.float64(new)))
@@ -380,6 +421,7 @@ class World:
         empty = new <= np.float32(_DETRITUS_EPS)
         if empty.any():
             new[empty] = np.float32(0.0)
+            self.detritus_structure[act[empty]] = np.float32(0.0)
             self._detritus_member[act[empty]] = False
             self._detritus_active = act[~empty]
 
@@ -403,8 +445,10 @@ class World:
         Uppdatera världens öppna-system-ledger för senaste tick.
         """
         P = self.WP
-        e_plant = float(getattr(P, "E_plant_J_per_kg", getattr(P, "E_bio_J_per_kg", 4.0e6)))
-        e_carc = float(getattr(P, "E_carcass_J_per_kg", 7.0e6))
+        # Nominella energiskalor för ledgern; se anmärkningen i Population.
+        e_lab = float(getattr(P, "E_labile_J_per_kg", 9.302e6))
+        e_plant = e_lab * (1.0 - 0.57)
+        e_carc = e_lab * (1.0 - 0.25)
 
         self.last_flux = {
             "dM_growth": max(0.0, dM_growth),
@@ -490,9 +534,14 @@ class World:
     # -------------------------
     # Consumption + carcass
     # -------------------------
-    def _consume_from_field(self, field: np.ndarray, x: float, y: float, amount: float) -> float:
+    def _consume_from_field(self, field: np.ndarray, x: float, y: float, amount: float) -> tuple[float, float]:
         """
         Konsumera upp till `amount` kg ur `field` i den cell (x, y) faller i.
+
+        Returnerar (kg, energi_J). Energin följer av materialets strukturandel:
+        strukturmaterial lagrar ingen användbar energi, så ett kilo segt
+        substrat är värt mindre än ett kilo mjukt. Konsumentens
+        matsmältningsverkningsgrad tillämpas hos konsumenten, inte här.
 
         Organismen befinner sig i en cell och äter ur den. Vill den åt en
         granncells innehåll måste den flytta sig dit — position har betydelse.
@@ -501,42 +550,50 @@ class World:
         """
         amt = float(amount)
         if not math.isfinite(amt) or amt <= 0.0:
-            return 0.0
+            return 0.0, 0.0
 
         xf = float(x)
         yf = float(y)
         if not (math.isfinite(xf) and math.isfinite(yf)):
-            return 0.0
+            return 0.0, 0.0
 
         cell = int(self.grid.cell_of(xf, yf))
         avail = float(field[cell])
         if not math.isfinite(avail) or avail <= 1e-12:
-            return 0.0
+            return 0.0, 0.0
 
         got = amt if amt < avail else avail
         field[cell] = np.float32(avail - got)
-        if field is self.detritus:
-            self._detritus_deactivate_if_empty(cell)
-        return float(got)
 
-    def consume_food(self, x: float, y: float, amount: float, prefer_carcass: bool = True) -> Tuple[float, float]:
+        struct = 0.0
+        if field is self.detritus:
+            struct = float(self.detritus_structure[cell])
+            self._detritus_deactivate_if_empty(cell)
+
+        energy = got * float(self.WP.E_labile_J_per_kg) * (1.0 - struct)
+        return float(got), float(energy)
+
+    def consume_food(self, x: float, y: float, amount: float,
+                     prefer_detritus: bool = True) -> Tuple[float, float, float, float]:
         """
-        Fallback-consumption in World: detritus only.
-        Plant food is handled by Population via consume_food_hook.
-        Returns (got_total_kg, got_detritus_kg).
+        Reservkonsumtion i World: bara detritus. Levande föda hanteras av
+        Population via consume_food_hook.
+
+        Returnerar (kg_levande, kg_detritus, energi_levande_J, energi_detritus_J).
         """
         hook = getattr(self, "consume_food_hook", None)
         if hook is not None:
-            return hook(x, y, amount, prefer_carcass)
+            return hook(x, y, amount, prefer_detritus)
     
         amt = float(amount)
         if not math.isfinite(amt) or amt <= 0.0:
-            return 0.0, 0.0
+            return 0.0, 0.0, 0.0, 0.0
     
-        got_c = float(self._consume_from_field(self.detritus, x, y, amt))
-        return got_c, got_c
+        got_d, e_d = self._consume_from_field(self.detritus, x, y, amt)
+        return 0.0, float(got_d), 0.0, float(e_d)
 
-    def add_carcass(self, x: float, y: float, amount_kg: float, rad: int = 3) -> None:
+    def add_carcass(self, x: float, y: float, amount_kg: float, rad: int = 3,
+                    structure: float = 0.45) -> None:
         """
         Add carcass mass to detritus field (kg/cell).
         """
@@ -575,7 +632,6 @@ class World:
     
         scale = amt / wsum
         for cell, w in weights:
-            self.detritus[cell] = np.float32(float(self.detritus[cell]) + scale * w)
-            self._detritus_activate(cell)
+            self._detritus_add(cell, scale * w, structure)
 
 

@@ -27,6 +27,8 @@ from phenotype import (
     flora_temp_opt,
     flora_temp_width,
     flora_uptake_capacity,
+    structure_fraction,
+    energy_density,
 )
 
 from organism_store import OrganismStore, next_organism_id
@@ -89,7 +91,7 @@ class PopParams:
     store_growth_min_chunk: int = 256
     store_growth_factor: float = 2.0
     
-    n_traits: int = 32   # +2 arkitekturtraits (hidden_1=23, hidden_2=24)
+    n_traits: int = 33   # +2 arkitekturtraits (hidden_1=23, hidden_2=24)
 
     spawn_jitter_r: float = 1.5
 
@@ -201,6 +203,7 @@ class Population:
         self.store = OrganismStore(
             capacity=int(self.PP.max_pop),
             n_cells=int(self.grid.n_cells),
+            n_traits=int(self.PP.n_traits),
         )
         self._slot_to_agent = [None] * int(self.PP.max_pop)        
 
@@ -466,8 +469,12 @@ class Population:
         )
         if isinstance(payload, dict):
             detritus_sum = float(np.nansum(self.world.detritus))
-            e_plant = float(getattr(self.AP, "E_plant_J_per_kg", getattr(self.AP, "E_bio_J_per_kg", 0.0)))
-            e_carc = float(getattr(self.AP, "E_carcass_J_per_kg", 0.0))
+            # Ledgerns energiskalor: nominell labil energitäthet vid
+            # respektive ontologis initierade medelstrukturandel. Diagnostik,
+            # inte fysik — den verkliga omvandlingen sker per organism.
+            e_lab = float(self.WP.E_labile_J_per_kg)
+            e_plant = e_lab * (1.0 - 0.57)
+            e_carc = e_lab * (1.0 - 0.25)
             wf = getattr(self.world, "last_flux", {})
     
             flora_info = self._flora_summary()
@@ -959,6 +966,16 @@ class Population:
         return child
 
 
+    def _slot_energy_per_kg(self, slot: int) -> float:
+        """
+        Användbar energi per kilo för en organism, given dess strukturandel.
+
+        Samma tal styr organismens egen reserv och vad en betare får ut per
+        kilo — den som är seg att äta har också mindre att tära på själv.
+        """
+        struct = float(self.store.structure[int(slot)])
+        return float(self.WP.E_labile_J_per_kg) * (1.0 - struct)
+
     def _init_flora_slot(
         self,
         slot: int,
@@ -966,7 +983,8 @@ class Population:
         mass: float,
         traits: np.ndarray,
     ) -> None:
-        e_per_kg = float(self.WP.E_plant_J_per_kg)
+        struct = structure_fraction(traits)
+        e_per_kg = energy_density(traits, float(self.WP.E_labile_J_per_kg))
 
         g_rate = np.float32(flora_growth_rate(traits))
         a_mass = np.float32(flora_adult_mass(traits, mass_scale=float(self.WP.B_K)))
@@ -1006,6 +1024,7 @@ class Population:
         self.store.attack_capacity[slot] = np.float32(0.0)
         self.store.repair_capacity[slot] = np.float32(0.0)
         self.store.repro_capacity[slot] = np.float32(flora_repro_capacity(traits))
+        self.store.structure[slot] = np.float32(struct)
     
         self.store.flood_tolerance[slot] = np.float32(0.0)
         self.store.buoyancy[slot] = np.float32(0.0)
@@ -1048,18 +1067,20 @@ class Population:
         return created
         
             
-    def _consume_flora_from_store(self, x: float, y: float, amount: float, max_radius: int = 1) -> float:
+    def _consume_flora_from_store(self, x: float, y: float, amount: float, max_radius: int = 1) -> tuple[float, float]:
         """
         Konsumera växtmassa från diskret flora i OrganismStore via gemensamt spatialindex.
-        Returnerar faktiskt konsumerad kg.
+
+        Returnerar (kg, energi_J). Varje betad individ bidrar med energi enligt
+        sin egen strukturandel, så en seg växt ger mindre per kilo än en mjuk.
         """
         amt = float(amount)
         if not math.isfinite(amt) or amt <= 0.0:
-            return 0.0
+            return 0.0, 0.0
     
         cell0 = int(self.grid.cell_of(float(x), float(y)))
         got = 0.0
-        e_per_kg = float(self.WP.E_plant_J_per_kg)
+        energy = 0.0
     
         candidate_cells: list[int] = [cell0]
         for r in range(1, int(max_radius) + 1):
@@ -1091,8 +1112,10 @@ class Population:
                 new_m = m - take
     
                 self.store.mass[s] = np.float32(new_m)
-                self.store.energy[s] = np.float32(max(0.0, new_m * e_per_kg))
+                e_kg = self._slot_energy_per_kg(s)
+                self.store.energy[s] = np.float32(max(0.0, new_m * e_kg))
                 got += take
+                energy += take * e_kg
                 amt -= take
     
                 if new_m <= 1e-12:
@@ -1104,7 +1127,7 @@ class Population:
         if got > 0.0:
             self._flora_summary_cache = None
     
-        return float(got)
+        return float(got), float(energy)
 
     def _add_or_create_flora_in_cell(
         self,
@@ -1116,7 +1139,6 @@ class Population:
         if not math.isfinite(dm) or dm <= 0.0:
             return False
     
-        e_per_kg = float(self.WP.E_plant_J_per_kg)
     
         for slot in self.store.slots_in_cell(int(cell)):
             s = int(slot)
@@ -1127,7 +1149,7 @@ class Population:
     
             new_m = float(self.store.mass[s]) + dm
             self.store.mass[s] = np.float32(new_m)
-            self.store.energy[s] = np.float32(new_m * e_per_kg)
+            self.store.energy[s] = np.float32(new_m * self._slot_energy_per_kg(s))
     
             self._flora_summary_cache = None
             return True
@@ -1158,7 +1180,6 @@ class Population:
             return 0.0
     
         produced = 0.0
-        e_per_kg = float(self.WP.E_plant_J_per_kg)
     
         for slot in range(int(self.store.n)):
             if not bool(self.store.alive[slot]):
@@ -1196,7 +1217,7 @@ class Population:
     
             if dm > 0.0:
                 self.store.mass[slot] = np.float32(new_m)
-                self.store.energy[slot] = np.float32(new_m * e_per_kg)
+                self.store.energy[slot] = np.float32(new_m * self._slot_energy_per_kg(slot))
                 produced += dm
     
         return float(produced)
@@ -1272,9 +1293,8 @@ class Population:
     
             # Betala från moderorganismen
             new_m = m - seed_mass
-            e_per_kg = float(self.WP.E_plant_J_per_kg)
             self.store.mass[slot] = np.float32(new_m)
-            self.store.energy[slot] = np.float32(max(0.0, new_m * e_per_kg))
+            self.store.energy[slot] = np.float32(max(0.0, new_m * self._slot_energy_per_kg(slot)))
     
             established += 1
             dispersed_mass += seed_mass
@@ -1313,24 +1333,30 @@ class Population:
     
         return out
         
-    def consume_food(self, x: float, y: float, amount: float, prefer_carcass: bool = True) -> tuple[float, float]:
+    def consume_food(self, x: float, y: float, amount: float, prefer_detritus: bool = True) -> tuple[float, float, float, float]:
         """
         Konsumera upp till `amount` kg totalt.
-        Kadaver tas fortsatt från world.detritus.
-        Växtföda tas från diskret flora i OrganismStore.
-        Returnerar (got_total_kg, got_carcass_kg).
+
+        Returnerar (kg_levande, kg_detritus, energi_levande_J, energi_detritus_J).
+
+        Uppdelningen finns kvar därför att den är verklig i *anskaffningen*:
+        levande vävnad tillhör en organism som växer tillbaka och senare kan
+        försvara sig, medan detritus är en pool som bara sönderfaller. Den finns
+        däremot inte längre i energiomvandlingen — där avgör materialets
+        strukturandel, oavsett varifrån det kom.
         """
         amt = float(amount)
         if not math.isfinite(amt) or amt <= 0.0:
-            return 0.0, 0.0
+            return 0.0, 0.0, 0.0, 0.0
     
-        got_c = 0.0
-        if prefer_carcass:
-            got_c = float(self.world._consume_from_field(self.world.detritus, x, y, amt))
-            amt = max(0.0, amt - got_c)
+        got_d = 0.0
+        e_d = 0.0
+        if prefer_detritus:
+            got_d, e_d = self.world._consume_from_field(self.world.detritus, x, y, amt)
+            amt = max(0.0, amt - got_d)
     
-        got_f = float(self._consume_flora_from_store(x, y, amt, max_radius=1))
-        return got_c + got_f, got_c
+        got_l, e_l = self._consume_flora_from_store(x, y, amt, max_radius=1)
+        return float(got_l), float(got_d), float(e_l), float(e_d)
 
     def _rebuild_flora_summary(self) -> None:
         """
@@ -1587,6 +1613,8 @@ class Population:
                 activity=body_in.activity,
                 food_bio_kg=body_in.food_bio_kg,
                 food_carcass_kg=body_in.food_carcass_kg,
+                food_bio_J=body_in.food_bio_J,
+                food_carcass_J=body_in.food_carcass_J,
                 pheno=a.pheno,
                 extra_drain=body_in.E_move,
                 T_env=body_in.Tloc,
@@ -1705,6 +1733,14 @@ class Population:
             if not a.body.alive:
                 self._banks[a._policy_key].release(a._policy_slot)
     
+                # Strukturandelen måste läsas innan sloten frigörs; kadavret
+                # ärver den från organismen som dog.
+                struct = (
+                    float(self.store.structure[int(a.store_slot)])
+                    if a.store_slot >= 0
+                    else 0.45
+                )
+
                 if a.store_slot >= 0:
                     self._write_alive_to_store(a.store_slot, False)
                     self._slot_to_agent[int(a.store_slot)] = None
@@ -1714,8 +1750,7 @@ class Population:
                 body = a.body
                 M_struct = float(body.M)
                 E_buf = float(body.E_total())
-                E_carcass = float(a.AP.E_carcass_J_per_kg)
-    
+                E_carcass = float(self.WP.E_labile_J_per_kg) * (1.0 - struct)
                 M_buf_equiv = E_buf / max(E_carcass, 1e-12)
                 carcass_kg = M_struct + M_buf_equiv
     
@@ -1725,6 +1760,7 @@ class Population:
                         float(a.y),
                         amount_kg=carcass_kg,
                         rad=int(self.PP.carcass_rad),
+                        structure=struct,
                     )
     
                 body.M = 0.0

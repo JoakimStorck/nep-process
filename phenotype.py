@@ -110,6 +110,11 @@ _T_TEMP_WIDTH      = 29
 _T_SEXUAL_MODE     = 30
 _T_DISPERSAL       = 31
 
+# Gemensamt för flora och fauna: andel av vävnaden som är segt bärande material
+# — lignin och cellulosa hos växter, kitin och ben hos djur — mot lättomsatt
+# protein, socker och fett. Samma tal beskriver båda ontologierna.
+_T_STRUCTURE       = 32
+
 @dataclass(frozen=True)
 class PhenoRanges:
     # maturity
@@ -346,6 +351,82 @@ def sexual_mode_from_traits(traits: np.ndarray | None, default: float = 0.0) -> 
 
 def dispersal_from_traits(traits: np.ndarray | None, default: float = 0.0) -> float:
     return trait_unit(traits, _T_DISPERSAL, default=default)
+
+
+def structure_from_traits(traits: np.ndarray | None, default: float = 0.0) -> float:
+    return trait_unit(traits, _T_STRUCTURE, default=default)
+
+
+# ---------------------------------------------------------------------------
+# Strukturandel — gemensam för alla organismer
+# ---------------------------------------------------------------------------
+
+STRUCTURE_MIN = 0.05
+STRUCTURE_MAX = 0.85
+
+
+def structure_fraction(traits: np.ndarray | None) -> float:
+    """
+    Andel strukturmaterial i vävnaden, i [STRUCTURE_MIN, STRUCTURE_MAX].
+
+    Intervallet är öppet i båda ändar med avsikt. Vid noll vore organismen ren
+    reserv utan bärande vävnad; vid ett vore den ren struktur utan energi, och
+    då skulle både dess egen katabolism och dess värde som föda vara noll. Båda
+    ändarna är degenererade snarare än extrema strategier.
+    """
+    u = structure_from_traits(traits, default=0.5)
+    return STRUCTURE_MIN + (STRUCTURE_MAX - STRUCTURE_MIN) * float(u)
+
+
+def energy_density(traits: np.ndarray | None, e_labile_per_kg: float) -> float:
+    """
+    Användbar energi per kilo vävnad.
+
+    Energin sitter i den labila fraktionen; strukturmaterial lagrar ingen
+    användbar energi. Därmed följer betningsutbytet av samma tal som organismens
+    egen reserv — den som är seg att äta har också mindre att tära på när maten
+    tryter.
+    """
+    return float(e_labile_per_kg) * (1.0 - structure_fraction(traits))
+
+
+def decay_rate_scale(structure: float) -> float:
+    """
+    Faktor på nedbrytningstakten som funktion av strukturandel.
+
+    Högstrukturerat material bryts ner långsammare. Skalan är linjär mellan
+    full takt vid ren labil vävnad och DECAY_MIN_SCALE vid ren struktur.
+    """
+    s = min(1.0, max(0.0, float(structure)))
+    return DECAY_MIN_SCALE + (1.0 - DECAY_MIN_SCALE) * (1.0 - s)
+
+
+DECAY_MIN_SCALE = 0.15
+
+# Matsmältningens verkningsgrad som funktion av substratets strukturandel.
+# Ersätter de tidigare kategoriska konstanterna digest_eff_plant och
+# digest_eff_carcass: skillnaden mellan växt och kadaver var aldrig två sorters
+# mage, utan samma mage mot olika segt material.
+#
+# Lutningen är tills vidare densamma för alla. I Steg 6 blir den en kapacitet
+# med egen underhållskostnad, och då blir specialisering på segt material ett
+# verkligt val i stället för en universell nackdel.
+DIGEST_EFF_LABILE = 0.80
+DIGEST_EFF_STRUCT = 0.45
+
+
+def digestion_efficiency(structure: float) -> float:
+    """Andel av substratets energi som konsumenten faktiskt tillgodogör sig."""
+    s = min(1.0, max(0.0, float(structure)))
+    return DIGEST_EFF_LABILE - (DIGEST_EFF_LABILE - DIGEST_EFF_STRUCT) * s
+
+
+# Initieringsintervall för strukturlocus, i logit-rymdens enhetsskala.
+# Växtvävnad är till större delen cellulosa och lignin; djurvävnad har mindre
+# bärande material. Skillnaden är en startpunkt, inte en gräns — selektionen
+# kan flytta båda.
+STRUCTURE_INIT_FLORA = (0.35, 0.95)
+STRUCTURE_INIT_FAUNA = (0.05, 0.45)
 
 
 # ---------------------------------------------------------------------------

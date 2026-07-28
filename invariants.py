@@ -431,6 +431,21 @@ def check_sparse_fields(pop) -> list[Violation]:
     detritus = np.asarray(world.detritus)
     member = np.asarray(member)
 
+    struct = np.asarray(getattr(world, "detritus_structure", np.zeros(0)))
+    if struct.size == detritus.size:
+        stray_s = np.flatnonzero((~member) & (struct != 0.0))
+        if stray_s.size:
+            out.append(Violation(
+                "sparse_fields",
+                f"{stray_s.size} inaktiva celler har nollskild detritus_structure",
+            ))
+        bad_range = np.flatnonzero((struct < 0.0) | (struct > 1.0))
+        if bad_range.size:
+            out.append(Violation(
+                "sparse_fields",
+                f"detritus_structure utanför [0,1] i {bad_range.size} celler",
+            ))
+
     stray = np.flatnonzero((~member) & (detritus != 0.0))
     if stray.size:
         out.append(Violation(

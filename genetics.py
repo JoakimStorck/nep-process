@@ -6,6 +6,9 @@ import numpy as np
 
 from mlp import MLPGenome
 from phenotype import (
+    _T_STRUCTURE,
+    STRUCTURE_INIT_FLORA,
+    STRUCTURE_INIT_FAUNA,
     derive_pheno,
     _T_DIET,
     _T_PREDATION,
@@ -281,6 +284,11 @@ def init_organism_traits(
             u[_T_SEXUAL_MODE] = rng.uniform(0.02, 0.10)  # asexuell bias
         if n > _T_DISPERSAL:
             u[_T_DISPERSAL] = rng.uniform(0.05, 0.95)
+        if n > _T_STRUCTURE:
+            u[_T_STRUCTURE] = rng.uniform(*STRUCTURE_INIT_FLORA)
+    else:
+        if n > _T_STRUCTURE:
+            u[_T_STRUCTURE] = rng.uniform(*STRUCTURE_INIT_FAUNA)
 
     return np.log(u / (1.0 - u)).astype(np.float32)
 

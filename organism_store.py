@@ -6,6 +6,8 @@ from typing import Iterable
 
 import numpy as np
 
+from phenotype import structure_fraction
+
 import itertools as _itertools
 
 
@@ -82,6 +84,7 @@ class OrganismStore:
 
     capacity: int
     n_cells: int
+    n_traits: int = 32
 
     free_slots: list[int] = field(init=False, default_factory=list)
     
@@ -131,6 +134,11 @@ class OrganismStore:
     repair_capacity: np.ndarray = field(init=False)
     repro_capacity: np.ndarray = field(init=False)
 
+    # Andel segt bärande material i vävnaden. Gemensam för flora och fauna:
+    # samma tal beskriver ved och ben. Styr energitäthet, betningsutbyte och
+    # nedbrytningstakt — se docs/substratets-struktur.md.
+    structure: np.ndarray = field(init=False)
+
     # Mediumkapaciteter
     flood_tolerance: np.ndarray = field(init=False)
     buoyancy: np.ndarray = field(init=False)
@@ -175,7 +183,7 @@ class OrganismStore:
 
         # Fas 0: ännu ingen riktig genomstore.
         self.genome_idx = np.full(cap, -1, dtype=np.int32)
-        self.traits = np.zeros((cap, 32), dtype=np.float32)
+        self.traits = np.zeros((cap, int(self.n_traits)), dtype=np.float32)
 
         self.uptake_capacity = np.zeros(cap, dtype=np.float32)
         self.growth_capacity = np.zeros(cap, dtype=np.float32)
@@ -186,6 +194,7 @@ class OrganismStore:
         self.attack_capacity = np.zeros(cap, dtype=np.float32)
         self.repair_capacity = np.zeros(cap, dtype=np.float32)
         self.repro_capacity = np.zeros(cap, dtype=np.float32)
+        self.structure = np.zeros(cap, dtype=np.float32)
 
         self.flood_tolerance = np.zeros(cap, dtype=np.float32)
         self.buoyancy = np.zeros(cap, dtype=np.float32)
@@ -342,6 +351,14 @@ class OrganismStore:
         self.attack_capacity[slot] = float(getattr(ph, "predation", 0.0))
         self.repair_capacity[slot] = float(getattr(ph, "repair_capacity", 0.0))
         self.repro_capacity[slot] = float(getattr(ph, "repro_rate", 0.0))
+
+        # Strukturandel: samma axel som för flora. Kadaver ärver den, och den
+        # styr både energitäthet och nedbrytningstakt.
+        traits = getattr(getattr(a, "genome", None), "traits", None)
+        self.structure[slot] = np.float32(structure_fraction(traits))
+        if traits is not None:
+            n = min(int(self.traits.shape[1]), int(np.size(traits)))
+            self.traits[slot, :n] = np.asarray(traits, dtype=np.float32).ravel()[:n]
     
         self.flood_tolerance[slot] = 0.0
         self.buoyancy[slot] = 0.0

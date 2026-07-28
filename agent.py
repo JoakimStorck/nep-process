@@ -10,7 +10,7 @@ import numpy as np
 
 from world import World, clamp
 from mlp import MLPGenome
-from phenotype import Phenotype, derive_pheno, phenotype_summary
+from phenotype import Phenotype, derive_pheno, phenotype_summary, digestion_efficiency, structure_fraction
 
 from grid import Grid
 from organism_store import next_organism_id
@@ -128,13 +128,16 @@ class AgentParams:
     # Energy densities (J/kg)
     # E_bio_J_per_kg behålls som bakåtkompatibelt alias för växtbiomassa.
     E_bio_J_per_kg: float = 4.0e6
-    E_plant_J_per_kg: float = 4.0e6
-    E_carcass_J_per_kg: float = 7.0e6
+    # Energi per kilo labil vävnad, gemensam för allt organiskt material.
+    # Materialets strukturandel avgör hur stor den labila fraktionen är; se
+    # docs/substratets-struktur.md.
+    E_labile_J_per_kg: float = 9.302e6
     E_body_J_per_kg: float = 7.0e6
 
     # Conversion efficiencies
-    digest_eff_plant: float = 0.55
-    digest_eff_carcass: float = 0.75
+    # Matsmältningens verkningsgrad härleds ur substratets strukturandel via
+    # phenotype.digestion_efficiency(). De tidigare skilda konstanterna för
+    # växt och kadaver kodade som typskillnad det som är en materialegenskap.
     anabolism_eff: float = 0.70
     catabolism_eff: float = 0.90
 
@@ -578,6 +581,8 @@ class Body:
         activity: float,
         food_bio_kg: float,
         food_carcass_kg: float,
+        food_bio_J: float,
+        food_carcass_J: float,
         pheno: Phenotype,
         extra_drain: float = 0.0,
         T_env: float = 0.0,
@@ -658,11 +663,8 @@ class Body:
         # Alla dessa parametrar är konstanta under agentens liv.
         # ---------------------------------------------------------
         AP = self.AP
-        _E_bio        = float(getattr(AP, 'E_plant_J_per_kg', AP.E_bio_J_per_kg))
-        _E_carcass    = float(AP.E_carcass_J_per_kg)
+        _E_labile     = float(AP.E_labile_J_per_kg)
         _E_body       = float(AP.E_body_J_per_kg)
-        _dig_eff_bio  = float(getattr(AP, 'digest_eff_plant', 1.0))
-        _dig_eff_car  = float(getattr(AP, 'digest_eff_carcass', 1.0))
         _ana_eff      = max(1e-9, float(getattr(AP, 'anabolism_eff', 1.0)))
         _cat_eff      = max(0.0, float(getattr(AP, 'catabolism_eff', 1.0)))
         _E_cap_per_M  = float(AP.E_cap_per_M)
@@ -721,10 +723,20 @@ class Body:
         herb_eff  = (1.0 - _diet) ** 0.7
         scav_eff  = _diet ** 0.7
 
-        E_in_gross_bio = m_bio * _E_bio * herb_eff
-        E_in_gross_car = m_car * _E_carcass * scav_eff
-        E_in_bio = E_in_gross_bio * _dig_eff_bio
-        E_in_car = E_in_gross_car * _dig_eff_car
+        # Energiinnehållet kommer med födan och bär substratets strukturandel.
+        # Matsmältningens verkningsgrad härleds ur samma strukturandel, så att
+        # segt material både innehåller mindre energi och släpper ifrån sig en
+        # mindre andel av den.
+        E_raw_bio = max(0.0, float(food_bio_J))
+        E_raw_car = max(0.0, float(food_carcass_J))
+
+        s_bio = 1.0 - (E_raw_bio / max(m_bio * _E_labile, 1e-12)) if m_bio > 0.0 else 0.0
+        s_car = 1.0 - (E_raw_car / max(m_car * _E_labile, 1e-12)) if m_car > 0.0 else 0.0
+
+        E_in_gross_bio = E_raw_bio * herb_eff
+        E_in_gross_car = E_raw_car * scav_eff
+        E_in_bio = E_in_gross_bio * digestion_efficiency(s_bio)
+        E_in_car = E_in_gross_car * digestion_efficiency(s_car)
         E_loss_digest_bio = max(0.0, E_in_gross_bio - E_in_bio)
         E_loss_digest_car = max(0.0, E_in_gross_car - E_in_car)
         E_in = E_in_bio + E_in_car
@@ -1538,6 +1550,8 @@ class BodyStepInput:
     activity: float
     food_bio_kg: float
     food_carcass_kg: float
+    food_bio_J: float
+    food_carcass_J: float
     E_move: float
     Tloc: float
     B0: float
@@ -2187,21 +2201,25 @@ class Agent:
         world: World,
         dt: float,
         allow_eat: float,
-    ) -> tuple[float, float]:
-        got_bio = 0.0
-        got_carcass = 0.0
-    
-        if allow_eat > 0.20:
-            want_kg = float(self.AP.eat_rate) * dt * (0.25 + 0.75 * float(self.body.hunger()))
-            got_total, got_carcass = world.consume_food(
-                self.x,
-                self.y,
-                amount=want_kg,
-                prefer_carcass=True,
-            )
-            got_bio = max(0.0, float(got_total) - float(got_carcass))
-    
-        return float(got_bio), float(got_carcass)
+    ) -> tuple[float, float, float, float]:
+        """
+        Returnerar (kg_levande, kg_detritus, energi_levande_J, energi_detritus_J).
+
+        Energin bär substratets faktiska strukturandel med sig. Att bara skicka
+        vidare kilon och multiplicera med en konstant hos konsumenten skulle
+        kasta bort informationen om vad som faktiskt åts.
+        """
+        if allow_eat <= 0.20:
+            return 0.0, 0.0, 0.0, 0.0
+
+        want_kg = float(self.AP.eat_rate) * dt * (0.25 + 0.75 * float(self.body.hunger()))
+        got_l, got_d, e_l, e_d = world.consume_food(
+            self.x,
+            self.y,
+            amount=want_kg,
+            prefer_detritus=True,
+        )
+        return float(got_l), float(got_d), float(e_l), float(e_d)
     
     
     def _activity_proxy(
@@ -2328,7 +2346,7 @@ class Agent:
             explore_drive=float(plan.explore_drive),
         )
     
-        food_bio_kg, food_carcass_kg = self._perform_feeding(
+        food_bio_kg, food_carcass_kg, food_bio_J, food_carcass_J = self._perform_feeding(
             world=world,
             dt=dt,
             allow_eat=float(plan.allow_eat),
@@ -2346,6 +2364,8 @@ class Agent:
             activity=float(activity),
             food_bio_kg=float(food_bio_kg),
             food_carcass_kg=float(food_carcass_kg),
+            food_bio_J=float(food_bio_J),
+            food_carcass_J=float(food_carcass_J),
             E_move=float(E_move),
             Tloc=float(plan.Tloc),
             B0=float(plan.B0),
