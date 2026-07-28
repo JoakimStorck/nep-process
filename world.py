@@ -16,7 +16,12 @@ except ImportError:
     _NUMBA_AVAILABLE = False
 
 from grid import Grid
-from phenotype import DECAY_MIN_SCALE
+from phenotype import (
+    DECAY_SCALE_LABILE,
+    DECAY_SCALE_STRUCT,
+    NUTRIENT_PER_KG_LABILE,
+    NUTRIENT_PER_KG_STRUCT,
+)
 
 # Under detta värde nollställs detritus exakt och cellen lämnar den aktiva
 # mängden. Utan en tröskel skulle exponentiellt avklingande celler aldrig bli
@@ -89,6 +94,13 @@ class WorldParams:
     # Detritus / decay
     # -------------------------
     detritus_decay: float = 0.077
+    # Andel av frisatt näring som lämnar systemet (urlakning, denitrifikation).
+    nutrient_loss_frac: float = 0.10
+    # Näringstillförsel per cell och tick. Konstant tills terrängen finns; då
+    # blir den vittring som funktion av höjd, och utsköljning under havsnivå.
+    nutrient_input: float = 2.0e-10
+    # Maximalt näringsupptag per tick vid uptake_capacity = 1.
+    uptake_rate_max: float = 5.0e-5
 
     # --- Perception scaling ---
     C_sense_K: float = 5e-4
@@ -413,6 +425,27 @@ class World:
         np.maximum(w + np.float32(dwater), np.float32(0.0), out=w)
         return 0.0, removed
 
+    def nutrient_input_pass(self) -> float:
+        """
+        Extern näringstillförsel. Forcing, alltså rumsligt konstant tills något
+        varierar den — se docs/varldens-kadensmodell.md.
+        """
+        add = float(self.WP.dt) * float(self.WP.nutrient_input)
+        if add == 0.0:
+            return 0.0
+        self.nutrient += np.float32(add)
+        return add * float(self.grid.n_cells)
+
+    def take_nutrient(self, cell: int, amount: float) -> float:
+        """Ta upp till `amount` kg näring ur en cell. Returnerar faktiskt uttag."""
+        c = int(cell)
+        avail = float(self.nutrient[c])
+        got = amount if amount < avail else avail
+        if got <= 0.0:
+            return 0.0
+        self.nutrient[c] = np.float32(avail - got)
+        return float(got)
+
     def transport_pass(self) -> float:
         """
         Placeholder för framtida transport/diffusion av lösta ämnen.
@@ -436,15 +469,42 @@ class World:
         rate = np.float32(self.WP.detritus_decay)
 
         d = self.detritus[act]
-        # Nedbrytningstakten avtar med strukturandelen: lignin och kitin bryts
-        # ner långsammare än protein och fett.
-        scale = np.float32(DECAY_MIN_SCALE) + np.float32(1.0 - DECAY_MIN_SCALE) * (
-            np.float32(1.0) - self.detritus_structure[act]
-        )
-        loss = dt * rate * scale * d
-        new = np.maximum(d - loss, np.float32(0.0))
+        st = self.detritus_structure[act]
 
-        dM_detritus_decay = float(np.sum(np.float64(d) - np.float64(new)))
+        # Nedbrytning per fraktion. Labilt och strukturellt material bryts ner
+        # med var sin takt, räknade ur massa och strukturandel utan ett andra
+        # fält. Att sakta ner hela massan i stället lät strukturandelen skena:
+        # bara det labila försvann, och kvarvarande material blev asymptotiskt
+        # ren struktur.
+        lab = d * (np.float32(1.0) - st)
+        stru = d * st
+
+        k_lab = dt * rate * np.float32(DECAY_SCALE_LABILE)
+        k_str = dt * rate * np.float32(DECAY_SCALE_STRUCT)
+
+        d_lab = np.minimum(lab, lab * k_lab)
+        d_str = np.minimum(stru, stru * k_str)
+
+        lab_new = lab - d_lab
+        stru_new = stru - d_str
+        new = lab_new + stru_new
+
+        dM_detritus_decay = float(np.sum(np.float64(d_lab) + np.float64(d_str)))
+
+        # Frisatt näring är den nedbrutna massan gånger dess näringsinnehåll.
+        released = float(
+            np.sum(np.float64(d_lab)) * NUTRIENT_PER_KG_LABILE
+            + np.sum(np.float64(d_str)) * NUTRIENT_PER_KG_STRUCT
+        )
+        retained = np.float32(1.0 - float(self.WP.nutrient_loss_frac))
+        np.add.at(self.nutrient, act,
+                  (d_lab * np.float32(NUTRIENT_PER_KG_LABILE)
+                   + d_str * np.float32(NUTRIENT_PER_KG_STRUCT)) * retained)
+
+        # Strukturandelen följer av vad som blev kvar.
+        with np.errstate(invalid="ignore", divide="ignore"):
+            st_new = np.where(new > np.float32(0.0), stru_new / np.maximum(new, np.float32(1e-30)), np.float32(0.0))
+        self.detritus_structure[act] = np.clip(st_new, 0.0, 1.0).astype(np.float32, copy=False)
 
         # Celler under tröskeln nollställs exakt och lämnar den aktiva mängden,
         # så att kontraktet "inaktiv cell är noll" håller.
@@ -453,11 +513,11 @@ class World:
             new[empty] = np.float32(0.0)
             self.detritus_structure[act[empty]] = np.float32(0.0)
             self._detritus_member[act[empty]] = False
-            self._detritus_active = act[~empty]
+            self._detritus_dirty = True
 
         self.detritus[act] = new
 
-        dM_nutrient_from_detritus = 0.0
+        dM_nutrient_from_detritus = released * float(retained)
         return dM_detritus_decay, dM_nutrient_from_detritus
 
     def update_flux(
@@ -498,6 +558,7 @@ class World:
         dt = float(self.WP.dt)
 
         self.temperature_pass()
+        self.nutrient_input_pass()
         dM_water_added, dM_water_removed = self.hydro_pass()
         dM_transport = self.transport_pass()
         dM_detritus_decay, dM_nutrient_from_detritus = self.decomposition_pass()

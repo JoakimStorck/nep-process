@@ -401,6 +401,31 @@ def decay_rate_scale(structure: float) -> float:
     return DECAY_MIN_SCALE + (1.0 - DECAY_MIN_SCALE) * (1.0 - s)
 
 
+# Nedbrytningstakt per fraktion, som andel av WorldParams.detritus_decay.
+# Labilt material bryts ner i full takt, strukturellt betydligt långsammare.
+# Ersätter den tidigare decay_rate_scale(), som approximerade samma sak genom
+# att sakta ner hela massan i stället för dess delar — och som därför lät
+# strukturandelen skena mot ett, eftersom bara det labila försvann.
+DECAY_SCALE_LABILE = 1.00
+DECAY_SCALE_STRUCT = 0.15
+
+# Näringsinnehåll per kilo vävnad, per fraktion. Speglar kol-kväve-förhållandet:
+# blad ligger kring 30:1, ved kring 500:1. Strukturmaterial är alltså kolrikt och
+# näringsfattigt.
+#
+# Samma tal används i båda riktningarna: det som frisätts när materialet bryts
+# ner är det som kostade att bygga det. Därav byggkostnadens inversion — seg
+# vävnad är billig i näring men fattig på energi.
+NUTRIENT_PER_KG_LABILE = 1.0 / 30.0
+NUTRIENT_PER_KG_STRUCT = 1.0 / 500.0
+
+
+def nutrient_content(structure: float) -> float:
+    """Kilo näring per kilo vävnad vid given strukturandel."""
+    s = min(1.0, max(0.0, float(structure)))
+    return NUTRIENT_PER_KG_LABILE * (1.0 - s) + NUTRIENT_PER_KG_STRUCT * s
+
+
 DECAY_MIN_SCALE = 0.15
 
 # Matsmältningens verkningsgrad som funktion av substratets strukturandel.

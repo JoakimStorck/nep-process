@@ -29,6 +29,7 @@ from phenotype import (
     flora_uptake_capacity,
     structure_fraction,
     energy_density,
+    nutrient_content,
 )
 
 from organism_store import OrganismStore, next_organism_id
@@ -86,7 +87,8 @@ def _stats_1d(x: np.ndarray) -> dict[str, float]:
 @dataclass
 class PopParams:
     init_pop: int = 12
-    max_pop: int = 500   # höjt — naturlig matbrist sätter taket nu, inte detta
+    max_pop: int = 500
+    flora_mortality: float = 2.0e-5   # höjt — naturlig matbrist sätter taket nu, inte detta
 
     store_growth_min_chunk: int = 256
     store_growth_factor: float = 2.0
@@ -1169,58 +1171,108 @@ class Population:
         return True
         
         
-    def _growth_system_flora(self) -> float:
+    def _growth_system_flora(self) -> tuple[float, float, float]:
         """
-        Enkel första tillväxt för diskret flora i OrganismStore.
-        Returnerar total producerad biomassa (kg) detta tick.
+        Upptag och tillväxt för diskret flora, fusionerade till ett pass.
+
+        Manifestet tillåter att pass med tät dataåtkomst och biologisk
+        sammanhållning slås ihop. Upptaget avgör exakt hur mycket tillväxt som
+        kan betalas, så att hålla dem isär skulle kräva en näringsreserv per
+        organism utan att något annat läser den.
+
+        Tillväxten är begränsad av tre saker: den logistiska takten mot
+        vuxenmassan, näringen i cellen, och organismens uptake_capacity.
+        Byggkostnaden per kilo följer av strukturandelen och *sjunker* med den —
+        strukturmaterial är kolrikt och näringsfattigt, vilket är varför träd
+        klarar mager mark där örter inte gör det.
+
+        Returnerar (producerad kg, upptagen näring kg, död massa kg).
         """
         dt = float(self.WP.dt)
         BK = float(self.WP.B_K)
         if BK <= 0.0 or dt <= 0.0:
-            return 0.0
-    
+            return 0.0, 0.0, 0.0
+
+        world = self.world
+        uptake_max = float(self.WP.uptake_rate_max) * dt
+        mort = float(self.PP.flora_mortality) * dt
+
         produced = 0.0
-    
+        taken = 0.0
+        died = 0.0
+
         for slot in range(int(self.store.n)):
             if not bool(self.store.alive[slot]):
                 continue
             if int(self.store.kind[slot]) != 1:
                 continue
-        
+
             cell = int(self.store.cell_idx[slot])
             if cell < 0:
                 continue
-        
+
+            m = float(self.store.mass[slot])
+            struct = float(self.store.structure[slot])
+
+            # --- senescens: konstant risk per tick, återförs som förna ---
+            if mort > 0.0 and float(self.rng.random()) < mort:
+                if m > 0.0:
+                    world.excrete_at(
+                        float(self.store.pos_x[slot]),
+                        float(self.store.pos_y[slot]),
+                        m,
+                        struct,
+                    )
+                    died += m
+                self._release_flora_slot(slot)
+                continue
+
             T = self.world.temperature_of_cell(cell)
-        
+
             m_cap = max(1e-12, float(self.store.flora_adult_mass[slot]))
             regen = max(0.0, float(self.store.flora_growth_rate[slot]))
-        
             Topt = float(self.store.flora_temp_opt[slot])
-            Tw = max(1e-6, float(self.store.flora_temp_width[slot]))
-            gate = max(0.0, 1.0 - abs(T - Topt) / Tw)
-            gate = max(0.0, min(1.0, gate))
-        
-            m = float(self.store.mass[slot])
-            if m <= 0.0:
+            Twid = max(1e-6, float(self.store.flora_temp_width[slot]))
+
+            gate = math.exp(-0.5 * ((T - Topt) / Twid) ** 2)
+            if gate <= 1e-6 or m <= 0.0 or m >= m_cap:
                 continue
-    
-            # Enkel logistisk tillväxt
-            dm = regen * gate * m * max(0.0, 1.0 - m / m_cap) * dt
+
+            dm_want = regen * dt * m * (1.0 - m / m_cap) * gate
+            if dm_want <= 0.0:
+                continue
+
+            # --- näringsbegränsning ---
+            cost_per_kg = nutrient_content(struct)
+            need = dm_want * cost_per_kg
+            cap_limit = max(0.0, float(self.store.uptake_capacity[slot])) * uptake_max
+            got = world.take_nutrient(cell, min(need, cap_limit))
+            if got <= 0.0:
+                continue
+
+            dm = got / max(cost_per_kg, 1e-12)
+            new_m = min(m + dm, m_cap)
+            dm = new_m - m
             if dm <= 0.0:
                 continue
-    
-            new_m = m + dm
-            if new_m > m_cap:
-                dm = m_cap - m
-                new_m = m_cap
-    
-            if dm > 0.0:
-                self.store.mass[slot] = np.float32(new_m)
-                self.store.energy[slot] = np.float32(new_m * self._slot_energy_per_kg(slot))
-                produced += dm
-    
-        return float(produced)
+
+            self.store.mass[slot] = np.float32(new_m)
+            self.store.energy[slot] = np.float32(new_m * self._slot_energy_per_kg(slot))
+            produced += dm
+            taken += got
+
+        if produced > 0.0 or died > 0.0:
+            self._flora_summary_cache = None
+
+        return float(produced), float(taken), float(died)
+
+    def _release_flora_slot(self, slot: int) -> None:
+        """Avregistrera en floraindivid och frigör dess slot."""
+        s = int(slot)
+        self.store.alive[s] = False
+        self.store.mass[s] = np.float32(0.0)
+        self.store.energy[s] = np.float32(0.0)
+        self.store.release_slot(s)
 
     def _dispersal_system_flora(self) -> tuple[int, float]:
         """
@@ -1431,7 +1483,7 @@ class Population:
         """
         self.world.step()
     
-        dM_growth_flora = self._growth_system_flora()
+        dM_growth_flora, dM_uptake, dM_flora_death = self._growth_system_flora()
         flora_established, flora_dispersed_mass = self._dispersal_system_flora()
     
         self.store.rebuild_spatial_index()

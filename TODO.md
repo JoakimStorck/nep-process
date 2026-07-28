@@ -288,7 +288,7 @@ Underhållskostnad som *sjunker* med strukturandel, och matsmältningskapacitet 
 
 **Krav på varje ny trait.** En trait med en enda konsekvens är ett reglage, inte en anpassning — selektionen hittar optimum och stannar. Diversitet uppstår först när samma tal har motverkande konsekvenser, så att olika nischer gynnar olika värden. Varje ny trait ska prövas mot det: kan den dras åt båda håll av olika selektionstryck? Kan den inte det är den antingen en konstant i förklädnad eller en axel som kommer att kollapsa.
 
-**Klart när:** floran når ett stationärt tillstånd satt av näringstillgång; massan sluter sig i ledgern så att balansen kan bli hård invariant; flora med olika `uptake_capacity` uppvisar mätbart olika överlevnad; och `structure` uppvisar spridning i stället för att kollapsa mot en ände.
+**Klart när:** floran når ett stationärt tillstånd satt av näringstillgång; **närings**balansen sluter sig så att den kan bli hård invariant — total massa kan aldrig sluta sig, eftersom flora bygger merparten av sin vävnad ur luft och fauna växer ur en energibudget; det som cirkulerar är näringen; flora med olika `uptake_capacity` uppvisar mätbart olika överlevnad; och `structure` uppvisar spridning i stället för att kollapsa mot en ände.
 
 Här får Fas 2:s ekologiska hypotes sitt första riktiga svar. Blir svaret nej — revidera floramodellen, inte kärnan.
 
@@ -353,7 +353,7 @@ Profilera fasmodellen under blandad realistisk belastning. Numba för sensing, C
 | 4 | Floran når ett stationärt antal | ja |
 | 4 | Stationärt antal vid dubblad `capacity` | oförändrat ±10 % |
 | 4 | Överlevnadsskillnad mellan hög och låg `uptake_capacity` | statistiskt skild |
-| 4 | Massbalans i ledgern | sluten inom 1e-9 relativt |
+| 4 | Näringsbalans i ledgern | sluten inom 1e-9 relativt |
 | 4 | Populationsdifferentiering mellan klimatband | mätbar, annars är världen för smal |
 | 5 | Kostnad per floraindivid och tick | < 1 µs |
 | 5 | 10 000 flora | < 10 ms/tick |
