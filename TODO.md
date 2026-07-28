@@ -241,16 +241,30 @@ Här får Fas 2:s ekologiska hypotes sitt första riktiga svar. Blir svaret nej 
 
 **Klart när:** 10 000 flora körs under 10 ms/tick.
 
-## Steg 5 — Fauna store-first och kapacitetskostnader
+## Steg 5a — Sensing som evolverbar kapacitet
+
+*Kräver Steg 3 för selektionstrycket och Steg 4 för delmängdsmaskineriet, men inte hela fauna-migreringen. Underlag: `docs/synens-axlar.md`.*
+
+Synen är i dag evolverbar i fyra diskreta steg längs en sammanslagen axel. Det som saknas är att axlarna kan handlas mot varandra och att kapaciteten kostar även när den inte används.
+
+- `sense_radius` och `sense_rate` blir kontinuerliga genetiska axlar med läsare: radien avgör vilka celler som läses, frekvensen avgör vilka slots som ingår i sensing-delmängden.
+- Vinkelupplösning och synfältsform blir egna axlar. Fix antal riktningssektorer, där akuiteten styr hur mycket de blandas — så att MLP:ns indimension är oberoende av genotypen och vikter förblir ärftliga.
+- Strukturkostnad införs: att bära kapaciteten kostar även oanvänd. Aktiveringskostnaden faller ut ur geometrin, eftersom `cells_within(r)` växer som ~3r² på hex.
+- Strålbaserad sampling ersätts av aggregering över `cells_within()` grupperad via grannmatrisen.
+
+**Klart när:** en organism med `sense_radius → 0` aldrig berör sensing-koden, och spridningen i `sense_radius` differentierar mot nisch med kostnadsmodellen påslagen men driftar neutralt utan den.
+
+## Steg 5b — Fauna store-first
 
 *Störst risk, störst utdelning.*
 
 - `Body`:s skalära tillstånd flyttas fält för fält till store-arrayer med dokumenterat ägarskap. `Body.step()` behålls som sammanhållen fysiologikärna men opererar på store-slices.
-- Kapacitetsfälten kopplas till läsare: `sense_radius` och `sense_rate` styr sensing-delmängden, `mobility` styr rörelsekostnad, `attack_capacity` styr predation. Efter detta ska listan i B1 vara tom.
-- Underhållskostnad per buren kapacitet införs i metabolismen. Det är A2, och först här får evolutionen ett tryck mot enkelhet.
-- Synkhjälparen avvecklas när sista fältet bytt ägare.
+- Gestationstillståndet byter ägare från `Body` till store när `gest_M`-ackumulationen flyttat med.
+- Återstående kapacitetsfält kopplas till läsare: `mobility` styr rörelsekostnad, `attack_capacity` styr predation. Efter detta ska listan i B1 vara tom.
+- Underhållskostnad per buren kapacitet generaliseras från sensing till övriga kapaciteter. Det är A2 fullt ut.
+- Synkhjälparen och gestationscachen avvecklas när sista fältet bytt ägare.
 
-**Klart när:** inget fauna-tillstånd har två skrivare, och en organism med `sense_radius = 0` aldrig berör sensing-koden.
+**Klart när:** inget fauna-tillstånd har två skrivare, och inget kapacitetsfält saknar läsare.
 
 ## Steg 6 — Hydro
 
@@ -280,8 +294,10 @@ Profilera fasmodellen under blandad realistisk belastning. Numba för sensing, C
 | 3 | Massbalans i ledgern | sluten inom 1e-9 relativt |
 | 4 | Kostnad per floraindivid och tick | < 1 µs |
 | 4 | 10 000 flora | < 10 ms/tick |
-| 5 | Kapacitetsfält utan läsare | 0 |
-| 5 | Kostnad per fauna och tick | mät baseline, tillåt ej regression |
+| 5a | Sensing-kostnad för organism med `sense_radius → 0` | 0, och koden aldrig berörd |
+| 5a | Spridning i `sense_radius` med kostnad kontra utan | differentierar mot nisch kontra neutral drift |
+| 5b | Kapacitetsfält utan läsare | 0 |
+| 5b | Kostnad per fauna och tick | mät baseline, tillåt ej regression |
 | 6 | Massbevarande i hydro över 10 000 tick | drift < 1e-6 relativt |
 
 Att floran över huvud taget når ett stationärt tillstånd, och att det tillståndet är okänsligt för `capacity`, är den viktigaste enskilda mätningen i planen. Den avgör om ekologin har tagit över från arkitekturen.
