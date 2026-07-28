@@ -386,6 +386,8 @@ Att floran över huvud taget når ett stationärt tillstånd, och att det tillst
 
 `PopParams.flora_seedling_mort_mult = 20.0` är satt på känsla och inte mätt.
 
+**Titta på `shared_cell_frac` först.** Det är andelen floraindivider som delar cell med någon annan, och den enda siffra som säger om konkurrensen alls biter. Är den nära noll mäter differentieringssiffrorna ingenting, hur länge körningen än pågår.
+
 ### Kända gap med känd lösning
 
 **Faunaläckan.** Kroppsmassan växer ur energibudgeten med en genetisk tillväxttakt, inte begränsad av assimilerad massa. Näringen i det som assimileras bokförs därför ingenstans. Uppmätt drift i näringsbalansen: 0,15 % över 6000 tick. Lösningen är massabaserad reserv, `E_total = M × (1 − struktur) × E_labile`, och hör till Steg 6b när `Body`:s energimodell ändå rörs. Först då kan `nutrient_balance()` bli en hård invariant i stället för diagnostik.
@@ -402,6 +404,7 @@ Att floran över huvud taget når ett stationärt tillstånd, och att det tillst
 - Kategorin växt kontra kadaver finns kvar i *anskaffningen* men inte i energiomvandlingen. Skillnaden i energitäthet faller ut ur strukturandelen.
 - Kriteriet för Steg 4 är näringsbalans, inte massbalans. Total massa kan aldrig sluta sig: flora bygger ur luft, fauna växer ur en energibudget.
 - Varje ny trait ska ha motverkande konsekvenser. En trait med en enda konsekvens är ett reglage, inte en anpassning.
+- `uptake_capacity` har eget locus i stället för att härledas ur autotrofin. Autotrofin initieras högt för att göra flora till flora, vilket lämnade upptaget klustrat i övre änden med 18 % av sitt intervall utnyttjat. Att vara växt och att vara effektiv på upptag är olika egenskaper. Genomet är därmed 34 loci mot manifestets avsedda 8–16 — avvikelsen är medveten och bör antingen accepteras skriftligt eller åtgärdas genom att skära någon annanstans.
 
 ---
 

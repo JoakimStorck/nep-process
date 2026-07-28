@@ -115,6 +115,13 @@ _T_DISPERSAL       = 31
 # protein, socker och fett. Samma tal beskriver båda ontologierna.
 _T_STRUCTURE       = 32
 
+# Näringsupptagets effektivitet. Eget locus, inte härlett ur autotrofin.
+# Att vara växt och att vara effektiv på näringsupptag är olika egenskaper:
+# autotrofin initieras högt för att göra flora till flora, vilket lämnade
+# upptaget klustrat i övre änden av sin skala med bara 18 % av intervallet
+# utnyttjat — selektionen hade nästan ingenting att gripa i.
+_T_UPTAKE          = 33
+
 @dataclass(frozen=True)
 class PhenoRanges:
     # maturity
@@ -357,6 +364,10 @@ def structure_from_traits(traits: np.ndarray | None, default: float = 0.0) -> fl
     return trait_unit(traits, _T_STRUCTURE, default=default)
 
 
+def uptake_from_traits(traits: np.ndarray | None, default: float = 0.0) -> float:
+    return trait_unit(traits, _T_UPTAKE, default=default)
+
+
 # ---------------------------------------------------------------------------
 # Strukturandel — gemensam för alla organismer
 # ---------------------------------------------------------------------------
@@ -453,6 +464,10 @@ def digestion_efficiency(structure: float) -> float:
 STRUCTURE_INIT_FLORA = (0.35, 0.95)
 STRUCTURE_INIT_FAUNA = (0.05, 0.45)
 
+# Upptagslocus initieras brett, så att selektionen har något att gripa i från
+# start i stället för att först behöva vänta ut mutationen.
+UPTAKE_INIT = (0.05, 0.95)
+
 
 # ---------------------------------------------------------------------------
 # Floras traituttryck — skalade storheter
@@ -513,11 +528,11 @@ def flora_dispersal_rate(traits: np.ndarray | None, R: FloraRanges = FloraRanges
 
 
 def flora_uptake_capacity(traits: np.ndarray | None, R: FloraRanges = FloraRanges()) -> float:
-    """Autotrofilocus: högre uttryck ger högre upptagskapacitet."""
+    """Näringsupptagets effektivitet, ur eget locus."""
     return _lerp(
         R.uptake_capacity_min,
         R.uptake_capacity_max,
-        autotrophy_from_traits(traits, default=0.5),
+        uptake_from_traits(traits, default=0.5),
     )
 
 
