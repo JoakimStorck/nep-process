@@ -101,6 +101,9 @@ class WorldParams:
     nutrient_input: float = 2.0e-10
     # Maximalt näringsupptag per tick vid uptake_capacity = 1.
     uptake_rate_max: float = 5.0e-5
+    # Diffusionstakt för löst näring. Explicit schema: D*dt måste hållas under
+    # ett för stabilitet, och laplacianen är normerad med grannantalet.
+    nutrient_diffusion: float = 0.20
 
     # --- Perception scaling ---
     C_sense_K: float = 5e-4
@@ -157,7 +160,12 @@ class World:
 
         # --- dynamiska: per cell ---
         self.water = np.full(nc, np.float32(self.WP.water_init), dtype=np.float32)
-        self.nutrient = np.full(nc, np.float32(self.WP.nutrient_init), dtype=np.float32)
+        # nutrient lagras i float64 till skillnad från övriga fält. Det är den
+        # bevarade storhet vi vill kunna påstå balans om: näring cirkulerar
+        # medan kol flödar igenom, så näringsbalansen är den enda hårda
+        # invarianten som är möjlig. I float32 ackumulerar diffusionens
+        # laplacian ett fel kring 5e-7 per tusen pass; i float64 är det 1e-15.
+        self.nutrient = np.full(nc, float(self.WP.nutrient_init), dtype=np.float64)
         # detritus är glest dynamiskt: nollskilt i en bråkdel av cellerna, och
         # ett fullt svep skulle mest multiplicera nollor. Fältet bär därför en
         # aktiv mängd, och kontraktet är att inaktiva celler är exakt noll.
@@ -172,6 +180,12 @@ class World:
 
         # Ackumulerad exkreterad massa sedan senaste ledgeruppdatering.
         self._dM_excreted = 0.0
+
+        # Näringens externa flöden, ackumulerade sedan start. Näringen är den
+        # enda storhet som kan cirkulera slutet — kol flödar igenom — så
+        # balansen mäts mot dessa och inte mot total massa.
+        self._nutrient_added_total = 0.0
+        self._nutrient_lost_total = 0.0
 
         # Aktiveringar och avaktiveringar samlas och slås ihop en gång per tick.
         # Att göra dem direkt mot arrayen kostade O(n) per händelse, vilket dög
@@ -433,8 +447,10 @@ class World:
         add = float(self.WP.dt) * float(self.WP.nutrient_input)
         if add == 0.0:
             return 0.0
-        self.nutrient += np.float32(add)
-        return add * float(self.grid.n_cells)
+        self.nutrient += add
+        total = add * float(self.grid.n_cells)
+        self._nutrient_added_total += total
+        return total
 
     def take_nutrient(self, cell: int, amount: float) -> float:
         """Ta upp till `amount` kg näring ur en cell. Returnerar faktiskt uttag."""
@@ -443,15 +459,44 @@ class World:
         got = amount if amount < avail else avail
         if got <= 0.0:
             return 0.0
-        self.nutrient[c] = np.float32(avail - got)
+        self.nutrient[c] = avail - got
         return float(got)
 
     def transport_pass(self) -> float:
         """
-        Placeholder för framtida transport/diffusion av lösta ämnen.
-        Ingen transport ännu i patch 1.
+        Diffusion av lösta ämnen över topologiska grannar.
+
+        Tvåstegsmetod: flödena beräknas ur tillståndet vid passets början och
+        appliceras simultant som nettoförändringar. Diskret laplacian via
+        grannmatrisen, alltså geometriagnostisk — samma kod gäller för fyra
+        eller sex grannar.
+
+        Massbevarandet är exakt och inte approximativt. Grannrelationen är
+        ömsesidig och graden konstant, så varje cell förekommer i exakt k
+        grannlistor och summan av laplacianen över hela världen är noll.
+
+        Kadensmässigt gör det här `nutrient` tätt dynamiskt — den fjärde
+        klassen i docs/varldens-kadensmodell.md, och den enda där fullt svep
+        är genuint motiverat. Näring som diffunderar har inget glest stöd.
+
+        Returnerar summan av absolut omfördelad mängd, som diagnostik.
         """
-        return 0.0
+        D = float(self.WP.nutrient_diffusion)
+        dt = float(self.WP.dt)
+        if D <= 0.0 or dt <= 0.0:
+            return 0.0
+
+        n = self.nutrient
+        idx = self.grid.neighbor_idx
+        k = int(self.grid.neighbor_count)
+
+        # Laplacian: grannarnas summa minus k gånger egen halt.
+        lap = n[idx].sum(axis=1, dtype=np.float64) - float(k) * n
+
+        delta = lap * (D * dt / k)
+        n += delta
+
+        return float(np.sum(np.abs(delta))) * 0.5
 
     def decomposition_pass(self) -> tuple[float, float]:
         """
@@ -498,8 +543,8 @@ class World:
         )
         retained = np.float32(1.0 - float(self.WP.nutrient_loss_frac))
         np.add.at(self.nutrient, act,
-                  (d_lab * np.float32(NUTRIENT_PER_KG_LABILE)
-                   + d_str * np.float32(NUTRIENT_PER_KG_STRUCT)) * retained)
+                  (np.float64(d_lab) * NUTRIENT_PER_KG_LABILE
+                   + np.float64(d_str) * NUTRIENT_PER_KG_STRUCT) * float(retained))
 
         # Strukturandelen följer av vad som blev kvar.
         with np.errstate(invalid="ignore", divide="ignore"):
@@ -517,6 +562,7 @@ class World:
 
         self.detritus[act] = new
 
+        self._nutrient_lost_total += released * (1.0 - float(retained))
         dM_nutrient_from_detritus = released * float(retained)
         return dM_detritus_decay, dM_nutrient_from_detritus
 

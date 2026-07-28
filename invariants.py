@@ -567,6 +567,61 @@ def check_grid_reference(grid, sample_stride: int = 1) -> list[Violation]:
     return out
 
 
+def nutrient_balance(pop) -> dict[str, float]:
+    """
+    Näringens fördelning och balans.
+
+    Näring är den enda storhet i modellen som kan cirkulera slutet: flora
+    bygger merparten av sin vävnad ur luft och fauna växer ur en energibudget,
+    så total massa flödar igenom snarare än cirkulerar.
+
+    Balansen gäller delsystemet mark, flora och detritus. Den sluter sig ännu
+    inte över fauna: assimilerad massa blir kroppsmassa utan att dess näring
+    bokförs, eftersom faunans reserv inte är massabaserad. Det löses i Steg 6b.
+    """
+    from phenotype import nutrient_content
+
+    world = pop.world
+    store = pop.store
+
+    free = float(np.sum(np.asarray(world.nutrient), dtype=np.float64))
+
+    act = np.asarray(world.detritus_active_cells, dtype=np.int64)
+    if act.size:
+        d = np.asarray(world.detritus)[act].astype(np.float64)
+        ds = np.asarray(world.detritus_structure)[act].astype(np.float64)
+        from phenotype import NUTRIENT_PER_KG_LABILE, NUTRIENT_PER_KG_STRUCT
+        in_detritus = float(np.sum(d * (NUTRIENT_PER_KG_LABILE * (1.0 - ds)
+                                        + NUTRIENT_PER_KG_STRUCT * ds)))
+    else:
+        in_detritus = 0.0
+
+    live = _live_slots(store)
+    flora = live[store.kind[live] == 1] if live.size else live
+    if flora.size:
+        m = store.mass[flora].astype(np.float64)
+        st = store.structure[flora].astype(np.float64)
+        from phenotype import NUTRIENT_PER_KG_LABILE, NUTRIENT_PER_KG_STRUCT
+        in_flora = float(np.sum(m * (NUTRIENT_PER_KG_LABILE * (1.0 - st)
+                                     + NUTRIENT_PER_KG_STRUCT * st)))
+    else:
+        in_flora = 0.0
+
+    added = float(getattr(world, "_nutrient_added_total", 0.0))
+    lost = float(getattr(world, "_nutrient_lost_total", 0.0))
+    total = free + in_detritus + in_flora
+
+    return {
+        "free": free,
+        "in_flora": in_flora,
+        "in_detritus": in_detritus,
+        "total": total,
+        "added": added,
+        "lost": lost,
+        "unaccounted": total - (added - lost),
+    }
+
+
 def diagnostics(pop) -> dict[str, Any]:
     """
     Storheter som är intressanta att följa men som ännu inte har en sluten
