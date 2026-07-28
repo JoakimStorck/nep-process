@@ -112,31 +112,31 @@ class World:
         # -------------------------
         # Primary world fields
         # -------------------------
-        # Världsfälten är platta per-cell-arrayer indexerade med cell_idx.
-        # Geometrin lever i Grid; världslagret ser bara en lista av celler.
+        # Världsfälten har både en ägare och en kadens. Ägaren säger vem som
+        # skriver; kadensen säger hur ofta fältet behöver röras.
+        #
+        #   statiska      lagras som skalär tills något varierar dem rumsligt
+        #   dynamiska     platta per-cell-arrayer indexerade med cell_idx
+        #   härledda      beräknas vid läsning, inte varje tick
+        #
+        # En tom cell ska vara billig, av samma skäl som en organism utan en
+        # kapacitet inte ska kosta något för den. Se docs/varldens-kadensmodell.md.
         nc = int(self.grid.n_cells)
 
-        self.elevation = np.full(nc, np.float32(self.WP.elevation_init), dtype=np.float32)
+        # --- statiska: skalära tills terräng eller väder gör dem rumsliga ---
+        self.elevation = float(self.WP.elevation_init)
+        self.rain_input = float(self.WP.rain_input_base)
+        self.spring_input = float(self.WP.spring_input_base)
+        self.infiltration = float(self.WP.infiltration_base)
+        self.evaporation = float(self.WP.evaporation_base)
+
+        # --- dynamiska: per cell ---
         self.water = np.full(nc, np.float32(self.WP.water_init), dtype=np.float32)
         self.nutrient = np.full(nc, np.float32(self.WP.nutrient_init), dtype=np.float32)
         self.detritus = np.full(nc, np.float32(self.WP.detritus_init), dtype=np.float32)
 
-        # self.C är en egenskap, inte ett fält — se nedan.
-
-        # -------------------------
-        # External forcing fields
-        # -------------------------
-        self.rain_input = np.full(nc, np.float32(self.WP.rain_input_base), dtype=np.float32)
-        self.spring_input = np.full(nc, np.float32(self.WP.spring_input_base), dtype=np.float32)
-        self.infiltration = np.full(nc, np.float32(self.WP.infiltration_base), dtype=np.float32)
-        self.evaporation = np.full(nc, np.float32(self.WP.evaporation_base), dtype=np.float32)
-
-        # -------------------------
-        # Derived hydro fields
-        # -------------------------
-        self.surface_level = np.zeros(nc, dtype=np.float32)
-        self.submerged = np.zeros(nc, dtype=np.bool_)
-        self.flow_strength = np.zeros(nc, dtype=np.float32)
+        # --- härledda: flödesstyrkan är noll tills hydro räknar grannflöde ---
+        self.flow_strength = 0.0
 
         # time
         self.t = 0.0
@@ -269,28 +269,53 @@ class World:
         """
         self._update_temperature()
 
+    @property
+    def surface_level(self) -> np.ndarray:
+        """
+        Fri yta, elevation + water. Härledd: beräknas vid läsning i stället för
+        varje tick, eftersom inget systempass läser den ännu. Kostar O(n_cells)
+        per anrop — hydro ska räkna på `water` direkt.
+        """
+        return (self.water + np.float32(self.elevation)).astype(np.float32, copy=False)
+
+    @property
+    def submerged(self) -> np.ndarray:
+        """Bool per cell, water över tröskeln. Härledd, se surface_level."""
+        return self.water > np.float32(self.WP.submerged_threshold)
+
     def hydro_pass(self) -> tuple[float, float]:
         """
-        Minimal hydro-skelett för fas 1.5.
+        Minimal hydro-skelett för fas 1.5. Ännu inget grannflöde.
 
-        Patch 1 gör ännu inget grannflöde. Hydro äger dock redan sina härledda fält:
-          - water uppdateras av forcing-termer
-          - surface_level, submerged och flow_strength lämnas i konsistent skick
+        Forcing-termerna är rumsligt konstanta, så nettotillskottet per tick är
+        ett tal och inte ett fält. Det gör att passet gör en enda vektoriserad
+        operation över `water` i stället för ett dussin. När forcing blir
+        rumsligt varierande promoveras termerna till arrayer och uttrycket
+        nedan fungerar oförändrat.
         """
-        dt = np.float32(self.WP.dt)
+        dt = float(self.WP.dt)
+        dwater = dt * (
+            float(self.rain_input)
+            + float(self.spring_input)
+            - float(self.infiltration)
+            - float(self.evaporation)
+        )
 
-        water_before = self.water.copy()
-        dwater = dt * (self.rain_input + self.spring_input - self.infiltration - self.evaporation)
-        self.water = np.maximum(self.water + dwater, np.float32(0.0)).astype(np.float32, copy=False)
+        if dwater == 0.0:
+            return 0.0, 0.0
 
-        self.surface_level = (self.elevation + self.water).astype(np.float32, copy=False)
-        self.submerged = self.water > np.float32(self.WP.submerged_threshold)
-        self.flow_strength.fill(np.float32(0.0))
+        w = self.water
+        if dwater > 0.0:
+            # Inget klipps bort: varje cell ökar lika mycket.
+            w += np.float32(dwater)
+            n = float(w.shape[0])
+            return dwater * n, 0.0
 
-        delta = self.water - water_before
-        dM_water_added = float(np.sum(np.maximum(delta, 0.0), dtype=np.float64))
-        dM_water_removed = float(np.sum(np.maximum(-delta, 0.0), dtype=np.float64))
-        return dM_water_added, dM_water_removed
+        # Negativt tillskott: celler med mindre vatten än uttaget klipps mot noll,
+        # så det faktiska uttaget är summan av min(water, -dwater).
+        removed = float(np.sum(np.minimum(w, np.float32(-dwater)), dtype=np.float64))
+        np.maximum(w + np.float32(dwater), np.float32(0.0), out=w)
+        return 0.0, removed
 
     def transport_pass(self) -> float:
         """

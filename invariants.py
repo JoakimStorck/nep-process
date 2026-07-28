@@ -354,11 +354,19 @@ def check_body_store_mirror(pop) -> list[Violation]:
     return out
 
 
-WORLD_CELL_FIELDS = (
-    "elevation", "water", "nutrient", "detritus",
-    "rain_input", "spring_input", "infiltration", "evaporation",
-    "surface_level", "submerged", "flow_strength",
+# Fält som ska vara platta per-cell-arrayer.
+WORLD_CELL_FIELDS = ("water", "nutrient", "detritus")
+
+# Fält som är rumsligt konstanta och därför lagras som skalär. De promoveras
+# till arrayer först när något faktiskt varierar dem — se
+# docs/varldens-kadensmodell.md.
+WORLD_UNIFORM_FIELDS = (
+    "elevation", "rain_input", "spring_input", "infiltration", "evaporation",
+    "flow_strength",
 )
+
+# Härledda fält beräknas vid läsning och ska ha per-cell-form när de läses.
+WORLD_DERIVED_FIELDS = ("surface_level", "submerged")
 
 
 def check_world_field_domains(pop) -> list[Violation]:
@@ -374,7 +382,7 @@ def check_world_field_domains(pop) -> list[Violation]:
     out: list[Violation] = []
 
     bad: list[str] = []
-    for name in WORLD_CELL_FIELDS:
+    for name in WORLD_CELL_FIELDS + WORLD_DERIVED_FIELDS:
         arr = getattr(world, name, None)
         if arr is None:
             bad.append(f"{name} saknas")
@@ -384,6 +392,18 @@ def check_world_field_domains(pop) -> list[Violation]:
             bad.append(f"{name} har form {arr.shape}, förväntat 1D")
         elif int(arr.shape[0]) != n_cells:
             bad.append(f"{name} har längd {int(arr.shape[0])}, förväntat n_cells={n_cells}")
+
+    for name in WORLD_UNIFORM_FIELDS:
+        val = getattr(world, name, None)
+        if val is None:
+            bad.append(f"{name} saknas")
+            continue
+        arr = np.asarray(val)
+        if arr.ndim == 0:
+            continue
+        # Promoverat till fält: då gäller per-cell-form.
+        if arr.ndim != 1 or int(arr.shape[0]) != n_cells:
+            bad.append(f"{name} är varken skalär eller per-cell, form {arr.shape}")
 
     if bad:
         out.append(Violation("world_field_domains", "; ".join(bad[:MAX_EXAMPLES])))
