@@ -218,13 +218,13 @@ Mätt: 0 träffar på `rowcol_of`, `cell_from_rowcol`, `grid.size` och `bilinear
 - `distance()` blir hexavstånd, `cells_within(r)` ger 1, 7, 19 … celler.
 - Viewern översätter cell-ID via `Grid` och ritar hexceller.
 - Diffusions- och spridningsparametrar justeras för det nya grannantalet — en gång, innan ekologin byggs.
-- `Grid` tar `width` och `height` separat. Hexvärlden är aldrig kvadratisk i kontinuerliga enheter, och radoffset kräver jämnt radantal.
-- Latituden görs periodisk, `lat = -cos(2π·r/H)`. Den linjära profilen ger ett enda kallt band som wrappar, med en 24-gradig säsongsdiskontinuitet mitt i sig — ingen isolering plus en artefakt. Den periodiska ger två kalla band åtskilda av två tempererade zoner, med motfasiga årstider. Det är den geografi projektet designades för.
-- Världsstorleken sätts till 64 × 256. Periodisk latitud halverar bandbredden, så H=128 återställer bara nuläget medan H=256 fördubblar sträckan pol till ekvator.
+- ~~`Grid` tar `width` och `height` separat.~~ **Klart.** Hexvärlden är aldrig kvadratisk i kontinuerliga enheter, och radoffset kräver jämnt radantal.
+- ~~Latituden görs periodisk, `lat = -cos(2π·r/H)`.~~ **Klart.** Den linjära profilen gav ett enda kallt band som wrappade, med en 24-gradig säsongsdiskontinuitet mitt i sig — ingen isolering plus ett artefakt. Den periodiska ger två kalla band åtskilda av två tempererade zoner, med motfasiga årstider.
+- Världsstorleken sätts till 64 × 256 som standard. Periodisk latitud halverar bandbredden, så H=128 återställer bara nuläget medan H=256 fördubblar sträckan pol till ekvator. Konfigurationen körs redan via `--width 64 --height 256`; det som återstår är att göra den till standard.
 
 **Klart när:** allt utanför `grid.py` och viewern är oförändrat. Krävs större ändringar i world eller biologi är Steg 1 inte färdigt, och felet ska rättas där.
 
-**Mäts separat:** differentierar sig populationer efter klimatband, eller blandas de bort av rörelse? Klimatändringen bör mätas på kvadratgeometri innan hexbytet, så att ekologiskt utfall och geometribyte inte sammanblandas.
+**Uppmätt vid klimatbytet:** sömmen går från 24,10 °C till 0,02 °C vid 64×256, och största steg mellan intilliggande rader från 2,24 till 0,96 °C — gradienten blir alltså både sammanhängande och jämnare än med den linjära profilen. Andel agenter som byter klimatband under livstiden faller från 79 % till 50 %.
 
 ## Steg 3 — Världens kadensmodell
 
@@ -311,13 +311,13 @@ Profilera fasmodellen under blandad realistisk belastning. Numba för sensing, C
 | 0 | Fält med två skrivare | 0 |
 | 1 | Referenser till rad, kolumn eller `[y, x]` utanför `Grid` | 0 |
 | 2 | Filer ändrade vid hexbytet | endast `grid.py` och viewer |
-| 2 | Populationsdifferentiering mellan klimatband | mätbar, annars är världen för smal |
 | 3 | Världspass vid 1 000 000 celler | ~10 ms/tick, från 26 |
 | 3 | Nollskilda värden i inaktiva celler i glesa fält | 0 |
 | 4 | Floran når ett stationärt antal | ja |
 | 4 | Stationärt antal vid dubblad `capacity` | oförändrat ±10 % |
 | 4 | Överlevnadsskillnad mellan hög och låg `uptake_capacity` | statistiskt skild |
 | 4 | Massbalans i ledgern | sluten inom 1e-9 relativt |
+| 4 | Populationsdifferentiering mellan klimatband | mätbar, annars är världen för smal |
 | 5 | Kostnad per floraindivid och tick | < 1 µs |
 | 5 | 10 000 flora | < 10 ms/tick |
 | 5 | `n_cells`-beroende termer i spatialindexet | 0 |
