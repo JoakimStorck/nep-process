@@ -27,3 +27,5 @@ Figure_*.png
 # --- Patch-artefakter ---
 *.orig
 *.rej
+*.patch
+*.b64
