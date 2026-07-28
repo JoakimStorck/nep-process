@@ -390,7 +390,21 @@ Att floran över huvud taget når ett stationärt tillstånd, och att det tillst
 
 ### Kända gap med känd lösning
 
-**Faunaläckan.** Kroppsmassan växer ur energibudgeten med en genetisk tillväxttakt, inte begränsad av assimilerad massa. Näringen i det som assimileras bokförs därför ingenstans. Uppmätt drift i näringsbalansen: 0,15 % över 6000 tick. Lösningen är massabaserad reserv, `E_total = M × (1 − struktur) × E_labile`, och hör till Steg 6b när `Body`:s energimodell ändå rörs. Först då kan `nutrient_balance()` bli en hård invariant i stället för diagnostik.
+**Faunaläckan är en näringskälla, inte en avrundning.** Detta är det viktigaste öppna felet och blockerar all kalibrering.
+
+Uppmätt i en 300 000-tickskörning: faunan dog ut mellan tick 20 000 och 60 000, och näringen i världen gick från 1,16e-03 till 1,67e-01 i samma intervall. Hoppet är kadavrens näringsinnehåll — fjorton döda agenter à ungefär 0,6 kg ger 0,214 kg näring mot observerade 0,166. **Det är 32 gånger hela den externa tillförseln över samma 80 000 tick.** Floran exploderade därefter från 290 till 7926 individer, vilket ser ut som en ekologisk process men är en bokföringsbugg.
+
+Mekanismen: fauna äter flora, vilket tar näring ur floran. Den assimilerade massan blir kroppsmassa utan att dess näring bokförs. När djuret dör beräknas kadavrets näringsinnehåll ur dess strukturandel — och eftersom fauna har låg struktur (0,25) mot floras höga (0,56) bär kadavret 1,6 gånger mer näring per kilo än vad som åts. Näring skapas alltså vid varje dödsfall.
+
+Den tidigare uppmätta driften på 0,15 % över 6000 tick var missvisande: läckan är proportionell mot faunans dödlighet, inte mot tiden.
+
+**Ett andra hål i samma bokföring.** `_excrete()` räknar assimilerad andel som `(1 − struktur) × matsmältningsverkningsgrad`, men den upptagna energin multipliceras dessutom med dietverkningsgraden `herb_eff`/`scav_eff`. En generalist på `diet = 0,5` har `herb_eff = 0,62`, så 38 % av den påstått assimilerade massan försvinner utan att bli vare sig kropp eller exkrement. Dietverkningsgraden hör till assimilationsandelen, inte till en separat energimultiplikator.
+
+**Lösningen** är att reserven flyttar in i kroppsmassan: ätande ökar massan, förbränning minskar den, och den förbrända massans näring utsöndras till cellen som kvävehaltigt avfall. Assimilationsandelen blir `(1 − struktur) × matsmältning × diet`, och resten exkreteras. `M_fast`/`M_slow` bär redan massaenheter sedan patch 0037; det som återstår är att koppla dem till `M` och sluta näringsflödet.
+
+Först därefter kan `nutrient_balance()` bli hård invariant, och först därefter är kalibreringen meningsfull — varje parameter man justerar mäts annars mot en pool som fylls på av en bugg.
+
+**Kroppen har tre fraktioner, inte två.** `structure` beskriver *sammansättningen* och avgör näringsinnehåll och kadavrets egenskaper. `E_cap` beskriver hur mycket som är *fritt mobiliserbart*, och tillåter en reserv på 3,2 % av kroppsmassan. Kvoten mot den labila fraktionen på 75 % är 23 gånger, och båda är riktiga: strukturell vävnad mobiliseras aldrig, funktionell vävnad bara vid svält, reserven fritt. Den nuvarande tvåstegskatabolismen — först energilagren, sedan kroppsmassa ner till `M_min` — motsvarar reserv först och funktionell vävnad sedan, och är alltså biologiskt riktig snarare än godtycklig.
 
 **Strukturratchen.** Exkretion driver detritusens strukturandel uppåt, eftersom det labila tas ut och det sega passerar. Riktningen är korrekt — gammalt material *är* ligninrikt — men den dämpas bara av färsk förna från floramortaliteten. Håll ett öga på `detritus_structure` när mortaliteten kalibreras.
 
