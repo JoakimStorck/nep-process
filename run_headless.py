@@ -30,7 +30,9 @@ def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="Kör nep-process headless med invariantkontroll.")
     ap.add_argument("--ticks", type=int, default=10000, help="antal simuleringssteg")
     ap.add_argument("--seed", type=int, default=1)
-    ap.add_argument("--size", type=int, default=64)
+    ap.add_argument("--size", type=int, default=64, help="kvadratisk värld; åsidosätts av --width/--height")
+    ap.add_argument("--width", type=int, default=0)
+    ap.add_argument("--height", type=int, default=0)
     ap.add_argument("--dt", type=float, default=0.02)
     ap.add_argument("--init_pop", type=int, default=12)
     ap.add_argument("--max_pop", type=int, default=256)
@@ -48,7 +50,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def build_population(a: argparse.Namespace) -> Population:
-    WP = WorldParams(size=int(a.size), dt=float(a.dt))
+    WP = WorldParams(size=int(a.size), width=int(a.width), height=int(a.height), dt=float(a.dt))
     AP = AgentParams(dt=WP.dt)
     PP = PopParams(init_pop=int(a.init_pop), max_pop=int(a.max_pop))
     return Population(WP=WP, AP=AP, PP=PP, seed=int(a.seed), hub=None)
@@ -71,7 +73,7 @@ def run(a: argparse.Namespace) -> int:
 
     if not a.quiet:
         print(
-            f"START headless: ticks={a.ticks} size={a.size} dt={a.dt} "
+            f"START headless: ticks={a.ticks} värld={pop.grid.width}x{pop.grid.height} ({pop.grid.n_cells} celler) dt={a.dt} "
             f"init_pop={a.init_pop} max_pop={a.max_pop} seed={a.seed}",
             flush=True,
         )

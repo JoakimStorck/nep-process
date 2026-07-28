@@ -30,6 +30,8 @@ def clamp(x: float, lo: float, hi: float) -> float:
 @dataclass
 class WorldParams:
     size: int = 64
+    width: int = 0     # 0 => size
+    height: int = 0    # 0 => size
     dt: float = 0.02
 
     # Flora mass scale used by Population for normalization / initialization
@@ -96,8 +98,9 @@ class World:
     grid: Grid = field(init=False)    
 
     def __post_init__(self) -> None:
-        s = int(self.WP.size)
-        self.grid = Grid(size=s)
+        self.grid = Grid(size=int(self.WP.size),
+                         width=int(self.WP.width),
+                         height=int(self.WP.height))
 
         self.sample_flora_local_hook = None
         self.sample_flora_rays_hook = None        
@@ -220,8 +223,7 @@ class World:
         simlog. Båda går över till cell-ID i Steg 2, och då försvinner den här
         metoden tillsammans med dem.
         """
-        s = int(self.WP.size)
-        return arr.reshape(s, s)
+        return arr.reshape(self.grid.shape)
 
     @property
     def Ty(self) -> np.ndarray:
@@ -230,14 +232,12 @@ class World:
         simlog. Temperaturen är konstant längs en rad, så första kolumnen av
         det omformade per-cell-fältet räcker. Tas bort i Steg 2.
         """
-        s = int(self.WP.size)
-        return self.T_cell.reshape(s, s)[:, 0]
+        return self.T_cell.reshape(self.grid.shape)[:, 0]
 
     @property
     def gy(self) -> np.ndarray:
         """Per-rad-tillväxtgrind. Samma kompatibilitetsroll som Ty."""
-        s = int(self.WP.size)
-        return self.g_cell.reshape(s, s)[:, 0]
+        return self.g_cell.reshape(self.grid.shape)[:, 0]
 
     def temperature_field(self) -> np.ndarray:
         """Temperatur per cell, indexerad med cell_idx."""

@@ -30,7 +30,12 @@ class Grid:
     här.
     """
 
-    size: int
+    # width och height är de bärande måtten. size är en bekvämlighet som sätter
+    # båda för kvadratiska världar; den sätts till 0 när världen inte är
+    # kvadratisk och ska inte läsas av någon — använd width, height eller shape.
+    size: int = 0
+    width: int = 0
+    height: int = 0
 
     n_cells: int = field(init=False, repr=False, compare=False)
     neighbor_idx: np.ndarray = field(init=False, repr=False, compare=False)
@@ -40,18 +45,28 @@ class Grid:
     cell_center_y: np.ndarray = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        s = int(self.size)
-        n = s * s
+        # Bredd och höjd är de bärande måtten. `size` finns kvar som bekvämlighet
+        # för kvadratiska världar och sätter båda.
+        w = int(self.width) if int(self.width) > 0 else int(self.size)
+        h = int(self.height) if int(self.height) > 0 else int(self.size)
+        if w <= 0 or h <= 0:
+            raise ValueError("Grid kräver size, eller width och height")
+
+        object.__setattr__(self, "width", w)
+        object.__setattr__(self, "height", h)
+        object.__setattr__(self, "size", w if w == h else 0)
+
+        n = w * h
 
         cells = np.arange(n, dtype=np.int64)
-        row = cells // s
-        col = cells % s
+        row = cells // w
+        col = cells % w
 
         # Von Neumann-grannar i samma ordning som neighbors(): upp, ned, vänster, höger.
-        up = ((row - 1) % s) * s + col
-        down = ((row + 1) % s) * s + col
-        left = row * s + ((col - 1) % s)
-        right = row * s + ((col + 1) % s)
+        up = ((row - 1) % h) * w + col
+        down = ((row + 1) % h) * w + col
+        left = row * w + ((col - 1) % w)
+        right = row * w + ((col + 1) % w)
 
         neighbor_idx = np.stack((up, down, left, right), axis=1).astype(np.int32, copy=False)
 
@@ -59,7 +74,7 @@ class Grid:
         # där de inte är det, så att anropare kan skrivas en gång.
         neighbor_mask = np.ones(neighbor_idx.shape, dtype=np.bool_)
 
-        denom = float(max(1, s - 1))
+        denom = float(max(1, h - 1))
         cell_lat = (2.0 * (row.astype(np.float32) / np.float32(denom)) - np.float32(1.0)).astype(
             np.float32, copy=False
         )
@@ -72,6 +87,11 @@ class Grid:
         object.__setattr__(self, "cell_center_y", (row + 0.5).astype(np.float32, copy=False))
 
     @property
+    def shape(self) -> tuple[int, int]:
+        """(höjd, bredd) i celler. För anropare som behöver rutnätsform."""
+        return int(self.height), int(self.width)
+
+    @property
     def extent_x(self) -> float:
         """
         Världens utsträckning i kontinuerligt rum längs x.
@@ -80,12 +100,12 @@ class Grid:
         cellbredden inte 1, och utsträckningen skiljer sig därför från
         cellantalet — anropare ska aldrig anta att de är samma tal.
         """
-        return float(self.size)
+        return float(self.width)
 
     @property
     def extent_y(self) -> float:
         """Världens utsträckning i kontinuerligt rum längs y."""
-        return float(self.size)
+        return float(self.height)
 
     def random_position(self, rng) -> tuple[float, float]:
         """Enhetligt fördelad position i världen. Geometrin äger sin egen form."""
@@ -100,8 +120,7 @@ class Grid:
         return int(self.neighbor_idx.shape[1])
 
     def wrap_pos(self, x: float, y: float) -> tuple[float, float]:
-        s = float(self.size)
-        return x % s, y % s
+        return x % float(self.width), y % float(self.height)
 
     def wrap_pos_inplace(self, xs: np.ndarray, ys: np.ndarray) -> None:
         """
@@ -111,9 +130,8 @@ class Grid:
         hör därför hit. Anropare ska aldrig läsa grid.size för att wrappa själva
         — då flyttar geometrin ut ur Grid.
         """
-        s = np.float32(self.size)
-        np.mod(xs, s, out=xs)
-        np.mod(ys, s, out=ys)
+        np.mod(xs, np.float32(self.width), out=xs)
+        np.mod(ys, np.float32(self.height), out=ys)
 
     def cell_of(self, x: float, y: float) -> int:
         """
@@ -126,10 +144,10 @@ class Grid:
         geometrin byts i Steg 2, men inte i samma ändring som en refaktor —
         det vore en tyst beteendeändring.
         """
-        s = int(self.size)
-        ix = int(x) % s
-        iy = int(y) % s
-        return iy * s + ix
+        w = int(self.width)
+        ix = int(x) % w
+        iy = int(y) % int(self.height)
+        return iy * w + ix
 
     def cell_of_many(self, xs: object, ys: object) -> np.ndarray:
         """
@@ -139,25 +157,24 @@ class Grid:
         för negativa koordinater. Den skalära cell_of() trunkerar före modulo
         och avviker därför för negativa värden; se anmärkningen där.
         """
-        s = int(self.size)
-        xw = np.mod(np.asarray(xs, dtype=np.float32), np.float32(s))
-        yw = np.mod(np.asarray(ys, dtype=np.float32), np.float32(s))
-        return (yw.astype(np.int32, copy=False) * np.int32(s)
+        w = int(self.width)
+        xw = np.mod(np.asarray(xs, dtype=np.float32), np.float32(w))
+        yw = np.mod(np.asarray(ys, dtype=np.float32), np.float32(self.height))
+        return (yw.astype(np.int32, copy=False) * np.int32(w)
                 + xw.astype(np.int32, copy=False)).astype(np.int32, copy=False)
 
     def rowcol_of(self, cell: int) -> tuple[int, int]:
-        s = int(self.size)
-        cell = int(cell) % (s * s)
-        row, col = divmod(cell, s)
+        w = int(self.width)
+        cell = int(cell) % int(self.n_cells)
+        row, col = divmod(cell, w)
         return row, col
 
     def cell_from_rowcol(self, row: int, col: int) -> int:
-        s = int(self.size)
-        return (int(row) % s) * s + (int(col) % s)
+        w = int(self.width)
+        return (int(row) % int(self.height)) * w + (int(col) % w)
 
     def wrap_cell(self, cell: int) -> int:
-        s = int(self.size)
-        return int(cell) % (s * s)
+        return int(cell) % int(self.n_cells)
 
     def neighbors(self, cell: int) -> tuple[int, int, int, int]:
         """
@@ -177,15 +194,14 @@ class Grid:
         Topologiskt cellavstånd på kvadratisk torus, mätt som Manhattan-avstånd
         med toroidal wrap.
         """
-        s = int(self.size)
         ra, ca = self.rowcol_of(cell_a)
         rb, cb = self.rowcol_of(cell_b)
 
         dr = abs(rb - ra)
         dc = abs(cb - ca)
 
-        dr = min(dr, s - dr)
-        dc = min(dc, s - dc)
+        dr = min(dr, int(self.height) - dr)
+        dc = min(dc, int(self.width) - dc)
 
         return dr + dc
 
@@ -207,7 +223,7 @@ class Grid:
         return tuple(out)
 
     def torus_delta_pos(self, x1: float, y1: float, x2: float, y2: float) -> tuple[float, float]:
-        s = float(self.size)
+        s = float(self.width)
         half = 0.5 * s
 
         dx = x2 - x1
