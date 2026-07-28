@@ -314,29 +314,111 @@ def trait_lerp(
     return _lerp(lo, hi, trait_unit(traits, i, default))
 
 
-def autotrophy_from_traits(traits: np.ndarray | None) -> float:
-    return trait_unit(traits, _T_AUTOTROPHY, default=0.0)
+# ---------------------------------------------------------------------------
+# Locusaccessorer — normaliserat uttryck i [0, 1]
+# ---------------------------------------------------------------------------
+# Dessa mappar locus -> normaliserat uttryck. De känner till locuskartan men
+# inga skalor. Skalning till fysiska storheter sker i lagret nedanför.
+
+def autotrophy_from_traits(traits: np.ndarray | None, default: float = 0.0) -> float:
+    return trait_unit(traits, _T_AUTOTROPHY, default=default)
 
 
-def growth_from_traits(traits: np.ndarray | None) -> float:
-    return trait_unit(traits, _T_GROWTH, default=0.0)
+def growth_from_traits(traits: np.ndarray | None, default: float = 0.0) -> float:
+    return trait_unit(traits, _T_GROWTH, default=default)
 
 
-def adult_mass_from_traits(traits: np.ndarray | None) -> float:
-    return trait_unit(traits, _T_ADULT_MASS, default=0.0)
+def adult_mass_from_traits(traits: np.ndarray | None, default: float = 0.0) -> float:
+    return trait_unit(traits, _T_ADULT_MASS, default=default)
 
 
-def temp_opt_from_traits(traits: np.ndarray | None) -> float:
-    return trait_unit(traits, _T_TEMP_OPT, default=0.0)
+def temp_opt_from_traits(traits: np.ndarray | None, default: float = 0.0) -> float:
+    return trait_unit(traits, _T_TEMP_OPT, default=default)
 
 
-def temp_width_from_traits(traits: np.ndarray | None) -> float:
-    return trait_unit(traits, _T_TEMP_WIDTH, default=0.0)
+def temp_width_from_traits(traits: np.ndarray | None, default: float = 0.0) -> float:
+    return trait_unit(traits, _T_TEMP_WIDTH, default=default)
 
 
-def sexual_mode_from_traits(traits: np.ndarray | None) -> float:
-    return trait_unit(traits, _T_SEXUAL_MODE, default=0.0)
+def sexual_mode_from_traits(traits: np.ndarray | None, default: float = 0.0) -> float:
+    return trait_unit(traits, _T_SEXUAL_MODE, default=default)
 
 
-def dispersal_from_traits(traits: np.ndarray | None) -> float:
-    return trait_unit(traits, _T_DISPERSAL, default=0.0)
+def dispersal_from_traits(traits: np.ndarray | None, default: float = 0.0) -> float:
+    return trait_unit(traits, _T_DISPERSAL, default=default)
+
+
+# ---------------------------------------------------------------------------
+# Floras traituttryck — skalade storheter
+# ---------------------------------------------------------------------------
+# Manifestet: traitsemantiken ägs av phenotype.py. Skalningsintervallen hör
+# därför hit och inte till Population. Locus refereras via _T_*-konstanterna,
+# aldrig via råa heltal, så att en ändring i locuskartan slår igenom överallt
+# i stället för att gå sönder tyst hos en anropare.
+
+
+@dataclass(frozen=True)
+class FloraRanges:
+    growth_rate_min: float = 0.005
+    growth_rate_max: float = 0.050
+
+    # Vuxenmassa uttrycks som multipel av världens massaskala (WorldParams.B_K)
+    # och skalas därför vid anropet, inte här.
+    adult_mass_k_min: float = 0.25
+    adult_mass_k_max: float = 4.0
+
+    temp_opt_min: float = -5.0
+    temp_opt_max: float = 35.0
+
+    temp_width_min: float = 4.0
+    temp_width_max: float = 18.0
+
+    dispersal_rate_min: float = 0.0002
+    dispersal_rate_max: float = 0.020
+
+    uptake_capacity_min: float = 0.25
+    uptake_capacity_max: float = 1.0
+
+
+def flora_growth_rate(traits: np.ndarray | None, R: FloraRanges = FloraRanges()) -> float:
+    return _lerp(R.growth_rate_min, R.growth_rate_max, growth_from_traits(traits, default=0.0))
+
+
+def flora_adult_mass(
+    traits: np.ndarray | None,
+    mass_scale: float,
+    R: FloraRanges = FloraRanges(),
+) -> float:
+    """Vuxenmassa i kg. `mass_scale` är världens massaskala, WorldParams.B_K."""
+    k = _lerp(R.adult_mass_k_min, R.adult_mass_k_max, adult_mass_from_traits(traits, default=0.5))
+    return float(k) * float(mass_scale)
+
+
+def flora_temp_opt(traits: np.ndarray | None, R: FloraRanges = FloraRanges()) -> float:
+    return _lerp(R.temp_opt_min, R.temp_opt_max, temp_opt_from_traits(traits, default=0.5))
+
+
+def flora_temp_width(traits: np.ndarray | None, R: FloraRanges = FloraRanges()) -> float:
+    return _lerp(R.temp_width_min, R.temp_width_max, temp_width_from_traits(traits, default=0.5))
+
+
+def flora_dispersal_rate(traits: np.ndarray | None, R: FloraRanges = FloraRanges()) -> float:
+    return _lerp(R.dispersal_rate_min, R.dispersal_rate_max, dispersal_from_traits(traits, default=0.5))
+
+
+def flora_uptake_capacity(traits: np.ndarray | None, R: FloraRanges = FloraRanges()) -> float:
+    """Autotrofilocus: högre uttryck ger högre upptagskapacitet."""
+    return _lerp(
+        R.uptake_capacity_min,
+        R.uptake_capacity_max,
+        autotrophy_from_traits(traits, default=0.5),
+    )
+
+
+def flora_repro_capacity(traits: np.ndarray | None) -> float:
+    """
+    sexual_mode nära 0 ger asexuell flora med hög lokal reproduktionsbenägenhet.
+    Skalfritt mått i [0, 1] — ingen range behövs.
+    """
+    sexual = sexual_mode_from_traits(traits, default=0.0)
+    return float(max(0.0, 1.0 - sexual))

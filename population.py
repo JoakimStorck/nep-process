@@ -20,7 +20,13 @@ from genetics import (
 )
 from phenotype import (
     derive_pheno,
-    trait_lerp,
+    flora_adult_mass,
+    flora_dispersal_rate,
+    flora_growth_rate,
+    flora_repro_capacity,
+    flora_temp_opt,
+    flora_temp_width,
+    flora_uptake_capacity,
 )
 
 from organism_store import OrganismStore, next_organism_id
@@ -936,31 +942,6 @@ class Population:
         return child
 
 
-    def _flora_growth_rate(self, traits: np.ndarray | None) -> float:
-        return trait_lerp(traits, 26, 0.005, 0.050, default=0.0)
-    
-    def _flora_adult_mass(self, traits: np.ndarray | None) -> float:
-        return trait_lerp(traits, 27, 0.25 * float(self.WP.B_K), 4.0 * float(self.WP.B_K), default=0.5)
-    
-    def _flora_temp_opt(self, traits: np.ndarray | None) -> float:
-        return trait_lerp(traits, 28, -5.0, 35.0, default=0.5)
-    
-    def _flora_temp_width(self, traits: np.ndarray | None) -> float:
-        return trait_lerp(traits, 29, 4.0, 18.0, default=0.5)
-    
-    def _flora_dispersal_rate(self, traits: np.ndarray | None) -> float:
-        return trait_lerp(traits, 31, 0.0002, 0.020, default=0.5)
-
-    def _flora_uptake_capacity(self, traits: np.ndarray | None) -> float:
-        # autotrophy-locus: högre värde => högre upptagskapacitet
-        return trait_lerp(traits, 25, 0.25, 1.0, default=0.5)
-    
-    def _flora_repro_capacity(self, traits: np.ndarray | None) -> float:
-        # sexual_mode nära 0 => asexuell flora med hög lokal reproduktionsbenägenhet
-        sexual = trait_lerp(traits, 30, 0.0, 1.0, default=0.0)
-        return float(max(0.0, 1.0 - sexual))
-
-
     def _init_flora_slot(
         self,
         slot: int,
@@ -971,11 +952,11 @@ class Population:
         y, x = self.grid.rowcol_of(int(cell))
         e_per_kg = float(self.WP.E_plant_J_per_kg)
 
-        g_rate = np.float32(self._flora_growth_rate(traits))
-        a_mass = np.float32(self._flora_adult_mass(traits))
-        t_opt = np.float32(self._flora_temp_opt(traits))
-        t_width = np.float32(self._flora_temp_width(traits))
-        d_rate = np.float32(self._flora_dispersal_rate(traits))
+        g_rate = np.float32(flora_growth_rate(traits))
+        a_mass = np.float32(flora_adult_mass(traits, mass_scale=float(self.WP.B_K)))
+        t_opt = np.float32(flora_temp_opt(traits))
+        t_width = np.float32(flora_temp_width(traits))
+        d_rate = np.float32(flora_dispersal_rate(traits))
 
         self.store.id[slot] = int(next_organism_id())
     
@@ -999,7 +980,7 @@ class Population:
         self.store.flora_dispersal_rate[slot] = d_rate
         
         # Härled enkla store-kapaciteter från traits istället för hårdkodade 1.0/0.0
-        self.store.uptake_capacity[slot] = np.float32(self._flora_uptake_capacity(traits))
+        self.store.uptake_capacity[slot] = np.float32(flora_uptake_capacity(traits))
         self.store.growth_capacity[slot] = np.float32(g_rate / 0.050)
         self.store.dispersal_capacity[slot] = np.float32(d_rate / 0.020)
 
@@ -1008,7 +989,7 @@ class Population:
         self.store.mobility[slot] = np.float32(0.0)
         self.store.attack_capacity[slot] = np.float32(0.0)
         self.store.repair_capacity[slot] = np.float32(0.0)
-        self.store.repro_capacity[slot] = np.float32(self._flora_repro_capacity(traits))
+        self.store.repro_capacity[slot] = np.float32(flora_repro_capacity(traits))
     
         self.store.flood_tolerance[slot] = np.float32(0.0)
         self.store.buoyancy[slot] = np.float32(0.0)

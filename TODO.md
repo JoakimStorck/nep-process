@@ -1,391 +1,299 @@
-# NEP Process – Utvecklingsplan
-## Mot ett emergent, fysik-drivet forskningsverktyg (och senare konstmodus)
+# nep-process — Utvecklingsplan
 
-## 1. Syfte och målbild
-
-NEP Process ska utvecklas från en parameterstyrd ALife-simulering till ett **lagbundet, kausalt läsbart och mätbart** system där emergenta fenomen kan:
-
-- uppstå bottom-up ur lokala regler (agent–miljö-loopar)
-- observeras i långa körningar utan numerisk instabilitet
-- kvantifieras med enkla men robusta emergensmått
-- senare (när dynamiken bär) exponeras som interaktiv konstinstallation
-
-**Strategisk prioritet:**  
-1) fysikaliskt konsekvent energibas → 2) kollektiv struktur via interaktioner → 3) evolutionär acceleration → 4) research/art-modus.
-
-## 2. Övergripande designprinciper
-
-1. Kausal läsbarhet först. Inför inte flera kraftiga mekanismer samtidigt.
-2. All energi ska bokföras per tick (agentnivå och systemnivå).
-3. Regler ska vara lag-/skalningsbaserade, inte “magiska tal”.
-4. Lokala loopar är primära drivare. Undvik centrala “scripts” som skapar mönster.
-5. Mätbarhet är ett krav. Varje fas ska ha minst 2–3 tydliga indikatorer.
-6. Små steg, testbara förändringar. Varje delsteg ska kunna valideras med korta körningar.
-
-## 3. Fasindelning (översikt)
-
-- **FAS I** – Fysikalisk konsistens & energibokföring  
-  Bygger en lagbunden grund och gör långkörningar stabila.
-
-- **FAS II** – Agent–agent & agent–miljö-interaktioner  
-  Skapar kollektiv struktur (kluster, territorier, flockar) utan ny evolutionär komplexitet.
-
-- **FAS III** – Evolutionär acceleration  
-  Först när FAS I–II är stabila: sexuell reproduktion, plastisitet och NEP-core.
-
-- **FAS IV** – Forsknings- och konstmodus  
-  När systemet redan producerar intressant dynamik: interaktiv input, sonifiering, presentationsläge.
+*Juli 2026. Kompletterar arkitekturmanifestet i README.md: manifestet beskriver vad vi bygger, det här dokumentet var vi står och vad som kommer härnäst.*
 
 ---
 
-# FAS I – Fysikalisk konsistens & energibokföring
+## Sammanfattande bedömning
 
-## Mål
-Etablera ett energikonsekvent dynamiskt system där all drift blir begriplig och mönster kan tolkas kausalt.
+Arkitekturen rör sig åt rätt håll. Fauna har en verklig passkedja, världen har primära fält och en delegerande `World.step()`, och store:n bär mer tillstånd än tidigare.
 
-## Uteslutet i FAS I
-- Sexuell reproduktion
-- Plastisitet (lifetime learning)
-- NEP-core (meta-evolution)
-- Agent-agent kraftfält
-- Interaktiv konstintegration
-- Avancerade komplexitetsmått
+Men det finns ett systematiskt glapp mellan manifestets mekanismer och koden: **kapacitetsmodellen finns som arrayer och driver ingenting.** Samtliga kapacitetsfält har noll läsare, med ett undantag. Ontologin är deklarerad, inte verksam.
 
-### I.1 Energimodell (eliminera magiska tal)
+Världslagret har samtidigt fått fält utan dynamik och utan konsumenter: `nutrient` allokeras och rörs aldrig, `transport_pass()` returnerar noll, `decomposition_pass()` har `dM_nutrient_from_detritus = 0.0` hårdkodat, `flow_strength` nollställs varje tick. Skelettet är rätt byggt — det är bara tomt, och tomrummet växer.
 
-#### I.1.1 Definiera massa/storlek (M)
-- Varje agent ska ha entydig massa `M` (eller size som kan mappas till M).
-- `M` ska dokumenteras i phenotype och användas i alla kostnadsfunktioner.
+Och den ekologiska defekten är oförändrad: **floran har ingen begränsande resurs och ingen dödlighet.** Sedan store:n blev dynamiskt växande har den inte längre något tak alls.
 
-**TODO**
-- [ ] Identifiera nuvarande definition av size/massa
-- [ ] Om saknas: introducera `M` i phenotype
-- [ ] Dokumentera hur `M` härleds och används
+---
 
-#### I.1.2 Allometrisk basal metabolism
-Ersätt konstant basal med:
+# Del A — Målsättningar
 
-```python
-basal_cost = k_basal * M**0.75 * dt
+Manifestets principer formulerade som prövbara påståenden om vad koden ska kunna.
 
-TODO
-	•	Implementera basal_cost(M, dt)
-	•	Ta bort hardkodade basalvärden
-	•	Logga basal per tick
+**A1. Enhetlig ontologi.** Skillnaden mellan växt och rovdjur är kapacitetsprofilens värden, inte klasstillhörighet.
 
-I.1.3 Rörelsekostnad (v²)
-Ersätt konstant move_cost med:
+**A2. Kapaciteter kostar.** Underhålls-, aktiverings- och strukturkostnad. En kapacitet som är noll ska varken kosta energi eller CPU.
 
-move_cost = k_move * M * v**2 * dt
+**A3. Enkla organismer är billiga.** Tiotusentals enkla samtidigt med hundratals komplexa.
 
-TODO
-	•	Identifiera var rörelsekostnad tas ut
-	•	Ersätt med M·v²
-	•	Logga move_cost per agent
+**A4. Fasbaserad exekvering.** Systempass mot förberedda, immutabla delmängder. Pass arbetar mot arrayer, inte objekt.
 
-I.1.4 Energiintag (Eat) och fältkoppling
-Energi som agenten får från fält ska:
-	•	minska fältet motsvarande, eller
-	•	explicit loggas som extern inflow (om fältet är “källa”).
+**A5. Dataorienterad kärna.** SoA, minimal kärna, subsystemstate i separata tilläggsarrayer.
 
-Rekommendation: ΔE_agent = -ΔE_field_local.
+**A6. Abstrakt geometri.** `Grid` är den enda plats där geometrin existerar.
 
-TODO
-	•	Identifiera nuvarande eat-implementation
-	•	Säkerställ energiekvivalens eller loggad inflow
-	•	Logga E_in_from_fields
+**A7. Fysik / värld / biologi som skilda lager.**
 
-I.2 Energy ledger (agentnivå och systemnivå)
+**A8. Lokal upptäckt.** Ingen global iteration.
 
-I.2.1 Ledger per agent
-Per tick bokförs:
-	•	E_before, E_in, E_out (uppdelat), E_after
+**A9. Levande primärproduktion.** Floran konkurrerar, differentierar sig, koevolverar.
 
-Invariant:
+**A10. Emergent beteende som primärt evolutionärt mål.**
 
-E_after = E_before + E_in - E_out
+**A11. Terrängburen hydrologi.** Primära fält, forcing-fält, delegator, hydro över topografi, `detritus` ersätter `C`.
 
-TODO
-	•	Implementera agent-ledger (intern struktur)
-	•	Assertion med tolerans (epsilon)
-	•	Logga avvikelser och extrema värden
+---
 
-I.2.2 Ledger på systemnivå
-Per tick loggas:
-	•	Sum(E_agents)
-	•	Sum(E_fields) (valfritt i början)
-	•	E_total, dE_total
+# Del B — Status
 
-TODO
-	•	Implementera systemtotal loggning
-	•	Spara i steps.jsonl / world_log
+| # | Målsättning | Status |
+|---|---|---|
+| A1 | Enhetlig ontologi | Deklarerad, inte verksam |
+| A2 | Kapaciteter kostar | Saknas |
+| A3 | Enkla organismer är billiga | ~50–100× från mål |
+| A4 | Fasbaserad exekvering | Delvis — passkedja finns, delmängder saknas |
+| A5 | Dataorienterad kärna | Delvis |
+| A6 | Abstrakt geometri | Delvis, försämras med varje nytt världsfält |
+| A7 | Lagerseparation | Strukturellt på plats |
+| A8 | Lokal upptäckt | **Uppfylld** |
+| A9 | Levande primärproduktion | Strukturellt ja, funktionellt nej |
+| A10 | Emergent beteende | **Uppfylld i mekanik** |
+| A11 | Hydrologi | Etapp A klar, B och C tomma |
 
-I.3 Stabilitet för långkörningar
+## B1. Kapacitetsprofilen är kopplad till ingenting
 
-I.3.1 Numeriska skydd
-	•	NaN-checks (E, pos, v, heading)
-	•	Negativ energi → death eller clamp med tydlig regel
-	•	Ev. maxhastighet om instabilitet kräver
+Läsare respektive skrivare per kapacitetsfält i `OrganismStore`:
 
-TODO
-	•	NaN-check i Body.step()
-	•	Regel för E < 0
-	•	Logga extrema värden
+```
+uptake_capacity     0 läsare     growth_capacity     0 läsare
+dispersal_capacity  0 läsare     sense_radius        0 läsare
+sense_rate          0 läsare     mobility            0 läsare
+attack_capacity     0 läsare     repair_capacity     0 läsare
+flood_tolerance     0 läsare     buoyancy            0 läsare
+genome_idx          0 läsare     repro_capacity      1 läsare
+```
 
-I.3.2 Testprotokoll
-	•	3 seeds
-	•	10× standard-T
-	•	fast max_pop
-	•	rapportera: överlevnad, drift, emergensindikatorer
+Detta är kärnpunkten i hela analysen. A1 och A2 är inte delvis implementerade — de är inte implementerade. Det finns ingen plats där en kapacitets underhållskostnad skulle kunna dras, eftersom ingen kostnadsfunktion känner till kapaciteterna.
 
-TODO
-	•	Skapa testscript
-	•	Dokumentera resultat i /docs
+`age` har tre läsare och `energy_cap` en, vilket är verklig progress från Fas 4.
 
-I.4 Basala emergensindikatorer (minimikrav)
+## B2. Fauna: verklig passkedja, halvmigrerat tillstånd
 
-Syfte: kunna se kluster/struktur utan att introducera ny mekanik.
+`Population.step()` kör sex namngivna fauna-pass med explicita batch-objekt mellan sig — `_step_metabolism_system`, `_step_sense_system`, `_step_decision_system`, `_step_move_system`, `_step_body_system`, `_step_interaction_system`. Den generella per-tick-speglingen via `write_agent()` är borta; den anropas bara vid init och födsel. `Body.step()` är intakt som fysiologikärna men anropas från ett eget pass.
 
-I.4.1 Spatial entropi
-	•	Grid-binning av agenttäthet
-	•	Shannon entropy per tick (eller var N tick)
+Det är verklig arkitektur och motsvarar manifestets Fas 4-ordning. Tillståndet är däremot bara delvis migrerat, i tre lägen:
 
-TODO
-	•	Implementera spatial entropy
-	•	Logga tidsserie
+**Genuint store-ägda:** `age`, `repro_cd`. Skrivs i passen, läses därifrån.
 
-I.4.2 Medelgrannavstånd
-	•	k-NN avstånd (k=1..N) med numpy
-	•	mean/median per tick
+**Speglade från Body:** `mass`, `energy`, `energy_cap`, `damage`, `wear`. En synkhjälpare kopierar från `a.body.*`. `Body` är source of truth. Ärligt men omigrerat.
 
-TODO
-	•	Implementera med numpy
-	•	Logga tidsserie
+**Delat ägarskap:** `gestating`, `gest_M`, `gest_E_J`. Skrivs från `a.body.*` och läses som auktoritativa ur store. Två skrivare till samma fält är exakt det mönster manifestet förbjuder. Det är i dag tre fält; det bör lösas innan det blir tio.
 
-Definition: FAS I klar
-	•	Inga hårdkodade energikonstanter kvar (för basal/move/eat)
-	•	Ledger fungerar: agent + system
-	•	Långkörningar stabila (inga NaN, begriplig drift)
-	•	Minst två emergensindikatorer loggas
+## B3. Aktiva delmängder finns inte
 
-⸻
+Ingen förekomst av delmängdslogik. Per tick körs tre fulla Python-loopar över `range(store.n)` i florapassen, plus `rebuild_spatial_index` — som anropas **två gånger per tick** och själv innehåller två fulla loopar. Kostnaden skalar med kapaciteten, inte med antalet levande organismer.
 
-FAS II – Interaktioner (kollektiv struktur utan ny evolution)
-
-Mål
-Skapa genuin kollektiv dynamik (kluster, flockar, territorier) ur lokala regler via agent–agent och agent–miljö-loopar.
+## B4. Floran är en per-cell-biomassa i organismform
 
-Uteslutet i FAS II
-	•	Sexuell reproduktion
-	•	Plastisitet
-	•	NEP-core
-	•	Konstmodus
+Tre observationer som tillsammans betyder att A9 ännu inte har prövats:
 
-II.1 Agent-agent perception (utan “social AI”)
-Utöka sensing så att agenter kan detektera andra agenter på ett minimalt sätt:
-	•	presence / density / nearest-agent vector
-	•	ev. grov “tag” (art/typ) senare
+**Max en floraindivid per cell.** `_add_or_create_flora_in_cell()` adderar massa till befintlig flora i målcellen; ny slot allokeras bara om cellen är tom. Ingen konkurrens inom cell.
 
-TODO
-	•	Lägg till agentdetektion i input-pipeline (kompakt signal)
-	•	Logga hur ofta agentsensing aktiveras (diagnostik)
-
-II.2 Enkel attraktion/repulsion (lokal potential)
-Inför en minimal, kontrollerbar interaktionsregel:
-	•	repulsion på kort distans (collision-avoid)
-	•	optional attraction på längre distans (sociability)
-
-Krav: ska gå att slå av/på och styras med få parametrar.
-
-TODO
-	•	Implementera repulsion (minsta stabila)
-	•	Valfritt: attraction kopplad till trait
-	•	Testa flockning utan central styrning
-
-II.3 Miljömodifiering (feromonliknande spår)
-Agenter får en enkel möjlighet att skriva till ett fält:
-	•	deposit/consume i lokala celler
-	•	diffusion skapar gradienter som agenter kan följa
+**Ingen begränsande resurs.** Logistisk tillväxt mot individens egen `flora_adult_mass`, grindad på temperatur. Ordet `nutrient` förekommer inte en enda gång i `population.py`. `uptake_capacity` beräknas vid födsel och läses aldrig.
 
-Krav: energibokföring ska fortfarande fungera.
+**Ingen dödlighet.** Ingen wither, ingen senescens. Flora försvinner endast genom att ätas ner under en tröskel.
 
-TODO
-	•	Inför fält för deposition (eller reuse av befintligt fält med separat kanal)
-	•	Koppla deposition till kostnad/energi (ledger)
-	•	Testa självorganiserade stigar/territorier
+Konsekvensen är mätbar. Körning, 40 000 tick, `size=64`, `max_pop=256`, seed 1:
 
-II.4 Indirekt fitness via fält (ekologisk koppling)
-Säkerställ att agenters handlingar påverkar andra via fälten:
-	•	överkonsumtion → scarcity
-	•	deposition → attraktorer/repellenter
+```
+tick        fauna   flora   capacity
+    0          12     128        256
+20000          21     194        256
+30000          16     323        512
+40000           3     529       1024
+```
 
-TODO
-	•	Mät korrelation mellan fältstruktur och agentdistribution
-	•	Kontrollera att mönster består över tid (inte bara transient)
+Floran växer monotont, och sedan store:n blev dynamiskt växande finns inget som hejdar den — det arkitektoniska taket är borta och inget ekologiskt har ersatt det. Seed 2 och 3 över 20 000 tick ger samma monotona floratillväxt (till 172 respektive 233) med stabil fauna, så faunanedgången i seed 1 är en sen händelse som inte är belagd som systematisk.
 
-II.5 Emergensmått (utökning)
-Behåll enkla mått, lägg till 1–2 robusta:
-	•	klusterindex via grid-binning (andel massa i top-p cells)
-	•	Moran’s I (spatial autocorrelation) om enkelt
-	•	spektral proxy: variance över skalor (coarse-graining)
+Fas 2:s valideringsfrågor — *uppstår stabila florapopulationer? differentierar sig florastrategier via selektion?* — har därmed aldrig fått ett meningsfullt svar. Selektionstrycket är för svagt för att differentiera något: allt som växer överlever tills det äts.
 
-TODO
-	•	Implementera 1–2 nya indikatorer utan externa lib
-	•	Bygg liten “metrics summary” per körning
+## B5. Skalningsmålet är 50–100× bort
 
-Definition: FAS II klar
-	•	Reproducerbara kollektiva mönster (minst 2 seeds)
-	•	Mönster kan kopplas till specifika lokala regler
-	•	Metrics visar tydlig skillnad mot FAS I-baseline
-	•	Inga stabilitetsproblem introducerade
+Uppmätt, 12 fauna, varierande store-kapacitet:
 
-⸻
+```
+flora  130  ->   3.96 ms/tick
+flora  517  ->   7.59 ms/tick
+flora 2074  ->  19.81 ms/tick
+```
 
-FAS III – Evolutionär acceleration (när basen bär)
+Marginellt ungefär **8 µs per floraindivid och tick**. Extrapolerat till 10 000 flora: ~80 ms/tick. A3 kräver att siffran ner under en mikrosekund, vilket är vad vektoriserade array-pass ger.
 
-Mål
-Öka adaptivitet och långsiktig diversitet utan att tappa kausal läsbarhet.
-Krav: FAS I–II ska vara stabila och mätbara.
+## B6. Geometrin — och fältrepresentationen bakom den
 
-III.1 Sexuell reproduktion (crossover)
-Inför parning baserat på:
-	•	närhet
-	•	enkel kompatibilitet (sociability / readiness)
+`grid.py` är oförändrad sedan fas 3. `grid.neighbors()` har noll anropare. Fyra `np.roll`-laplacianer kvar i `abiotic.py`. Sjutton direkta koordinatläckor utanför `Grid` (`rowcol_of`, `bilinear_*`, `grid.size`).
 
-Crossover: minimal först (t.ex. single-point eller blend för weights).
+Det avgörande talet: **elva 2D-fält** med formen `(s, s)` i `world.py`. Temperaturen är en radvektor `Ty[row]`, och på hex finns ingen rad. Hexbytet begränsas alltså inte av passlogiken utan av fältrepresentationen, och varje nytt världsfält som tillkommer före cellindexeringen ökar konverteringskostnaden linjärt.
 
-TODO
-	•	Implementera parning + partner-val (lokalt)
-	•	Implementera crossover i genetics
-	•	Logga lineage/parent ids
-	•	Starta med låg rate och tydliga begränsningar
+## B7. Traitsemantiken
 
-III.2 Plastisitet (svag livstidsinlärning)
-Inför mycket svag uppdatering av policy/weights:
-	•	reward kopplat till energinetto / food_gain
-	•	learning rate modulerad av trait
+Locuskartan ägs korrekt av `phenotype.py`, som definierar `_T_*` för samtliga 32 loci med flora på 25–31. Skalningsintervallen låg tidigare duplicerade i `population.py` med hårdkodade heltalsindex; det är löst i Steg 0.
 
-Krav: ska vara “små perturbationer” snarare än ny agentklass.
+## B8. Testinfrastruktur
 
-TODO
-	•	Implementera liten weight update (valbar flagga)
-	•	Logga learning activity per agent
-	•	Utvärdera specialisering/robusthet
-
-III.3 NEP-core (meta-evolution via agentoutput)
-Inför en “evo-output” som modulerar mutation/crossover:
-	•	stress → ökad variation
-	•	stabilitet → minskad variation
-
-Krav: mekanismen ska vara strikt begränsad och transparent i loggning.
-
-TODO
-	•	Implementera evo-output
-	•	Koppla till mutation rate / noise scale
-	•	Logga effektiv mutation per event
-	•	Utvärdera diversitet över generationer
-
-III.4 Diversitets- och evolutionsmått
-Minimikrav:
-	•	trait diversity (entropy över traitbins)
-	•	lineage survival / branching
-	•	phenotypic spread över tid
+`run_headless.py` kör utan pygame med exitkod vid invariantbrott. `invariants.py` prövar sju invarianter: slotbokföring, arrayernas indexdomäner, `cell_idx`-konsistens, id-unikhet och id→slot-bijektion, finita och icke-negativa storheter, spatialindexets integritet, samt `Agent.store_slot`-bindning.
 
-TODO
-	•	Implementera diversitetsindex
-	•	Exportera “run summary” (csv/json) per körning
+Massa- och energibalans är ännu diagnostik, inte assertion: systemet är öppet by construction och får en sluten balans först när näringskretsloppet finns.
 
-Definition: FAS III klar
-	•	Sexuell repro fungerar utan kaos/drift
-	•	Plastisitet kan slås på/off och ger mätbara effekter
-	•	NEP-core ger kontrollerbar meta-variation
-	•	Diversitet och emergens ökar på ett begripligt sätt (metrics)
+## B9. Genomet
 
-⸻
+Manifestet anger 8–16 loci initialt. Faktiskt `n_traits = 32`. Bör antingen accepteras skriftligt eller åtgärdas.
 
-FAS IV – Forsknings- och konstmodus (när dynamiken redan är intressant)
+---
 
-Mål
-Göra NEP till ett “verktyg + installation” genom att separera körlägen och lägga på interaktivitet/medieutgångar utan att påverka kärndynamiken.
+# Del C — Ordningsfrågan
 
-IV.1 Körlägen: Research vs Art
-Inför en enkel switch:
-	•	Research: maximal logging, metrics, export
-	•	Art: fokus på realtidsviz, input, sonifiering
+## Näringskretsloppet före hydro
 
-Krav: kärnsimuleringen ska vara samma.
+Det ligger nära till hands att bygga hydro först: det är den svåraste world-processen och tvingar fram rätt lagerindelning. Men hydro har inga konsumenter. `flood_tolerance` och `buoyancy` läses inte, passiv drift är uppskjuten, framkomlighet likaså.
 
-TODO
-	•	Inför run-mode flagga i entrypoint
-	•	Separera export/logik från rendering
+Vi behöver inte spekulera om vad som händer när man bygger produktion utan konsumtion — det har redan hänt med `nutrient`, som ligger allokerat och orört.
 
-IV.2 Interaktiv input (publik/pilot)
-Exempel:
-	•	klick för att lägga “perturbation” (hazard/heat/resource)
-	•	sliders för globala parametrar (försiktigt)
+`nutrient` och `detritus` har däremot en konsument som väntar och en defekt som behöver dem. Kedjan **död → detritus → nedbrytning → näring → upptag → tillväxt → betning → död** är den minsta slutna slingan i modellen, och den kan byggas utan hydro. Den ger samtidigt:
 
-Krav: input ska vara explicit loggad och reversibel.
+- den första verkliga läsaren av ett kapacitetsfält (`uptake_capacity`)
+- selektionstryck som kan differentiera florastrategier — Fas 2:s hypotes blir prövbar
+- ett ekologiskt tak på floran i stället för inget tak alls
+- en sluten massbalans, vilket gör ledgern till en hård invariant i stället för diagnostik
 
-TODO
-	•	Implementera input events i viewer
-	•	Logga input som “exogenous interventions”
+Och hydro blir lättare efteråt: när `nutrient` redan transporteras över topologiska grannar med tvåstegsmetod är hydro samma mönster med en annan drivande gradient.
 
-IV.3 Multimedia outputs (sonifiering/video)
-Bygg på befintliga loggar och metrics:
-	•	ljud: population, energi, entropi, kluster → tonhöjd/rytmer
-	•	video: export av frames eller summary clips
+## Hex före ekologin
 
-Krav: ska vara frikopplat från sim-tick.
+Manifestet säger att hex ska komma när `Grid`-abstraktionen är ren, så att geometriombyggnad inte blandas med biologisk kalibrering. Villkoret handlar om att de två arbetena inte ska överlappa — inte om att geometrin ska komma sist.
 
-TODO
-	•	Implementera enkel sonifiering (optional)
-	•	Frame export (optional)
+Just nu finns nästan ingen ekologisk kalibrering att skydda: floran är degenererad, näringskretsloppet finns inte, hydro är tomt. Faunans fysiologi är kalibrerad, men den är geometrioberoende — energi, massa och skada bryr sig inte om cellform.
 
-IV.4 Demo- och dokumentationspaket
-	•	minimal “one command demo”
-	•	README med “what to look for”
-	•	exempel runs + output
+Byter vi geometri efter att ekologin kalibrerats får vi göra om kalibreringen. Grannantalet går från 4 till 6, `cells_within(1)` från 5 celler till 7, och diffusions- och spridningstakter skiftar med dem. Det är dubbelarbete som kan undvikas.
 
-TODO
-	•	Demo-skript
-	•	Dokumentation och screenshots
+Men inte som nästa handling. Det dyra med hex är inte hexgeometrin utan fältrepresentationen. Byter vi `Grid`-implementation i dag måste `world.py`, `population.py`, `agent.py` och viewern ändras — vilket per planens eget mätkriterium betyder att abstraktionen inte bär bytet. Vi skulle konvertera kvadratbunden 2D-kod till hexbunden 2D-kod.
 
-Definition: FAS IV klar
-	•	Research/Art-switch fungerar
-	•	Interaktiv input påverkar sim på loggat, kontrollerbart sätt
-	•	Multimedia output fungerar utan att störa sim
-	•	Demo kan köras reproducerbart
+**Därför: cellindexerade fält först, hex omedelbart därefter, all ekologi sedan i slutgeometrin.**
 
-⸻
+Bilinjär sampling har ingen naturlig hexmotsvarighet och bör tas bort snarare än översättas. Det är i linje med manifestet, som säger att biologin ska arbeta via cell-ID och aldrig direkt mot råa koordinater. En förenkling, inte en uppoffring.
 
-4. Teststrategi (gäller alla faser)
+---
 
-För varje PR/ändring:
-	•	Kör kort test (smoke test) + 1 längre baseline
-	•	Minst 2 seeds för att undvika “one-off”
-	•	Kontrollera:
-	•	NaN/inf
-	•	energiledger invariants
-	•	metrics export
-	•	regressions i runtime
+# Del D — Plan
 
-TODO
-	•	Standardisera “quick run” och “long run” presets
-	•	Skapa en enkel “run summary” som alltid exporteras
+## Steg 0 — Stabilisering och mätbarhet
 
-5. Praktisk arbetsordning (rekommenderad)
-	1.	FAS I: energi + ledger + stabilitet + 2 metrics
-	2.	FAS II: agent sensing + repulsion + deposition + 1–2 metrics
-	3.	FAS III: sexuell repro → plastisitet → NEP-core (en i taget)
-	4.	FAS IV: research/art-switch + interaktivitet + multimedia
+- ~~Headless entrypoint utan pygame-import.~~ **Klart.**
+- ~~Invariantsvit som smoke test.~~ **Klart.**
+- ~~Gemensam organism-id-rymd för flora och fauna.~~ **Klart** — fynd från sviten.
+- ~~Indexdomäner vid dynamisk store-tillväxt.~~ **Klart** — latent krasch när `capacity` sammanföll med `n_cells`.
+- ~~Floras traitsemantik flyttad till `phenotype.py`.~~ **Klart.**
+- ~~Arbetsgrenen insmält i `main`.~~ **Klart.** Långlivade parallella grenar är avvecklade som arbetssätt.
+- Lös delat ägarskap för `gestating`, `gest_M`, `gest_E_J`. Välj en ägare per fält och dokumentera valet.
 
-6. Sammanfattning
+**Klart när:** ett kommando kör 10 000 tick headless med godkänd invariantsvit, och inget fält har två skrivare.
 
-Planen bygger NEP som:
-	1.	Energikonsekvent dynamik (FAS I)
-	2.	Kollektiv struktur ur lokala regler (FAS II)
-	3.	Evolutionär acceleration med bibehållen kausalitet (FAS III)
-	4.	Forsknings- och konstmodus ovanpå ett stabilt system (FAS IV)
+## Steg 1 — Cellindexerade fält och grannmatris
 
-Fundamentet först; estetiken och interaktiviteten kommer när systemet redan “bär”.
+*Förutsättningen för hex. Blir dyrare för varje världsfält som tillkommer.*
 
+- Alla världsfält blir platta arrayer med längd `n_cells`, indexerade med `cell_idx`. Ingen `[y, x]`-indexering utanför `Grid`. Det gäller samtliga elva fält.
+- Temperatur blir ett per-cell-fält i stället för `Ty[row]`. Latitudprofilen genereras en gång av `Grid` som en per-cell-egenskap.
+- `Grid` får en förberäknad grannmatris: `neighbor_idx` med form `(n_cells, k)` i `int32` plus giltighetsmask. Det gör topologiska pass vektoriserbara utan Python-loop och gör `neighbors()` användbar i praktiken.
+- Bilinjär sampling avvecklas. Konsumtion och perception läser den innehållande cellen via `cell_idx` och grannar via grannmatrisen.
+
+**Klart när:** ingen kod utanför `Grid` refererar rad, kolumn eller `[y, x]`, och `bilinear_*` är borta.
+
+## Steg 2 — Hex
+
+- `Grid` implementeras om med axialkoordinater `(q, r)`. Cell-ID är heltal mappade från axialkoordinater.
+- Grannmatrisens generering ger sex grannar per cell.
+- `distance()` blir hexavstånd, `cells_within(r)` ger 1, 7, 19 … celler.
+- Viewern översätter cell-ID via `Grid` och ritar hexceller.
+- Diffusions- och spridningsparametrar justeras för det nya grannantalet — en gång, innan ekologin byggs.
+
+**Klart när:** allt utanför `grid.py` och viewern är oförändrat. Krävs större ändringar i world eller biologi är Steg 1 inte färdigt, och felet ska rättas där.
+
+## Steg 3 — Näringskretsloppet
+
+- `detritus` blir ensam source of truth. `C`-aliaset tas bort.
+- `decomposition_pass()`: `detritus → nutrient` plus förlustterm. Reaktion, ingen transport.
+- `transport_pass()`: diffusion av `nutrient` via grannmatrisen, tvåstegsmetod.
+- `uptake_pass()`: flora tar upp `nutrient` från sin cell, begränsat av `uptake_capacity` och lokal tillgång. **Första verkliga läsaren av ett kapacitetsfält.**
+- Floran får dödlighet: senescens eller temperaturberoende mortalitet, så att `detritus` fylls på från floran och inte bara från kadaver.
+- Flera floraindivider per cell tillåts, konkurrerande om samma cellnäring.
+
+**Klart när:** floran når ett stationärt tillstånd satt av näringstillgång; massan sluter sig i ledgern så att balansen kan bli hård invariant; och flora med olika `uptake_capacity` uppvisar mätbart olika överlevnad.
+
+Här får Fas 2:s ekologiska hypotes sitt första riktiga svar. Blir svaret nej — revidera floramodellen, inte kärnan.
+
+## Steg 4 — Aktiva delmängder och vektoriserade florapass
+
+- Delmängder byggs en gång per tick, immutabla under ticken: `flora_slots`, `fauna_slots`, `sensing_slots`.
+- Florapassen skrivs om som numpy-operationer över `flora_slots`.
+- `rebuild_spatial_index` vektoriseras med `bincount` + `argsort` och anropas **en** gång per tick.
+- Flora-tilläggsfält flyttas till komprimerade tilläggsarrayer indexerade via flora-delmängden. Uppfyller A5.
+
+**Klart när:** 10 000 flora körs under 10 ms/tick.
+
+## Steg 5 — Fauna store-first och kapacitetskostnader
+
+*Störst risk, störst utdelning.*
+
+- `Body`:s skalära tillstånd flyttas fält för fält till store-arrayer med dokumenterat ägarskap. `Body.step()` behålls som sammanhållen fysiologikärna men opererar på store-slices.
+- Kapacitetsfälten kopplas till läsare: `sense_radius` och `sense_rate` styr sensing-delmängden, `mobility` styr rörelsekostnad, `attack_capacity` styr predation. Efter detta ska listan i B1 vara tom.
+- Underhållskostnad per buren kapacitet införs i metabolismen. Det är A2, och först här får evolutionen ett tryck mot enkelhet.
+- Synkhjälparen avvecklas när sista fältet bytt ägare.
+
+**Klart när:** inget fauna-tillstånd har två skrivare, och en organism med `sense_radius = 0` aldrig berör sensing-koden.
+
+## Steg 6 — Hydro
+
+- `elevation` får en terränggenerator: lutande plan, bassänger, höjdryggar.
+- `hydro_pass()` över fri yta `elevation + water` med grannflöde, tvåstegsmetod, strikt kontinuitet. Härledda fält som del av samma passkontrakt.
+- `flood_tolerance` och `buoyancy` får läsare i locomotion och rörelsekostnad. Passiv drift i hydro-passet.
+
+Att `nutrient` sedan Steg 3 transporteras med samma mönster gör hydro till en variant snarare än en nyhet.
+
+## Steg 7 — Acceleration
+
+Profilera fasmodellen under blandad realistisk belastning. Numba för sensing, CuPy för fältpass om de dominerar. Rustkärna endast om mätvärden motiverar det.
+
+---
+
+# Del E — Vad som ska mätas
+
+| Steg | Mätpunkt | Målvärde |
+|---|---|---|
+| 0 | Invariantsvit över 10 000 tick | 0 brott |
+| 0 | Fält med två skrivare | 0 |
+| 1 | Referenser till rad, kolumn eller `[y, x]` utanför `Grid` | 0 |
+| 2 | Filer ändrade vid hexbytet | endast `grid.py` och viewer |
+| 3 | Floran når ett stationärt antal | ja |
+| 3 | Stationärt antal vid dubblad `capacity` | oförändrat ±10 % |
+| 3 | Överlevnadsskillnad mellan hög och låg `uptake_capacity` | statistiskt skild |
+| 3 | Massbalans i ledgern | sluten inom 1e-9 relativt |
+| 4 | Kostnad per floraindivid och tick | < 1 µs |
+| 4 | 10 000 flora | < 10 ms/tick |
+| 5 | Kapacitetsfält utan läsare | 0 |
+| 5 | Kostnad per fauna och tick | mät baseline, tillåt ej regression |
+| 6 | Massbevarande i hydro över 10 000 tick | drift < 1e-6 relativt |
+
+Att floran över huvud taget når ett stationärt tillstånd, och att det tillståndet är okänsligt för `capacity`, är den viktigaste enskilda mätningen i planen. Den avgör om ekologin har tagit över från arkitekturen.
+
+**Baseline:** 2,50 ms/tick vid 22 fauna och 149 flora, `size=64`, seed 1, 12 000 tick.
+
+---
+
+## Om ordningen ändå ska vara en annan
+
+Vill man hålla fast vid hydro tidigt är det försvarbart — men gör Steg 3:s floradödlighet och konkurrens ändå först, som ett minimalt ingrepp. Utan dem mäter man hydro i en värld där floran växer obehindrat.
+
+Vill man skjuta hex till efter ekologin är också det försvarbart, men räkna då med att kalibrera diffusion, spridning och celltäthet två gånger.
+
+Det som däremot inte bör flyttas är Steg 1. Cellindexerade fält är den enda ändringen i planen som blir strikt dyrare för varje pass som byggs innan den är gjord.
