@@ -223,7 +223,7 @@ Mätt: 0 träffar på `rowcol_of`, `cell_from_rowcol`, `grid.size` och `bilinear
 
 **Klart när:** allt utanför `grid.py` och viewern är oförändrat. Krävs större ändringar i world eller biologi är Steg 1 inte färdigt, och felet ska rättas där.
 
-**Utfall:** geometribytet ändrade enbart `grid.py`. Kriteriet höll.
+**Utfall:** geometribytet ändrade enbart `grid.py`. Kriteriet höll. Efter viewerns omskrivning har `world.C`, `Ty`, `gy` och `_as_2d` inga anropare kvar och är borttagna — det sista kvadratberoendet är ute ur `world.py`.
 
 **Uppmätt vid klimatbytet:** sömmen går från 24,10 °C till 0,02 °C vid 64×256, och största steg mellan intilliggande rader från 2,24 till 0,96 °C — gradienten blir alltså både sammanhängande och jämnare än med den linjära profilen. Andel agenter som byter klimatband under livstiden faller från 79 % till 50 %.
 

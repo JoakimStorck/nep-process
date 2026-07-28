@@ -560,16 +560,19 @@ class WorldViewer:
 
         tmean = tmin = tmax = float("nan")
         tmeanN = tmeanS = float("nan")
-        if hasattr(pop, "world") and hasattr(pop.world, "Ty"):
-            Ty = np.asarray(pop.world.Ty, dtype=np.float32)
-            if Ty.size:
-                tmean = float(np.mean(Ty))
-                tmin = float(np.min(Ty))
-                tmax = float(np.max(Ty))
-                mid = Ty.size // 2
-                if 0 < mid < Ty.size:
-                    tmeanN = float(np.mean(Ty[:mid]))
-                    tmeanS = float(np.mean(Ty[mid:]))
+        T = getattr(getattr(pop, "world", None), "T_cell", None)
+        if T is not None:
+            T = np.asarray(T, dtype=np.float32)
+            if T.size:
+                tmean = float(np.mean(T))
+                tmin = float(np.min(T))
+                tmax = float(np.max(T))
+                # Halvkloten avgörs av latitudens tecken, inte av radindex.
+                lat = np.asarray(pop.grid.cell_lat, dtype=np.float32)
+                north = lat > 0.0
+                if north.any() and (~north).any():
+                    tmeanN = float(np.mean(T[north]))
+                    tmeanS = float(np.mean(T[~north]))
 
         flora_n = 0
         flora_mass = 0.0

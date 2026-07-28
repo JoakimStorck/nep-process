@@ -216,46 +216,6 @@ class World:
 
         self.g_cell = g_cell
 
-    @property
-    def C(self) -> np.ndarray:
-        """
-        Kvadratbunden kompatibilitetsvy av detritus, för viewer och simlog som
-        ännu ritar i rutnät. Delar buffert med self.detritus.
-
-        Egenskap och inte fält med avsikt: världspassen binder om self.detritus
-        till nya arrayer, och ett cachat C skulle då tyst peka på ett gammalt
-        tillstånd eller få fel form. Tas bort när viewern går över till cell-ID
-        i Steg 2, och namnet försvinner helt i Steg 3.
-        """
-        return self._as_2d(self.detritus)
-
-    def _as_2d(self, arr: np.ndarray) -> np.ndarray:
-        """
-        Kvadratbunden vy av ett per-cell-fält.
-
-        Enda platsen där världsfält får anta rutnätsform. Vyn delar minne med
-        det platta fältet, så skrivningar går tillbaka till källan.
-
-        Efter Steg 1c har den bara C-egenskapen som anropare, alltså viewer och
-        simlog. Båda går över till cell-ID i Steg 2, och då försvinner den här
-        metoden tillsammans med dem.
-        """
-        return arr.reshape(self.grid.shape)
-
-    @property
-    def Ty(self) -> np.ndarray:
-        """
-        Per-rad-temperatur. Kvadratbunden kompatibilitetsvy för viewer och
-        simlog. Temperaturen är konstant längs en rad, så första kolumnen av
-        det omformade per-cell-fältet räcker. Tas bort i Steg 2.
-        """
-        return self.T_cell.reshape(self.grid.shape)[:, 0]
-
-    @property
-    def gy(self) -> np.ndarray:
-        """Per-rad-tillväxtgrind. Samma kompatibilitetsroll som Ty."""
-        return self.g_cell.reshape(self.grid.shape)[:, 0]
-
     def temperature_field(self) -> np.ndarray:
         """Temperatur per cell, indexerad med cell_idx."""
         return self.T_cell

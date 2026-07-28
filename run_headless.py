@@ -66,7 +66,7 @@ def format_diagnostics(d: dict, tick: int, elapsed: float) -> str:
         f"fauna={d['fauna_n']:4d}  flora={d['flora_n']:5d}  "
         f"fria={d['free_slots']:5d}/{d['capacity']:5d}  "
         f"M_flora={d['flora_mass_kg']:.4e}  M_fauna={d['fauna_mass_kg']:.4e}  "
-        f"M_kadaver={d['carcass_mass_kg']:.4e}  "
+        f"M_detritus={d['detritus_mass_kg']:.4e}  "
         f"{rate:.2f} ms/tick"
     )
 

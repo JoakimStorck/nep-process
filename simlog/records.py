@@ -204,7 +204,7 @@ def sample_record(t: float, a: Agent, pop_n: int) -> Dict[str, Any]:
 
 
 def world_record(t: float, world: World, with_percentiles: bool = True) -> Dict[str, Any]:
-    C = world.C
+    C = world.detritus
 
     def stats(A: np.ndarray) -> Dict[str, float]:
         flat = A.ravel()
@@ -219,10 +219,10 @@ def world_record(t: float, world: World, with_percentiles: bool = True) -> Dict[
         "C": stats(C) if with_percentiles else {"mean": float(C.mean()), "sum": float(C.sum())},
     }
 
-    # Temperaturprofil finns fortfarande i World och är legitim world-data
-    Ty = getattr(world, "Ty", None)
-    if Ty is not None:
-        Ty = np.asarray(Ty, dtype=np.float32)
-        s["T"] = stats(Ty) if with_percentiles else {"mean": float(Ty.mean()), "sum": float(Ty.sum())}
+    # Temperaturfältet är legitim world-data; per cell sedan geometrin blev abstrakt.
+    T = getattr(world, "T_cell", None)
+    if T is not None:
+        T = np.asarray(T, dtype=np.float32)
+        s["T"] = stats(T) if with_percentiles else {"mean": float(T.mean()), "sum": float(T.sum())}
 
     return {"event": "world", "summary": s}

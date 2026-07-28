@@ -184,11 +184,11 @@ def check_finite_and_nonnegative(pop) -> list[Violation]:
             if bad.size:
                 out.append(Violation("nonnegative", f"store.{name} negativ i slotar {bad[:MAX_EXAMPLES].tolist()}"))
 
-    C = np.asarray(pop.world.C)
-    if not np.all(np.isfinite(C)):
-        out.append(Violation("finite", "world.C innehåller icke-finita värden"))
-    if np.any(C < 0.0):
-        out.append(Violation("nonnegative", f"world.C har negativa celler (min={float(C.min()):.3e})"))
+    detritus = np.asarray(pop.world.detritus)
+    if not np.all(np.isfinite(detritus)):
+        out.append(Violation("finite", "world.detritus innehåller icke-finita värden"))
+    if np.any(detritus < 0.0):
+        out.append(Violation("nonnegative", f"world.detritus har negativa celler (min={float(detritus.min()):.3e})"))
 
     bad_agents: list[str] = []
     for a in pop.agents:
@@ -389,20 +389,6 @@ def check_world_field_domains(pop) -> list[Violation]:
     if bad:
         out.append(Violation("world_field_domains", "; ".join(bad[:MAX_EXAMPLES])))
 
-    # Kompatibilitetsvyn C måste fortsätta dela buffert med detritus, annars
-    # divergerar viewern tyst från källan.
-    C = getattr(world, "C", None)
-    if C is not None:
-        Ca = np.asarray(C)
-        if Ca.ndim != 2:
-            out.append(Violation("world_field_domains", f"world.C har form {Ca.shape}, förväntat 2D"))
-        if not np.shares_memory(Ca, np.asarray(world.detritus)):
-            out.append(Violation("world_field_domains", "world.C delar inte längre minne med world.detritus"))
-
-    Ty = np.asarray(getattr(world, "Ty", np.empty(0)))
-    if Ty.ndim != 1:
-        out.append(Violation("world_field_domains", f"world.Ty har form {Ty.shape}, förväntat 1D"))
-
     return out
 
 
@@ -539,5 +525,5 @@ def diagnostics(pop) -> dict[str, Any]:
         "flora_mass_kg": flora_mass,
         "fauna_mass_kg": fauna_mass,
         "fauna_energy_J": fauna_energy,
-        "carcass_mass_kg": float(np.sum(np.asarray(pop.world.C), dtype=np.float64)),
+        "detritus_mass_kg": float(np.sum(np.asarray(pop.world.detritus), dtype=np.float64)),
     }

@@ -1316,7 +1316,7 @@ class Population:
     def consume_food(self, x: float, y: float, amount: float, prefer_carcass: bool = True) -> tuple[float, float]:
         """
         Konsumera upp till `amount` kg totalt.
-        Kadaver tas fortsatt från world.C.
+        Kadaver tas fortsatt från world.detritus.
         Växtföda tas från diskret flora i OrganismStore.
         Returnerar (got_total_kg, got_carcass_kg).
         """
