@@ -214,9 +214,11 @@ class World:
         Kvadratbunden vy av ett per-cell-fält.
 
         Enda platsen där världsfält får anta rutnätsform. Vyn delar minne med
-        det platta fältet, så skrivningar går tillbaka till källan. Anropas av
-        den bilinjära samplingen, som avvecklas i Steg 1c — därefter ska den
-        här metoden inte ha några anropare kvar.
+        det platta fältet, så skrivningar går tillbaka till källan.
+
+        Efter Steg 1c har den bara C-egenskapen som anropare, alltså viewer och
+        simlog. Båda går över till cell-ID i Steg 2, och då försvinner den här
+        metoden tillsammans med dem.
         """
         s = int(self.WP.size)
         return arr.reshape(s, s)
@@ -251,23 +253,17 @@ class World:
 
     def temperature_at(self, x: float, y: float) -> float:
         """
-        Temperatur vid en kontinuerlig position, interpolerad mellan cellen och
-        dess granne i y-led.
+        Temperatur vid en kontinuerlig position.
 
-        Interpolationen behålls tills vidare: steget mellan angränsande celler
-        är upp till ~2.4 degC, vilket inte är försumbart mot floras temp_width
-        på 4-18 degC. Frågan om subcell-interpolation ska finnas kvar hör ihop
-        med den bilinjära samplingen och avgörs samlat i Steg 1c.
+        Bekvämlighetsomslag kring temperature_of_cell(). Ingen interpolation
+        mellan celler: cellen är miljöns enhet, och alla organismer i samma
+        cell möter samma temperatur — vilket floran redan gjorde. Kroppens
+        temperatur integrerar över tid och jämnar ut steget mellan celler.
+
+        Anroparen i agent.py bör på sikt slå upp cellen själv; det hör till
+        Steg 5b när fauna blir store-first.
         """
-        xw, yw = self.grid.wrap_pos(float(x), float(y))
-
-        cell0 = int(self.grid.cell_of(xw, yw))
-        cell1 = int(self.grid.neighbor_idx[cell0, _NEIGHBOR_DOWN])
-        fy = yw - math.floor(yw)
-
-        t0 = float(self.T_cell[cell0])
-        t1 = float(self.T_cell[cell1])
-        return (1.0 - fy) * t0 + fy * t1
+        return self.temperature_of_cell(self.grid.cell_of(float(x), float(y)))
 
 
     # -------------------------
@@ -387,25 +383,26 @@ class World:
     # -------------------------
     def sample_carcass(self, x: float, y: float) -> float:
         """Bilinear sampling of detritus field at a single point."""
-        return _bilinear_scalar_C(self._as_2d(self.detritus), x, y, self.grid)
+        return float(self.detritus[self.grid.cell_of(float(x), float(y))])
 
     def sample_many_carcass(
         self,
         xs: np.ndarray,
         ys: np.ndarray,
         outC: Optional[np.ndarray] = None,
-        tmp: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """
-        Vectorized bilinear sampling for detritus field only.
-        Returns float32 array.
+        Vektoriserad sampling av detritus i de celler punkterna faller i.
+
+        Ingen interpolation: fältet är styckvis konstant per cell, så en
+        organism läser cellens värde. `tmp` togs bort med den bilinjära
+        mellanlagringen.
         """
-        return _bilinear_many_C(
-            self._as_2d(self.detritus),
-            xs, ys,
-            self.grid,
-            outC=outC, tmp=tmp,
-        )
+        cells = self.grid.cell_of_many(xs, ys)
+        if outC is None:
+            return self.detritus[cells].astype(np.float32, copy=False)
+        outC[...] = self.detritus[cells].reshape(np.shape(outC))
+        return outC
 
     def sample_flora_local(self, x: float, y: float) -> float:
         hook = getattr(self, "sample_flora_local_hook", None)
@@ -432,11 +429,14 @@ class World:
     # -------------------------
     # Consumption + carcass
     # -------------------------
-    def _consume_bilinear_from(self, A: np.ndarray, x: float, y: float, amount: float) -> float:
+    def _consume_from_field(self, field: np.ndarray, x: float, y: float, amount: float) -> float:
         """
-        Bilinear consume from field A (kg/cell).
-        Removes up to `amount` kg from the bilinear-sampled pool around (x,y),
-        updating the four corner cells. Returns `got` in kg.
+        Konsumera upp till `amount` kg ur `field` i den cell (x, y) faller i.
+
+        Organismen befinner sig i en cell och äter ur den. Vill den åt en
+        granncells innehåll måste den flytta sig dit — position har betydelse.
+        `field` är en platt per-cell-array; funktionen är därmed generell och
+        kan bära nutrient-upptaget i Steg 3.
         """
         amt = float(amount)
         if not math.isfinite(amt) or amt <= 0.0:
@@ -447,40 +447,13 @@ class World:
         if not (math.isfinite(xf) and math.isfinite(yf)):
             return 0.0
 
-        x0, y0, x1, y1, fx, fy = self.grid.bilinear_corners(xf, yf)
-
-        w00 = (1.0 - fx) * (1.0 - fy)
-        w10 = fx * (1.0 - fy)
-        w01 = (1.0 - fx) * fy
-        w11 = fx * fy
-
-        a00 = float(A[y0, x0])
-        a10 = float(A[y0, x1])
-        a01 = float(A[y1, x0])
-        a11 = float(A[y1, x1])
-
-        pool = w00 * a00 + w10 * a10 + w01 * a01 + w11 * a11
-        if not math.isfinite(pool) or pool <= 1e-12:
+        cell = int(self.grid.cell_of(xf, yf))
+        avail = float(field[cell])
+        if not math.isfinite(avail) or avail <= 1e-12:
             return 0.0
 
-        got = amt if amt < pool else pool
-        frac = got / pool
-
-        d00 = frac * w00 * a00
-        d10 = frac * w10 * a10
-        d01 = frac * w01 * a01
-        d11 = frac * w11 * a11
-
-        if d00 > a00: d00 = a00
-        if d10 > a10: d10 = a10
-        if d01 > a01: d01 = a01
-        if d11 > a11: d11 = a11
-
-        A[y0, x0] = np.float32(a00 - d00)
-        A[y0, x1] = np.float32(a10 - d10)
-        A[y1, x0] = np.float32(a01 - d01)
-        A[y1, x1] = np.float32(a11 - d11)
-
+        got = amt if amt < avail else avail
+        field[cell] = np.float32(avail - got)
         return float(got)
 
     def consume_food(self, x: float, y: float, amount: float, prefer_carcass: bool = True) -> Tuple[float, float]:
@@ -497,7 +470,7 @@ class World:
         if not math.isfinite(amt) or amt <= 0.0:
             return 0.0, 0.0
     
-        got_c = float(self._consume_bilinear_from(self._as_2d(self.detritus), x, y, amt))
+        got_c = float(self._consume_from_field(self.detritus, x, y, amt))
         return got_c, got_c
 
     def add_carcass(self, x: float, y: float, amount_kg: float, rad: int = 3) -> None:
@@ -512,101 +485,33 @@ class World:
         if r < 1:
             r = 1
     
-        center = self.grid.cell_of(float(x), float(y))
-        cy, cx = self.grid.rowcol_of(center)
-        # rowcol används bara för att generera kärnans offset; skrivningen sker
-        # på cellindex. Kärnan är ännu kvadratbunden och ersätts av
-        # grid.cells_within() när geometrin byts i Steg 2.
+        center = int(self.grid.cell_of(float(x), float(y)))
+    
+        # Topologisk spridning: cellerna inom r steg, viktade med topologiskt
+        # avstånd. Ersätter den kvadratiska dx/dy-kärnan med euklidiskt avstånd,
+        # som var det sista geometriantagandet i world.py.
+        cells = self.grid.cells_within(center, r)
+        if not cells:
+            self.detritus[center] = np.float32(float(self.detritus[center]) + amt)
+            return
     
         sigma = max(0.75, 0.5 * r)
         inv2sig2 = 1.0 / (2.0 * sigma * sigma)
     
+        weights = []
         wsum = 0.0
-        weights: list[tuple[int, int, float]] = []
-        rr = float(r * r)
-    
-        for dy in range(-r, r + 1):
-            for dx in range(-r, r + 1):
-                d2 = float(dx * dx + dy * dy)
-                if d2 > rr:
-                    continue
-                w = math.exp(-d2 * inv2sig2)
-                weights.append((dx, dy, w))
-                wsum += w
+        for cell in cells:
+            d = float(self.grid.distance(center, int(cell)))
+            w = math.exp(-(d * d) * inv2sig2)
+            weights.append((int(cell), w))
+            wsum += w
     
         if wsum <= 1e-12:
-            c0 = int(self.grid.cell_from_rowcol(cy, cx))
-            self.detritus[c0] = np.float32(float(self.detritus[c0]) + amt)
+            self.detritus[center] = np.float32(float(self.detritus[center]) + amt)
             return
     
         scale = amt / wsum
-        for dx, dy, w in weights:
-            cell = int(self.grid.cell_from_rowcol(cy + dy, cx + dx))
+        for cell, w in weights:
             self.detritus[cell] = np.float32(float(self.detritus[cell]) + scale * w)
 
 
-def _bilinear_scalar_C(C: np.ndarray, x: float, y: float, grid: Grid) -> float:
-    x0, y0, x1, y1, fx, fy = grid.bilinear_corners(float(x), float(y))
-
-    fx1 = 1.0 - fx
-    fy1 = 1.0 - fy
-
-    c00 = float(C[y0, x0]); c10 = float(C[y0, x1]); c01 = float(C[y1, x0]); c11 = float(C[y1, x1])
-
-    c0 = c00 * fx1 + c10 * fx
-    c1 = c01 * fx1 + c11 * fx
-    Cv = c0 * fy1 + c1 * fy
-
-    return Cv
-
-if _NUMBA_AVAILABLE:
-    @_numba.njit(cache=True, parallel=False)
-    def _bilinear_kernel_c_nb(C, xs_flat, ys_flat, s, outC_flat):
-        sf = np.float32(s)
-        for i in range(xs_flat.size):
-            xf = xs_flat[i] % sf
-            yf = ys_flat[i] % sf
-            x0 = int(xf)
-            y0 = int(yf)
-            x1 = x0 + 1 if x0 + 1 < s else 0
-            y1 = y0 + 1 if y0 + 1 < s else 0
-            fx = xf - np.float32(x0)
-            fy = yf - np.float32(y0)
-            fx1 = np.float32(1.0) - fx
-            fy1 = np.float32(1.0) - fy
-            outC_flat[i] = (C[y0, x0] * fx1 + C[y0, x1] * fx) * fy1 + (C[y1, x0] * fx1 + C[y1, x1] * fx) * fy    
-
-def _bilinear_many_C(
-    C: np.ndarray,
-    xs: np.ndarray,
-    ys: np.ndarray,
-    grid: Grid,
-    outC: Optional[np.ndarray] = None,
-    tmp: Optional[np.ndarray] = None,
-) -> np.ndarray:
-    xs = np.asarray(xs, dtype=np.float32)
-    ys = np.asarray(ys, dtype=np.float32)
-    if xs.shape != ys.shape:
-        raise ValueError("xs and ys must have same shape")
-
-    shape = xs.shape
-    if outC is None:
-        outC = np.empty(shape, dtype=np.float32)
-
-    if _NUMBA_AVAILABLE:
-        _bilinear_kernel_c_nb(C, xs.ravel(), ys.ravel(), int(grid.size), outC.ravel())
-        return outC
-
-    if tmp is None:
-        tmp = np.empty(shape, dtype=np.float32)
-
-    x0, y0, x1, y1, fx, fy = grid.bilinear_indices_many(xs, ys)
-    fx1 = np.float32(1.0) - fx
-    fy1 = np.float32(1.0) - fy
-
-    C00 = C[y0, x0]; C10 = C[y0, x1]; C01 = C[y1, x0]; C11 = C[y1, x1]
-    np.multiply(C00, fx1, out=outC); outC += C10 * fx; outC *= fy1
-    np.multiply(C01, fx1, out=tmp);  tmp  += C11 * fx; tmp  *= fy
-    outC += tmp
-
-    return outC

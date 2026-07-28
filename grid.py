@@ -100,10 +100,9 @@ class Grid:
         """
         Vektoriserad position -> cell-ID.
 
-        Toroidal semantik: modulo först, golv sedan. Det är samma ordning som
-        bilinear_indices_many() använder och den enda som är korrekt för
-        negativa koordinater. Den skalära cell_of() trunkerar före modulo och
-        avviker därför för negativa värden — se anmärkningen där.
+        Toroidal semantik: modulo först, golv sedan — den enda som är korrekt
+        för negativa koordinater. Den skalära cell_of() trunkerar före modulo
+        och avviker därför för negativa värden; se anmärkningen där.
         """
         s = int(self.size)
         xw = np.mod(np.asarray(xs, dtype=np.float32), np.float32(s))
@@ -138,62 +137,6 @@ class Grid:
             self.cell_from_rowcol(r, c + 1),
         )
 
-    def bilinear_corners(self, x: float, y: float) -> tuple[int, int, int, int, float, float]:
-        """
-        Wrapad bilinjär diskretisering av kontinuerlig position.
-
-        Returnerar:
-            x0, y0, x1, y1, fx, fy
-
-        där (x0,y0) och (x1,y1) är hörnindex i kvadratgridet och
-        fx, fy är fraktionella vikter i [0,1).
-        """
-        s = int(self.size)
-        xw, yw = self.wrap_pos(float(x), float(y))
-
-        x0 = int(math.floor(xw)) % s
-        y0 = int(math.floor(yw)) % s
-        x1 = (x0 + 1) % s
-        y1 = (y0 + 1) % s
-
-        fx = xw - math.floor(xw)
-        fy = yw - math.floor(yw)
-
-        return x0, y0, x1, y1, fx, fy
-
-    def bilinear_indices_many(
-        self,
-        xs: object,
-        ys: object,
-    ) -> tuple[object, object, object, object, object, object]:
-        """
-        Batchvariant av bilinjär diskretisering.
-
-        Returnerar arrayer:
-            x0, y0, x1, y1, fx, fy
-
-        med samma semantik som bilinear_corners(), men för hela fält av punkter.
-        """
-        s = int(self.size)
-        xs = np.asarray(xs, dtype=np.float32)
-        ys = np.asarray(ys, dtype=np.float32)
-
-        xw = np.mod(xs, np.float32(s))
-        yw = np.mod(ys, np.float32(s))
-
-        x0 = xw.astype(np.int32, copy=False)
-        y0 = yw.astype(np.int32, copy=False)
-
-        fx = xw - x0
-        fy = yw - y0
-
-        x1 = x0 + 1
-        y1 = y0 + 1
-        x1[x1 == s] = 0
-        y1[y1 == s] = 0
-
-        return x0, y0, x1, y1, fx, fy
-        
     def distance(self, cell_a: int, cell_b: int) -> int:
         """
         Topologiskt cellavstånd på kvadratisk torus, mätt som Manhattan-avstånd
