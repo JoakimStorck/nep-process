@@ -219,7 +219,9 @@ Mätt: 0 träffar på `rowcol_of`, `cell_from_rowcol`, `grid.size` och `bilinear
 - ~~Viewern översätter cell-ID via `Grid` och ritar hexceller.~~ **Klart.** Varje pixel slås upp mot sin cell via `cell_of_many`, vilket gör renderingen geometriagnostisk.
 - ~~`Grid` tar `width` och `height` separat.~~ **Klart.** Hexvärlden är aldrig kvadratisk i kontinuerliga enheter, och radoffset kräver jämnt radantal.
 - ~~Latituden görs periodisk, `lat = -cos(2π·r/H)`.~~ **Klart.** Den linjära profilen gav ett enda kallt band som wrappade, med en 24-gradig säsongsdiskontinuitet mitt i sig — ingen isolering plus ett artefakt. Den periodiska ger två kalla band åtskilda av två tempererade zoner, med motfasiga årstider.
-- Världsstorleken sätts till 64 × 256 som standard. Periodisk latitud halverar bandbredden, så H=128 återställer bara nuläget medan H=256 fördubblar sträckan pol till ekvator. Konfigurationen körs redan via `--width 64 --height 256`; det som återstår är att göra den till standard.
+- ~~Världsstorleken sätts till 64 × 256 som standard.~~ **Klart.** Periodisk latitud halverar bandbredden, så H=128 hade bara återställt nuläget medan H=256 fördubblar sträckan pol till ekvator. `--size N` finns kvar för kvadratiska världar.
+
+**Steg 2 är avslutat.**
 
 **Klart när:** allt utanför `grid.py` och viewern är oförändrat. Krävs större ändringar i world eller biologi är Steg 1 inte färdigt, och felet ska rättas där.
 
