@@ -113,36 +113,24 @@ def _iter_live_flora_slots(pop):
         yield slot
 
 def _flora_mass_field(pop) -> np.ndarray:
-    world = getattr(pop, "world", None)
-    if world is None:
-        return np.zeros((1, 1), dtype=np.float32)
-
-    s = int(world.WP.size)
-    B = np.zeros((s, s), dtype=np.float32)
-
-    store = getattr(pop, "store", None)
+    """Floramassa per cell, platt array med längd n_cells."""
     grid = getattr(pop, "grid", None)
-    if store is None or grid is None:
-        return B
+    store = getattr(pop, "store", None)
+    if grid is None or store is None:
+        return np.zeros(1, dtype=np.float32)
 
-    n0 = int(getattr(store, "n_agents", 0))
-    n1 = int(getattr(store, "n", 0))
+    n_cells = int(grid.n_cells)
+    cached = getattr(store, "flora_cell_mass", None)
+    if cached is not None and int(np.shape(cached)[0]) == n_cells:
+        return np.asarray(cached, dtype=np.float32)
 
-    n = int(getattr(store, "n", 0))
-    
-    for slot in range(n):
-        if not bool(store.alive[slot]):
-            continue
-        if int(store.kind[slot]) != 1:
-            continue
+    B = np.zeros(n_cells, dtype=np.float32)
+    for slot in _iter_live_flora_slots(pop):
         cell = int(store.cell_idx[slot])
-        if cell < 0:
-            continue
+        if 0 <= cell < n_cells:
+            B[cell] += float(store.mass[slot])
+    return B
 
-        row, col = grid.rowcol_of(cell)
-        B[row, col] += float(store.mass[slot])
-
-    return B    
 
 @dataclass
 class ViewerConfig:
@@ -242,12 +230,40 @@ class WorldViewer:
             self._clock.tick(cap)
 
     # ---------- rendering ----------
-    def _ensure_screen(self, size: int) -> None:
+    def _ensure_projection(self, grid) -> None:
+        """
+        Bygg avbildningen mellan värld, pixlar och celler.
+
+        Varje pixel slås upp mot den cell den faller i via grid.cell_of_many().
+        Det gör renderingen geometriagnostisk: hexceller ritas korrekt utan att
+        viewern känner till hexagoner, och en framtida geometri fungerar utan
+        ändring här. Uppslaget beräknas en gång och är sedan en gather per bild.
+        """
+        key = (int(grid.n_cells), int(grid.width), int(grid.height), int(self.cfg.scale))
+        if getattr(self, "_proj_key", None) == key:
+            return
+
+        cell_w = float(grid.extent_x) / float(grid.width)
+        ppu = float(self.cfg.scale) / cell_w          # pixlar per världsenhet
+        w_px = max(1, int(round(float(grid.extent_x) * ppu)))
+        h_px = max(1, int(round(float(grid.extent_y) * ppu)))
+
+        xs = (np.arange(w_px, dtype=np.float64) + 0.5) / ppu
+        ys = (np.arange(h_px, dtype=np.float64) + 0.5) / ppu
+        XX, YY = np.meshgrid(xs, ys)
+        self._pixel_cell = np.asarray(
+            grid.cell_of_many(XX.ravel(), YY.ravel()), dtype=np.int64
+        ).reshape(h_px, w_px)
+
+        self._ppu = ppu
+        self._w_px = w_px
+        self._h_px = h_px
+        self._proj_key = key
+
+    def _ensure_screen(self) -> None:
         if self._screen is not None:
             return
-        w = int(size) * int(self.cfg.scale)
-        h = int(size) * int(self.cfg.scale)
-        self._screen = self.pg.display.set_mode((w, h))
+        self._screen = self.pg.display.set_mode((self._w_px, self._h_px))
 
     def _gamma(self, x01: np.ndarray) -> np.ndarray:
         g = float(self.cfg.gamma)
@@ -256,18 +272,19 @@ class WorldViewer:
         return np.power(_clip01(x01), g, dtype=np.float32)
 
     @staticmethod
-    def _temp_field(world, shape_like: np.ndarray) -> np.ndarray:
-        if hasattr(world, "Ty"):
-            Ty = np.asarray(world.Ty, dtype=np.float32)
-            return np.broadcast_to(Ty[:, None], shape_like.shape).astype(np.float32, copy=False)
-        return np.zeros_like(shape_like, dtype=np.float32)
+    def _temp_field(world, like: np.ndarray) -> np.ndarray:
+        """Temperatur per cell, platt."""
+        T = getattr(world, "T_cell", None)
+        if T is None:
+            return np.zeros_like(like, dtype=np.float32)
+        return np.asarray(T, dtype=np.float32)
 
     def _make_rgb(self, pop) -> np.ndarray:
-        """Returns (H,W,3) uint8."""
+        """Färg per cell, (n_cells, 3) uint8."""
         world = pop.world
     
         B = _flora_mass_field(pop)
-        C = np.asarray(world.C, dtype=np.float32)
+        C = np.asarray(world.detritus, dtype=np.float32)
     
         WP = getattr(world, "WP", None)
         BK = float(getattr(WP, "B_K", 1.0)) if WP is not None else 1.0
@@ -280,16 +297,16 @@ class WorldViewer:
         mode = self.cfg.mode.upper().strip()
     
         if mode == "B":
-            img = np.dstack([B01, B01, B01])
+            img = np.stack([B01, B01, B01], axis=-1)
     
         elif mode == "C":
-            img = np.dstack([C01, C01, C01])
+            img = np.stack([C01, C01, C01], axis=-1)
     
         elif mode == "TEMP":
             T = self._temp_field(world, C)
             Tmin, Tmax = -10.0, 40.0
             t01 = np.clip((T - Tmin) / (Tmax - Tmin), 0.0, 1.0).astype(np.float32, copy=False)
-            img = np.dstack([t01, t01, t01])
+            img = np.stack([t01, t01, t01], axis=-1)
     
         elif mode == "FLORA":
             T = self._temp_field(world, C)
@@ -297,23 +314,21 @@ class WorldViewer:
             t01 = np.clip((T - Tmin) / (Tmax - Tmin), 0.0, 1.0).astype(np.float32, copy=False)
     
             base = 0.08 + 0.10 * t01
-            img = np.dstack([0.10 * base, 0.18 * base, 0.22 * base]).astype(np.float32, copy=False)
+            img = np.stack([0.10 * base, 0.18 * base, 0.22 * base], axis=-1).astype(np.float32, copy=False)
     
         else:  # "CB"
             Z = np.zeros_like(B01, dtype=np.float32)
-            img = np.dstack([C01, B01, Z])
+            img = np.stack([C01, B01, Z], axis=-1)
     
         img = self._gamma(img)
         return _as_u8_rgb(img)
 
-    def _blit_field(self, rgb_u8: np.ndarray) -> None:
+    def _blit_field(self, cell_rgb_u8: np.ndarray) -> None:
+        """Måla cellfärgerna genom den förberäknade pixel-till-cell-avbildningen."""
         pygame = self.pg
-        s = int(rgb_u8.shape[0])
-        self._ensure_screen(s)
-
-        surf = pygame.surfarray.make_surface(np.transpose(rgb_u8, (1, 0, 2)))
-        if self.cfg.scale != 1:
-            surf = pygame.transform.scale(surf, (s * self.cfg.scale, s * self.cfg.scale))
+        self._ensure_screen()
+        img = cell_rgb_u8[self._pixel_cell]                    # (h_px, w_px, 3)
+        surf = pygame.surfarray.make_surface(np.transpose(img, (1, 0, 2)))
         self._screen.blit(surf, (0, 0))
 
     def _draw_flora(self, pop) -> None:
@@ -324,6 +339,7 @@ class WorldViewer:
     
         pygame = self.pg
         scale = int(self.cfg.scale)
+        ppu = float(self._ppu)
         color_by = str(getattr(self.cfg, "flora_color_by", "temp_opt")).lower()
     
         for slot in _iter_live_flora_slots(pop):
@@ -331,9 +347,9 @@ class WorldViewer:
             if cell < 0:
                 continue
     
-            row, col = grid.rowcol_of(cell)
-            x = col * scale
-            y = row * scale
+            # Cellcentrum i världskoordinater; geometrin ägs av Grid.
+            x = int(float(grid.cell_center_x[cell]) * ppu) - scale // 2
+            y = int(float(grid.cell_center_y[cell]) * ppu) - scale // 2
     
             m = float(store.mass[slot])
     
@@ -382,11 +398,11 @@ class WorldViewer:
 
     def _draw_rays(self, pop) -> None:
         pygame = self.pg
-        s = int(pop.world.WP.size)
-        scale = int(self.cfg.scale)
-        W_px = s * scale
+        ppu = float(self._ppu)
+        W_px = int(self._w_px)
+        H_px = int(self._h_px)
 
-        ray_surf = pygame.Surface((W_px, W_px), pygame.SRCALPHA)
+        ray_surf = pygame.Surface((W_px, H_px), pygame.SRCALPHA)
 
         for a in pop.agents:
             if not _is_alive(a):
@@ -410,15 +426,15 @@ class WorldViewer:
                 continue
 
             ax, ay, heading = _get_xy_heading(a)
-            px = int(ax * scale) % W_px
-            py = int(ay * scale) % W_px
+            px = int(ax * ppu) % W_px
+            py = int(ay * ppu) % H_px
 
             for i in range(n):
                 if ray_m is not None and i < len(ray_m):
                     depth = max(1, min(int(ray_m[i]), m))
                 else:
                     depth = m
-                ray_len_px = float(d[depth - 1]) * scale
+                ray_len_px = float(d[depth - 1]) * ppu
 
                 angle = float(ang[i]) + heading
                 ex = px + ray_len_px * math.cos(angle)
@@ -458,11 +474,9 @@ class WorldViewer:
             return
 
         pygame = self.pg
-        s = int(pop.world.WP.size) if hasattr(pop, "world") else None
-        if s is None:
-            return
-
-        scale = int(self.cfg.scale)
+        ppu = float(self._ppu)
+        W_px = int(self._w_px)
+        H_px = int(self._h_px)
         hl = int(self.cfg.agent_heading_len_px)
 
         agents = getattr(pop, "agents", None)
@@ -480,8 +494,8 @@ class WorldViewer:
                 continue
             x, y, h = _get_xy_heading(a)
 
-            px = int(x * scale) % (s * scale)
-            py = int(y * scale) % (s * scale)
+            px = int(x * ppu) % W_px
+            py = int(y * ppu) % H_px
 
             color, radius = _agent_visuals(a)
             pygame.draw.circle(self._screen, color, (px, py), radius)
@@ -633,6 +647,8 @@ class WorldViewer:
         if self.cfg.render_every > 1 and (self._step % self.cfg.render_every != 0):
             self._throttle()
             return True
+
+        self._ensure_projection(pop.grid)
 
         rgb = self._make_rgb(pop)
         self._blit_field(rgb)

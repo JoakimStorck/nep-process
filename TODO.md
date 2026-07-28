@@ -213,16 +213,17 @@ Mätt: 0 träffar på `rowcol_of`, `cell_from_rowcol`, `grid.size` och `bilinear
 
 ## Steg 2 — Hex
 
-- `Grid` implementeras om med axialkoordinater `(q, r)`. Cell-ID är heltal mappade från axialkoordinater.
-- Grannmatrisens generering ger sex grannar per cell.
-- `distance()` blir hexavstånd, `cells_within(r)` ger 1, 7, 19 … celler.
-- Viewern översätter cell-ID via `Grid` och ritar hexceller.
-- Diffusions- och spridningsparametrar justeras för det nya grannantalet — en gång, innan ekologin byggs.
+- ~~`Grid` implementeras om med hexgeometri.~~ **Klart.** Spetsig hexagon med radoffset, jämnt radantal, cellarea exakt 1 så att täthetsstorheter bevaras.
+- ~~Grannmatrisens generering ger sex grannar per cell.~~ **Klart.**
+- ~~`distance()` blir hexavstånd, `cells_within(r)` ger 1, 7, 19 … celler.~~ **Klart.** `cells_within` byggs med BFS i grannmatrisen; `distance` med kubkoordinater och torusens nio translationskandidater, validerad mot BFS.
+- ~~Viewern översätter cell-ID via `Grid` och ritar hexceller.~~ **Klart.** Varje pixel slås upp mot sin cell via `cell_of_many`, vilket gör renderingen geometriagnostisk.
 - ~~`Grid` tar `width` och `height` separat.~~ **Klart.** Hexvärlden är aldrig kvadratisk i kontinuerliga enheter, och radoffset kräver jämnt radantal.
 - ~~Latituden görs periodisk, `lat = -cos(2π·r/H)`.~~ **Klart.** Den linjära profilen gav ett enda kallt band som wrappade, med en 24-gradig säsongsdiskontinuitet mitt i sig — ingen isolering plus ett artefakt. Den periodiska ger två kalla band åtskilda av två tempererade zoner, med motfasiga årstider.
 - Världsstorleken sätts till 64 × 256 som standard. Periodisk latitud halverar bandbredden, så H=128 återställer bara nuläget medan H=256 fördubblar sträckan pol till ekvator. Konfigurationen körs redan via `--width 64 --height 256`; det som återstår är att göra den till standard.
 
 **Klart när:** allt utanför `grid.py` och viewern är oförändrat. Krävs större ändringar i world eller biologi är Steg 1 inte färdigt, och felet ska rättas där.
+
+**Utfall:** geometribytet ändrade enbart `grid.py`. Kriteriet höll.
 
 **Uppmätt vid klimatbytet:** sömmen går från 24,10 °C till 0,02 °C vid 64×256, och största steg mellan intilliggande rader från 2,24 till 0,96 °C — gradienten blir alltså både sammanhängande och jämnare än med den linjära profilen. Andel agenter som byter klimatband under livstiden faller från 79 % till 50 %.
 
@@ -250,6 +251,7 @@ Kadensklasserna ska in i manifestet innan hydro byggs, så att `hydro_pass` och 
 - `uptake_pass()`: flora tar upp `nutrient` från sin cell, begränsat av `uptake_capacity` och lokal tillgång. **Första verkliga läsaren av ett kapacitetsfält.**
 - Floran får dödlighet: senescens eller temperaturberoende mortalitet, så att `detritus` fylls på från floran och inte bara från kadaver.
 - Flera floraindivider per cell tillåts, konkurrerande om samma cellnäring.
+- Spridnings- och diffusionstakter kalibreras för sex grannar. Punkten låg först i Steg 2 men flyttades hit: `transport_pass()` returnerade noll, så det fanns ingen diffusion att kalibrera, och att finjustera floras spridningstakt i en modell utan mortalitet vore att kalibrera fel sak. Hela tillväxtdynamiken byter karaktär här ändå.
 
 **Klart när:** floran når ett stationärt tillstånd satt av näringstillgång; massan sluter sig i ledgern så att balansen kan bli hård invariant; och flora med olika `uptake_capacity` uppvisar mätbart olika överlevnad.
 
