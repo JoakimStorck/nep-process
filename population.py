@@ -967,7 +967,6 @@ class Population:
         mass: float,
         traits: np.ndarray,
     ) -> None:
-        y, x = self.grid.rowcol_of(int(cell))
         e_per_kg = float(self.WP.E_plant_J_per_kg)
 
         g_rate = np.float32(flora_growth_rate(traits))
@@ -981,8 +980,8 @@ class Population:
         self.store.alive[slot] = True
         self.store.kind[slot] = 1
         self.store.cell_idx[slot] = int(cell)
-        self.store.pos_x[slot] = np.float32(x + 0.5)
-        self.store.pos_y[slot] = np.float32(y + 0.5)
+        self.store.pos_x[slot] = self.grid.cell_center_x[int(cell)]
+        self.store.pos_y[slot] = self.grid.cell_center_y[int(cell)]
     
         m = float(mass)
         self.store.mass[slot] = np.float32(m)

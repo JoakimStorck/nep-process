@@ -1241,21 +1241,7 @@ class RaySensors:
         self._rebuild_cache()
 
     def _wrap_points_inplace(self, xs: np.ndarray, ys: np.ndarray) -> None:
-        s = np.float32(self.grid.size)
-        np.mod(xs, s, out=xs)
-        np.mod(ys, s, out=ys)
-
-    def _points_to_cells(self, xs: np.ndarray, ys: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        s = int(self.grid.size)
-
-        np.floor(xs, out=xs)
-        np.floor(ys, out=ys)
-        np.mod(xs, s, out=xs)
-        np.mod(ys, s, out=ys)
-
-        np.copyto(self._ixs, xs, casting="unsafe")
-        np.copyto(self._iys, ys, casting="unsafe")
-        return self._ixs, self._iys
+        self.grid.wrap_pos_inplace(xs, ys)
         
     @staticmethod
     def _sat_u(x_kg: np.ndarray, K: float) -> np.ndarray:

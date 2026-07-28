@@ -80,6 +80,18 @@ class Grid:
         s = float(self.size)
         return x % s, y % s
 
+    def wrap_pos_inplace(self, xs: np.ndarray, ys: np.ndarray) -> None:
+        """
+        Vektoriserad toroidal wrap av kontinuerliga positioner, in-place.
+
+        Världens utsträckning i kontinuerligt rum är en geometrisk egenskap och
+        hör därför hit. Anropare ska aldrig läsa grid.size för att wrappa själva
+        — då flyttar geometrin ut ur Grid.
+        """
+        s = np.float32(self.size)
+        np.mod(xs, s, out=xs)
+        np.mod(ys, s, out=ys)
+
     def cell_of(self, x: float, y: float) -> int:
         """
         Position -> cell-ID.

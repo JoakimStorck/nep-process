@@ -202,12 +202,14 @@ Bilinjär sampling har ingen naturlig hexmotsvarighet och bör tas bort snarare 
 
 *Förutsättningen för hex. Blir dyrare för varje världsfält som tillkommer.*
 
-- Alla världsfält blir platta arrayer med längd `n_cells`, indexerade med `cell_idx`. Ingen `[y, x]`-indexering utanför `Grid`. Det gäller samtliga elva fält.
-- Temperatur blir ett per-cell-fält i stället för `Ty[row]`. Latitudprofilen genereras en gång av `Grid` som en per-cell-egenskap.
-- `Grid` får en förberäknad grannmatris: `neighbor_idx` med form `(n_cells, k)` i `int32` plus giltighetsmask. Det gör topologiska pass vektoriserbara utan Python-loop och gör `neighbors()` användbar i praktiken.
-- Bilinjär sampling avvecklas. Konsumtion och perception läser den innehållande cellen via `cell_idx` och grannar via grannmatrisen.
+- ~~Alla världsfält blir platta arrayer med längd `n_cells`.~~ **Klart** — samtliga elva plus `T_cell` och `g_cell`.
+- ~~Temperatur blir ett per-cell-fält i stället för `Ty[row]`.~~ **Klart** — latitudprofilen kommer från `Grid.cell_lat`.
+- ~~`Grid` får en förberäknad grannmatris.~~ **Klart** — `neighbor_idx` `(n_cells, k)` int32 med mask, plus `cell_lat`, `cell_center_x/y`, `cell_of_many` och `wrap_pos_inplace`.
+- ~~Bilinjär sampling avvecklas.~~ **Klart** — perception, konsumtion, temperatur och kadaverdeposition läser celler. `bilinear_*` borta ur både `world.py` och `grid.py`.
 
-**Klart när:** ingen kod utanför `Grid` refererar rad, kolumn eller `[y, x]`, och `bilinear_*` är borta.
+**Steg 1 är avslutat.** World och biologi refererar inte längre rad, kolumn eller `[y, x]`. Kvarvarande rutnätsberoende är isolerat till `World._as_2d()` med dess enda anropare `World.C`, samt `Ty`/`gy`-egenskaperna — alla tre finns bara för viewer och simlog, och avvecklas i Steg 2.
+
+Mätt: 0 träffar på `rowcol_of`, `cell_from_rowcol`, `grid.size` och `bilinear_*` utanför `grid.py`, viewern och simlog.
 
 ## Steg 2 — Hex
 
