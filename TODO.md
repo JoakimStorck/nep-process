@@ -257,13 +257,15 @@ Kadensklasserna ska in i manifestet innan hydro byggs, så att `hydro_pass` och 
 
 ## Steg 4 — Näringskretsloppet
 
-- `detritus` blir ensam source of truth. `C`-aliaset tas bort.
-- `decomposition_pass()`: `detritus → nutrient` plus förlustterm. Reaktion, ingen transport.
-- `transport_pass()`: diffusion av `nutrient` via grannmatrisen, tvåstegsmetod.
-- `uptake_pass()`: flora tar upp `nutrient` från sin cell, begränsat av `uptake_capacity` och lokal tillgång. **Första verkliga läsaren av ett kapacitetsfält.**
-- Floran får dödlighet: senescens eller temperaturberoende mortalitet, så att `detritus` fylls på från floran och inte bara från kadaver.
-- Flera floraindivider per cell tillåts, konkurrerande om samma cellnäring.
-- Spridnings- och diffusionstakter kalibreras för sex grannar. Punkten låg först i Steg 2 men flyttades hit: `transport_pass()` returnerade noll, så det fanns ingen diffusion att kalibrera, och att finjustera floras spridningstakt i en modell utan mortalitet vore att kalibrera fel sak. Hela tillväxtdynamiken byter karaktär här ändå.
+- ~~`detritus` blir ensam source of truth.~~ **Klart.**
+- ~~`decomposition_pass()`: `detritus → nutrient` plus förlustterm.~~ **Klart**, och per fraktion: labilt och strukturellt material bryts ner med var sin takt, räknade ur massa och strukturandel utan ett andra fält.
+- ~~`transport_pass()`: diffusion via grannmatrisen, tvåstegsmetod.~~ **Klart.** Massbevarandet är exakt av strukturella skäl; `nutrient` lagras i float64 för att avvikelsen ska hamna kring 1e-15 i stället för 5e-7.
+- ~~`uptake_pass()` med `uptake_capacity` som begränsning.~~ **Klart** — kapacitetsmodellens första verkliga läsare. Fusionerad med tillväxten, eftersom upptaget avgör exakt hur mycket tillväxt som kan betalas.
+- ~~Floran får dödlighet.~~ **Klart.** Senescens med förhöjd risk för individer långt under vuxenmassa, så att groddplantor utan näring försvinner.
+- ~~Flera floraindivider per cell.~~ **Klart.** Varje frö blir en egen individ; antalet begränsas av näringen, inte av en regel.
+- ~~Substratets strukturandel.~~ **Klart.** `structure` som gemensamt locus med fem konsumenter: energitäthet, betningsutbyte, nedbrytningstakt, näringskostnad vid uppbyggnad och exkrementets sammansättning. Se `docs/substratets-struktur.md`.
+- ~~Exkretion.~~ **Klart.** Icke assimilerad massa återförs som detritus, mer strukturrik än födan.
+- Kalibrering mot mätpunkterna. **Återstår** — se överlämningsanteckningarna nedan. Punkten låg först i Steg 2 men flyttades hit: `transport_pass()` returnerade noll, så det fanns ingen diffusion att kalibrera, och att finjustera floras spridningstakt i en modell utan mortalitet vore att kalibrera fel sak. Hela tillväxtdynamiken byter karaktär här ändå.
 
 ### Substratets struktur
 
@@ -369,6 +371,37 @@ Profilera fasmodellen under blandad realistisk belastning. Numba för sensing, C
 Att floran över huvud taget når ett stationärt tillstånd, och att det tillståndet är okänsligt för `capacity`, är den viktigaste enskilda mätningen i planen. Den avgör om ekologin har tagit över från arkitekturen.
 
 **Baseline:** 2,50 ms/tick vid 22 fauna och 149 flora, `size=64`, seed 1, 12 000 tick.
+
+---
+
+## Överlämning — läget i Steg 4
+
+*Skrivet för att tråden ska vara utbytbar. Uppdatera när något av nedanstående ändras.*
+
+### Preliminära värden som behöver kalibreras tillsammans
+
+`WorldParams.nutrient_input = 2.0e-10` sattes efter mätning att det ursprungliga värdet var fyra tiopotenser för generöst. Floran är nu näringsbegränsad — massan är i praktiken platt över 24 000 tick — men näringen ackumulerar fortfarande långsamt, så tillförseln är något högre än omsättningen.
+
+**Floratätheten är för låg för att konkurrensen ska bita.** Uppmätt: 596 individer över 575 celler, som mest 4 i samma cell. De flesta frön landar i tomma celler. Innan differentieringsmätningarna säger något måste floran bli tät nog att faktiskt trängas, och det kräver att `nutrient_input`, spridningstakten och `flora_mortality` justeras i samma svep.
+
+`PopParams.flora_seedling_mort_mult = 20.0` är satt på känsla och inte mätt.
+
+### Kända gap med känd lösning
+
+**Faunaläckan.** Kroppsmassan växer ur energibudgeten med en genetisk tillväxttakt, inte begränsad av assimilerad massa. Näringen i det som assimileras bokförs därför ingenstans. Uppmätt drift i näringsbalansen: 0,15 % över 6000 tick. Lösningen är massabaserad reserv, `E_total = M × (1 − struktur) × E_labile`, och hör till Steg 6b när `Body`:s energimodell ändå rörs. Först då kan `nutrient_balance()` bli en hård invariant i stället för diagnostik.
+
+**Strukturratchen.** Exkretion driver detritusens strukturandel uppåt, eftersom det labila tas ut och det sega passerar. Riktningen är korrekt — gammalt material *är* ligninrikt — men den dämpas bara av färsk förna från floramortaliteten. Håll ett öga på `detritus_structure` när mortaliteten kalibreras.
+
+**Ljuskonkurrens.** `structure` saknar sin främsta verkliga fördel: höjd. Designen är utredd och nedskriven i `docs/substratets-struktur.md` med referens, men medvetet inte byggd — två begränsande resurser samtidigt gör kalibreringen oattribuerbar. Bygg den först om näringskonkurrensen ensam visar sig inte differentiera `structure`.
+
+**Diffusionen är Steg 8:s tydligaste mål.** 0,77 ms vid 16 384 celler, 61 ms vid en miljon. `nutrient` är tätt dynamiskt och har inget glest stöd, så kostnaden är oundviklig utan acceleration.
+
+### Beslut fattade under vägen som inte syns i koden
+
+- `digestibility` utgår ur manifestets floraloci. Ingen organism vinner på att vara lättare att äta, så axeln kollapsar. Ersatt av `structure`.
+- Kategorin växt kontra kadaver finns kvar i *anskaffningen* men inte i energiomvandlingen. Skillnaden i energitäthet faller ut ur strukturandelen.
+- Kriteriet för Steg 4 är näringsbalans, inte massbalans. Total massa kan aldrig sluta sig: flora bygger ur luft, fauna växer ur en energibudget.
+- Varje ny trait ska ha motverkande konsekvenser. En trait med en enda konsekvens är ett reglage, inte en anpassning.
 
 ---
 
