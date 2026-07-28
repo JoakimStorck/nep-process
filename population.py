@@ -23,7 +23,7 @@ from phenotype import (
     trait_lerp,
 )
 
-from organism_store import OrganismStore
+from organism_store import OrganismStore, next_organism_id
 from grid import Grid
 
 # new logging
@@ -159,7 +159,6 @@ class Population:
 
     _banks: dict[tuple, "ParamBank"] = field(init=False, default_factory=dict)
 
-    _next_store_id: int = field(init=False, default=1)
     _slot_to_agent: list[Agent | None] = field(init=False, default_factory=list)
 
     # agent sampling
@@ -326,8 +325,6 @@ class Population:
 
             self._emit_birth(self.t, a, parent=None)
             self.agents.append(a)
-
-        self._next_store_id = max((int(a.id) for a in self.agents), default=0) + 1
 
         _ = self._seed_initial_flora(
             n_flora=max(16, int(self.PP.max_pop) // 2),
@@ -980,8 +977,7 @@ class Population:
         t_width = np.float32(self._flora_temp_width(traits))
         d_rate = np.float32(self._flora_dispersal_rate(traits))
 
-        self.store.id[slot] = int(self._next_store_id)
-        self._next_store_id += 1
+        self.store.id[slot] = int(next_organism_id())
     
         self.store.alive[slot] = True
         self.store.kind[slot] = 1

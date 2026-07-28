@@ -6,6 +6,34 @@ from typing import Iterable
 
 import numpy as np
 
+import itertools as _itertools
+
+
+# ---------------------------------------------------------------------------
+# Biologisk identitet
+# ---------------------------------------------------------------------------
+# Manifestet: `id` är en stabil unik biologisk identitet — ett monotont ökande
+# heltal som tilldelas vid birth och aldrig återanvänds. Det gäller ALLA
+# organismer, inte en klass av dem. Flora och fauna måste därför dela samma
+# id-rymd; två separata räknare ger kollisioner som korrumperar id->slot-
+# uppslag, härstamningsloggar och all framtida kod som refererar en individ
+# över tid.
+_organism_id_counter = _itertools.count(1)
+
+
+def next_organism_id() -> int:
+    """Allokera nästa biologiska organism-id. Återanvänds aldrig."""
+    return next(_organism_id_counter)
+
+
+def reset_organism_ids(start: int = 1) -> None:
+    """
+    Nollställ id-räknaren. Avsedd för tester och reproducerbara körningar
+    inom samma process — inte för produktionsbruk under pågående simulering.
+    """
+    global _organism_id_counter
+    _organism_id_counter = _itertools.count(int(start))
+
 
 @dataclass
 class OrganismStore:

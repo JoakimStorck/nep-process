@@ -23,3 +23,7 @@ Figure_*.png
 .DS_Store
 .repo-agent/
 .venv/
+
+# --- Patch-artefakter ---
+*.orig
+*.rej

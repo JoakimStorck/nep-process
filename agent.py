@@ -13,21 +13,19 @@ from mlp import MLPGenome
 from phenotype import Phenotype, derive_pheno, phenotype_summary
 
 from grid import Grid
+from organism_store import next_organism_id
 
 
 # -------------------------
 # Agent ids
-import itertools as _itertools
-
-# Agent-ID-räknare: per-modul-instans, unik per Python-process.
-# Använd _agent_id_counter.reset() finns inte — starta om processen för rena körningar.
-# OBS: om flera Population-instanser körs i samma process delar de ID-rymden,
-# vilket är korrekt (IDs förblir globalt unika).
-_agent_id_counter = _itertools.count(1)
+# -------------------------
+# Agent-ID hämtas ur den gemensamma organism-id-rymden i organism_store.
+# Fauna och flora får aldrig ha egna räknare: id ska vara unikt över alla
+# organismer, oavsett kapacitetsprofil. Se organism_store.next_organism_id().
 
 
 def _new_agent_id() -> int:
-    return next(_agent_id_counter)
+    return next_organism_id()
 
 
 # -------------------------
