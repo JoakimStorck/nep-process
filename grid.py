@@ -81,10 +81,35 @@ class Grid:
         return x % s, y % s
 
     def cell_of(self, x: float, y: float) -> int:
+        """
+        Position -> cell-ID.
+
+        Anmärkning: trunkerar före modulo, vilket avviker från cell_of_many()
+        för negativa koordinater (cell_of(-0.5) ger 0, cell_of_many ger 63).
+        Positioner är wrappade till [0, size) överallt i simuleringen, så
+        skillnaden är i dag inte nåbar. Semantiken bör harmoniseras när
+        geometrin byts i Steg 2, men inte i samma ändring som en refaktor —
+        det vore en tyst beteendeändring.
+        """
         s = int(self.size)
         ix = int(x) % s
         iy = int(y) % s
         return iy * s + ix
+
+    def cell_of_many(self, xs: object, ys: object) -> np.ndarray:
+        """
+        Vektoriserad position -> cell-ID.
+
+        Toroidal semantik: modulo först, golv sedan. Det är samma ordning som
+        bilinear_indices_many() använder och den enda som är korrekt för
+        negativa koordinater. Den skalära cell_of() trunkerar före modulo och
+        avviker därför för negativa värden — se anmärkningen där.
+        """
+        s = int(self.size)
+        xw = np.mod(np.asarray(xs, dtype=np.float32), np.float32(s))
+        yw = np.mod(np.asarray(ys, dtype=np.float32), np.float32(s))
+        return (yw.astype(np.int32, copy=False) * np.int32(s)
+                + xw.astype(np.int32, copy=False)).astype(np.int32, copy=False)
 
     def rowcol_of(self, cell: int) -> tuple[int, int]:
         s = int(self.size)

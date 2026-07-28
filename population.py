@@ -1311,9 +1311,7 @@ class Population:
     
         out = np.empty(xs.shape, dtype=np.float32)
     
-        x0, y0, _, _, _, _ = self.grid.bilinear_indices_many(xs, ys)
-        size = int(self.WP.size)
-        cells = y0 * size + x0
+        cells = self.grid.cell_of_many(xs, ys)
         out[:] = self.store.flora_cell_mass[cells]
     
         return out
