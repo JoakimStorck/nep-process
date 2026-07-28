@@ -17,6 +17,9 @@ except ImportError:
 
 from grid import Grid
 
+# Index i Grid.neighbor_idx. Ordningen är upp, ned, vänster, höger.
+_NEIGHBOR_DOWN = 1
+
 def clamp(x: float, lo: float, hi: float) -> float:
     return lo if x < lo else hi if x > hi else x
 
@@ -103,29 +106,31 @@ class World:
         # -------------------------
         # Primary world fields
         # -------------------------
-        self.elevation = np.full((s, s), np.float32(self.WP.elevation_init), dtype=np.float32)
-        self.water = np.full((s, s), np.float32(self.WP.water_init), dtype=np.float32)
-        self.nutrient = np.full((s, s), np.float32(self.WP.nutrient_init), dtype=np.float32)
-        self.detritus = np.full((s, s), np.float32(self.WP.detritus_init), dtype=np.float32)
+        # Världsfälten är platta per-cell-arrayer indexerade med cell_idx.
+        # Geometrin lever i Grid; världslagret ser bara en lista av celler.
+        nc = int(self.grid.n_cells)
 
-        # Deprecated compatibility alias.
-        # Source of truth is self.detritus; self.C exists only so older callers keep working.
-        self.C = self.detritus
+        self.elevation = np.full(nc, np.float32(self.WP.elevation_init), dtype=np.float32)
+        self.water = np.full(nc, np.float32(self.WP.water_init), dtype=np.float32)
+        self.nutrient = np.full(nc, np.float32(self.WP.nutrient_init), dtype=np.float32)
+        self.detritus = np.full(nc, np.float32(self.WP.detritus_init), dtype=np.float32)
+
+        # self.C är en egenskap, inte ett fält — se nedan.
 
         # -------------------------
         # External forcing fields
         # -------------------------
-        self.rain_input = np.full((s, s), np.float32(self.WP.rain_input_base), dtype=np.float32)
-        self.spring_input = np.full((s, s), np.float32(self.WP.spring_input_base), dtype=np.float32)
-        self.infiltration = np.full((s, s), np.float32(self.WP.infiltration_base), dtype=np.float32)
-        self.evaporation = np.full((s, s), np.float32(self.WP.evaporation_base), dtype=np.float32)
+        self.rain_input = np.full(nc, np.float32(self.WP.rain_input_base), dtype=np.float32)
+        self.spring_input = np.full(nc, np.float32(self.WP.spring_input_base), dtype=np.float32)
+        self.infiltration = np.full(nc, np.float32(self.WP.infiltration_base), dtype=np.float32)
+        self.evaporation = np.full(nc, np.float32(self.WP.evaporation_base), dtype=np.float32)
 
         # -------------------------
         # Derived hydro fields
         # -------------------------
-        self.surface_level = np.zeros((s, s), dtype=np.float32)
-        self.submerged = np.zeros((s, s), dtype=np.bool_)
-        self.flow_strength = np.zeros((s, s), dtype=np.float32)
+        self.surface_level = np.zeros(nc, dtype=np.float32)
+        self.submerged = np.zeros(nc, dtype=np.bool_)
+        self.flow_strength = np.zeros(nc, dtype=np.float32)
 
         # time
         self.t = 0.0
@@ -143,21 +148,23 @@ class World:
             "E_loss_decay": 0.0,
         }
 
-        # Precompute latitudinal profiles (depend only on y)
-        ys = np.arange(s, dtype=np.float32)
-        lat = np.float32(2.0) * (ys / np.float32(max(1, s - 1))) - np.float32(1.0)  # [-1, +1]
+        # Latitudprofilen är en geometrisk egenskap och kommer från Grid.
+        # Vad latituden betyder klimatologiskt ägs däremot här.
+        lat = np.asarray(self.grid.cell_lat, dtype=np.float32)
         abs_lat = np.abs(lat)
 
         self._lat = lat
         self._abs_lat = abs_lat
-        self._Tmean_y = np.float32(self.WP.T_eq) - np.float32(self.WP.dT_pole) * (abs_lat ** np.float32(self.WP.lat_p))
-        self._Amp_y = np.float32(self.WP.A_eq) + (np.float32(self.WP.A_pole) - np.float32(self.WP.A_eq)) * (
+        self._Tmean_cell = np.float32(self.WP.T_eq) - np.float32(self.WP.dT_pole) * (
+            abs_lat ** np.float32(self.WP.lat_p)
+        )
+        self._Amp_cell = np.float32(self.WP.A_eq) + (np.float32(self.WP.A_pole) - np.float32(self.WP.A_eq)) * (
             abs_lat ** np.float32(self.WP.amp_q)
         )
 
-        # last-computed profiles (debug/inspection)
-        self.Ty = np.zeros((s,), dtype=np.float32)  # degC per row
-        self.gy = np.ones((s,), dtype=np.float32)   # gate per row in [0,1]
+        # Senast beräknade fält, per cell
+        self.T_cell = np.zeros(nc, dtype=np.float32)   # degC per cell
+        self.g_cell = np.ones(nc, dtype=np.float32)    # tillväxtgrind per cell i [0,1]
 
         # initialize temperature profiles at t=0
         self._update_temperature()
@@ -174,39 +181,92 @@ class World:
         phase -= float(WP.season_phase0)
 
         s = np.float32(math.sin(phase))
-        S_y = self._lat * s  # (size,)
+        S_cell = self._lat * s  # (n_cells,)
 
-        Ty = self._Tmean_y + self._Amp_y * S_y
-        self.Ty = Ty.astype(np.float32, copy=False)
+        T_cell = self._Tmean_cell + self._Amp_cell * S_cell
+        self.T_cell = T_cell.astype(np.float32, copy=False)
 
         T0 = float(WP.T0)
         T1 = float(WP.T1)
         if T1 <= T0 + 1e-9:
-            gy = (Ty >= np.float32(T0)).astype(np.float32)
+            g_cell = (T_cell >= np.float32(T0)).astype(np.float32)
         else:
-            gy = (Ty - np.float32(T0)) / np.float32(T1 - T0)
-            gy = np.clip(gy, 0.0, 1.0).astype(np.float32, copy=False)
+            g_cell = (T_cell - np.float32(T0)) / np.float32(T1 - T0)
+            g_cell = np.clip(g_cell, 0.0, 1.0).astype(np.float32, copy=False)
 
-        self.gy = gy
+        self.g_cell = g_cell
+
+    @property
+    def C(self) -> np.ndarray:
+        """
+        Kvadratbunden kompatibilitetsvy av detritus, för viewer och simlog som
+        ännu ritar i rutnät. Delar buffert med self.detritus.
+
+        Egenskap och inte fält med avsikt: världspassen binder om self.detritus
+        till nya arrayer, och ett cachat C skulle då tyst peka på ett gammalt
+        tillstånd eller få fel form. Tas bort när viewern går över till cell-ID
+        i Steg 2, och namnet försvinner helt i Steg 3.
+        """
+        return self._as_2d(self.detritus)
+
+    def _as_2d(self, arr: np.ndarray) -> np.ndarray:
+        """
+        Kvadratbunden vy av ett per-cell-fält.
+
+        Enda platsen där världsfält får anta rutnätsform. Vyn delar minne med
+        det platta fältet, så skrivningar går tillbaka till källan. Anropas av
+        den bilinjära samplingen, som avvecklas i Steg 1c — därefter ska den
+        här metoden inte ha några anropare kvar.
+        """
+        s = int(self.WP.size)
+        return arr.reshape(s, s)
+
+    @property
+    def Ty(self) -> np.ndarray:
+        """
+        Per-rad-temperatur. Kvadratbunden kompatibilitetsvy för viewer och
+        simlog. Temperaturen är konstant längs en rad, så första kolumnen av
+        det omformade per-cell-fältet räcker. Tas bort i Steg 2.
+        """
+        s = int(self.WP.size)
+        return self.T_cell.reshape(s, s)[:, 0]
+
+    @property
+    def gy(self) -> np.ndarray:
+        """Per-rad-tillväxtgrind. Samma kompatibilitetsroll som Ty."""
+        s = int(self.WP.size)
+        return self.g_cell.reshape(s, s)[:, 0]
 
     def temperature_field(self) -> np.ndarray:
-        s = int(self.WP.size)
-        return np.broadcast_to(self.Ty[:, None], (s, s)).astype(np.float32, copy=False)
+        """Temperatur per cell, indexerad med cell_idx."""
+        return self.T_cell
 
     def growth_gate_field(self) -> np.ndarray:
-        s = int(self.WP.size)
-        return np.broadcast_to(self.gy[:, None], (s, s)).astype(np.float32, copy=False)
+        """Tillväxtgrind per cell, indexerad med cell_idx."""
+        return self.g_cell
+
+    def temperature_of_cell(self, cell: int) -> float:
+        """Temperatur i en cell. Den form biologin bör använda."""
+        return float(self.T_cell[int(cell)])
 
     def temperature_at(self, x: float, y: float) -> float:
-        s = int(self.WP.size)
-        _, yw = self.grid.wrap_pos(float(x), float(y))
+        """
+        Temperatur vid en kontinuerlig position, interpolerad mellan cellen och
+        dess granne i y-led.
 
-        y0 = int(math.floor(yw)) % s
-        y1 = (y0 + 1) % s
+        Interpolationen behålls tills vidare: steget mellan angränsande celler
+        är upp till ~2.4 degC, vilket inte är försumbart mot floras temp_width
+        på 4-18 degC. Frågan om subcell-interpolation ska finnas kvar hör ihop
+        med den bilinjära samplingen och avgörs samlat i Steg 1c.
+        """
+        xw, yw = self.grid.wrap_pos(float(x), float(y))
+
+        cell0 = int(self.grid.cell_of(xw, yw))
+        cell1 = int(self.grid.neighbor_idx[cell0, _NEIGHBOR_DOWN])
         fy = yw - math.floor(yw)
 
-        t0 = float(self.Ty[y0])
-        t1 = float(self.Ty[y1])
+        t0 = float(self.T_cell[cell0])
+        t1 = float(self.T_cell[cell1])
         return (1.0 - fy) * t0 + fy * t1
 
 
@@ -267,8 +327,6 @@ class World:
         ).astype(np.float32, copy=False)
 
         # håll kompatibilitetsaliaset pekande på source-of-truth-arrayen
-        self.C = self.detritus
-
         dM_detritus_decay = float(np.sum(np.float64(dt) * np.float64(decay)))
         dM_nutrient_from_detritus = 0.0
         return dM_detritus_decay, dM_nutrient_from_detritus
@@ -329,7 +387,7 @@ class World:
     # -------------------------
     def sample_carcass(self, x: float, y: float) -> float:
         """Bilinear sampling of detritus field at a single point."""
-        return _bilinear_scalar_C(self.detritus, x, y, self.grid)
+        return _bilinear_scalar_C(self._as_2d(self.detritus), x, y, self.grid)
 
     def sample_many_carcass(
         self,
@@ -343,7 +401,7 @@ class World:
         Returns float32 array.
         """
         return _bilinear_many_C(
-            self.detritus,
+            self._as_2d(self.detritus),
             xs, ys,
             self.grid,
             outC=outC, tmp=tmp,
@@ -439,7 +497,7 @@ class World:
         if not math.isfinite(amt) or amt <= 0.0:
             return 0.0, 0.0
     
-        got_c = float(self._consume_bilinear_from(self.detritus, x, y, amt))
+        got_c = float(self._consume_bilinear_from(self._as_2d(self.detritus), x, y, amt))
         return got_c, got_c
 
     def add_carcass(self, x: float, y: float, amount_kg: float, rad: int = 3) -> None:
@@ -456,6 +514,9 @@ class World:
     
         center = self.grid.cell_of(float(x), float(y))
         cy, cx = self.grid.rowcol_of(center)
+        # rowcol används bara för att generera kärnans offset; skrivningen sker
+        # på cellindex. Kärnan är ännu kvadratbunden och ersätts av
+        # grid.cells_within() när geometrin byts i Steg 2.
     
         sigma = max(0.75, 0.5 * r)
         inv2sig2 = 1.0 / (2.0 * sigma * sigma)
@@ -474,14 +535,14 @@ class World:
                 wsum += w
     
         if wsum <= 1e-12:
-            self.detritus[cy, cx] = np.float32(float(self.detritus[cy, cx]) + amt)
+            c0 = int(self.grid.cell_from_rowcol(cy, cx))
+            self.detritus[c0] = np.float32(float(self.detritus[c0]) + amt)
             return
     
         scale = amt / wsum
         for dx, dy, w in weights:
-            cell = self.grid.cell_from_rowcol(cy + dy, cx + dx)
-            iy, ix = self.grid.rowcol_of(cell)
-            self.detritus[iy, ix] = np.float32(float(self.detritus[iy, ix]) + scale * w)
+            cell = int(self.grid.cell_from_rowcol(cy + dy, cx + dx))
+            self.detritus[cell] = np.float32(float(self.detritus[cell]) + scale * w)
 
 
 def _bilinear_scalar_C(C: np.ndarray, x: float, y: float, grid: Grid) -> float:

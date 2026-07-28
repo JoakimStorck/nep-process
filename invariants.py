@@ -354,8 +354,61 @@ def check_body_store_mirror(pop) -> list[Violation]:
     return out
 
 
+WORLD_CELL_FIELDS = (
+    "elevation", "water", "nutrient", "detritus",
+    "rain_input", "spring_input", "infiltration", "evaporation",
+    "surface_level", "submerged", "flow_strength",
+    "T_cell", "g_cell",
+)
+
+
+def check_world_field_domains(pop) -> list[Violation]:
+    """
+    Världsfälten ska vara platta per-cell-arrayer med längd n_cells.
+
+    Ett fält som råkar behålla eller återfå rutnätsform är den regression som
+    Steg 1 finns till för att förhindra: den fungerar så länge geometrin är
+    kvadratisk och går sönder tyst först vid hexbytet.
+    """
+    world = pop.world
+    n_cells = int(pop.grid.n_cells)
+    out: list[Violation] = []
+
+    bad: list[str] = []
+    for name in WORLD_CELL_FIELDS:
+        arr = getattr(world, name, None)
+        if arr is None:
+            bad.append(f"{name} saknas")
+            continue
+        arr = np.asarray(arr)
+        if arr.ndim != 1:
+            bad.append(f"{name} har form {arr.shape}, förväntat 1D")
+        elif int(arr.shape[0]) != n_cells:
+            bad.append(f"{name} har längd {int(arr.shape[0])}, förväntat n_cells={n_cells}")
+
+    if bad:
+        out.append(Violation("world_field_domains", "; ".join(bad[:MAX_EXAMPLES])))
+
+    # Kompatibilitetsvyn C måste fortsätta dela buffert med detritus, annars
+    # divergerar viewern tyst från källan.
+    C = getattr(world, "C", None)
+    if C is not None:
+        Ca = np.asarray(C)
+        if Ca.ndim != 2:
+            out.append(Violation("world_field_domains", f"world.C har form {Ca.shape}, förväntat 2D"))
+        if not np.shares_memory(Ca, np.asarray(world.detritus)):
+            out.append(Violation("world_field_domains", "world.C delar inte längre minne med world.detritus"))
+
+    Ty = np.asarray(getattr(world, "Ty", np.empty(0)))
+    if Ty.ndim != 1:
+        out.append(Violation("world_field_domains", f"world.Ty har form {Ty.shape}, förväntat 1D"))
+
+    return out
+
+
 ALL_CHECKS = (
     check_slot_bookkeeping,
+    check_world_field_domains,
     check_body_store_mirror,
     check_array_domains,
     check_cell_idx,

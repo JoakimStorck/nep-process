@@ -1173,8 +1173,7 @@ class Population:
             if cell < 0:
                 continue
         
-            row, _ = self.grid.rowcol_of(cell)
-            T = float(self.world.Ty[row])
+            T = float(self.world.T_cell[cell])
         
             m_cap = max(1e-12, float(self.store.flora_adult_mass[slot]))
             regen = max(0.0, float(self.store.flora_growth_rate[slot]))
@@ -1332,7 +1331,7 @@ class Population:
     
         got_c = 0.0
         if prefer_carcass:
-            got_c = float(self.world._consume_bilinear_from(self.world.detritus, x, y, amt))
+            got_c = float(self.world._consume_bilinear_from(self.world._as_2d(self.world.detritus), x, y, amt))
             amt = max(0.0, amt - got_c)
     
         got_f = float(self._consume_flora_from_store(x, y, amt, max_radius=1))
