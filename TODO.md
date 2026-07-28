@@ -87,7 +87,7 @@ Det är verklig arkitektur och motsvarar manifestets Fas 4-ordning. Tillståndet
 
 **Speglade från Body:** `mass`, `energy`, `energy_cap`, `damage`, `wear`. En synkhjälpare kopierar från `a.body.*`. `Body` är source of truth. Ärligt men omigrerat.
 
-**Gestationscache:** `gestating`, `gest_M`, `gest_E_J`, `gest_M_target`. `Body` äger dem fram till Steg 5, eftersom `gest_M` ackumuleras inne i `Body.step()`:s energibudget där fostermassan också belastar buren massa. Store-fälten är en envägscache för de slotbaserade reproduktionsgrindarna, skriven via `_write_gestation_to_store()` och bevakad av en invariant.
+**Gestationscache:** `gestating`, `gest_M`, `gest_E_J`, `gest_M_target`. `Body` äger dem fram till Steg 6b, eftersom `gest_M` ackumuleras inne i `Body.step()`:s energibudget där fostermassan också belastar buren massa. Store-fälten är en envägscache för de slotbaserade reproduktionsgrindarna, skriven via `_write_gestation_to_store()` och bevakad av en invariant.
 
 ## B3. Aktiva delmängder finns inte
 
@@ -218,10 +218,31 @@ Mätt: 0 träffar på `rowcol_of`, `cell_from_rowcol`, `grid.size` och `bilinear
 - `distance()` blir hexavstånd, `cells_within(r)` ger 1, 7, 19 … celler.
 - Viewern översätter cell-ID via `Grid` och ritar hexceller.
 - Diffusions- och spridningsparametrar justeras för det nya grannantalet — en gång, innan ekologin byggs.
+- `Grid` tar `width` och `height` separat. Hexvärlden är aldrig kvadratisk i kontinuerliga enheter, och radoffset kräver jämnt radantal.
+- Latituden görs periodisk, `lat = -cos(2π·r/H)`. Den linjära profilen ger ett enda kallt band som wrappar, med en 24-gradig säsongsdiskontinuitet mitt i sig — ingen isolering plus en artefakt. Den periodiska ger två kalla band åtskilda av två tempererade zoner, med motfasiga årstider. Det är den geografi projektet designades för.
+- Världsstorleken sätts till 64 × 256. Periodisk latitud halverar bandbredden, så H=128 återställer bara nuläget medan H=256 fördubblar sträckan pol till ekvator.
 
 **Klart när:** allt utanför `grid.py` och viewern är oförändrat. Krävs större ändringar i world eller biologi är Steg 1 inte färdigt, och felet ska rättas där.
 
-## Steg 3 — Näringskretsloppet
+**Mäts separat:** differentierar sig populationer efter klimatband, eller blandas de bort av rörelse? Klimatändringen bör mätas på kvadratgeometri innan hexbytet, så att ekologiskt utfall och geometribyte inte sammanblandas.
+
+## Steg 3 — Världens kadensmodell
+
+*Förutsättningen för en stor värld. Underlag: `docs/varldens-kadensmodell.md`.*
+
+Terrängburen hydrologi kräver en värld stor nog att bära höjdskillnader och vattendrag. Vid en miljon celler kostar världspasset ~26 ms per tick, och ungefär 15 av dem är representationsfel snarare än beräkning: temperaturen räknas om per cell trots att den bara beror på latitud, decomposition sveper hela världen för att multiplicera nollor, och samtliga fält lagras som arrayer trots att de är rumsligt konstanta.
+
+- Varje världsfält får en deklarerad **kadensklass** utöver sin ägarskapsklass: statisk, profilberoende, glest dynamisk eller tätt dynamisk.
+- Statiska fält sveps aldrig och lagras som skalär tills något faktiskt varierar dem.
+- `T_cell` och `g_cell` blir en profil med längd lika med antalet latitudband, läst via `Grid.cell_band`. Designen är profil plus eventuella per-cell-modifierare, så att kontinentalitet kan läggas till senare utan omtag.
+- `detritus` blir glest dynamiskt med aktiv mängd. Kontraktet är att inaktiva celler garanterat är noll — en prövbar invariant, inte ett antagande.
+- Ledgern underhålls inkrementellt i stället för via fulla summeringar per tick.
+
+**Klart när:** världspasset vid en miljon celler ligger i storleksordningen 10 ms i stället för 26, och en invariant visar att inaktiva celler i glesa fält är exakt noll.
+
+Kadensklasserna ska in i manifestet innan hydro byggs, så att `hydro_pass` och `transport_pass` skrivs mot rätt struktur från början. Glesning av hydro självt hör till Steg 8 — den kräver en tät referensimplementation att välja epsilon mot och validera massbevarande emot.
+
+## Steg 4 — Näringskretsloppet
 
 - `detritus` blir ensam source of truth. `C`-aliaset tas bort.
 - `decomposition_pass()`: `detritus → nutrient` plus förlustterm. Reaktion, ingen transport.
@@ -234,18 +255,18 @@ Mätt: 0 träffar på `rowcol_of`, `cell_from_rowcol`, `grid.size` och `bilinear
 
 Här får Fas 2:s ekologiska hypotes sitt första riktiga svar. Blir svaret nej — revidera floramodellen, inte kärnan.
 
-## Steg 4 — Aktiva delmängder och vektoriserade florapass
+## Steg 5 — Aktiva delmängder och vektoriserade florapass
 
 - Delmängder byggs en gång per tick, immutabla under ticken: `flora_slots`, `fauna_slots`, `sensing_slots`.
 - Florapassen skrivs om som numpy-operationer över `flora_slots`.
-- `rebuild_spatial_index` vektoriseras med `bincount` + `argsort` och anropas **en** gång per tick.
+- `rebuild_spatial_index` indexerar bara bebodda celler i stället för hela cellrymden, och anropas **en** gång per tick. CSR över `n_cells` gör `cumsum` över en miljon element för att indexera tiotusen organismer; sortering plus `searchsorted` tar bort `n_cells`-termen helt.
 - Flora-tilläggsfält flyttas till komprimerade tilläggsarrayer indexerade via flora-delmängden. Uppfyller A5.
 
 **Klart när:** 10 000 flora körs under 10 ms/tick.
 
-## Steg 5a — Sensing som evolverbar kapacitet
+## Steg 6a — Sensing som evolverbar kapacitet
 
-*Kräver Steg 3 för selektionstrycket och Steg 4 för delmängdsmaskineriet, men inte hela fauna-migreringen. Underlag: `docs/synens-axlar.md`.*
+*Kräver Steg 4 för selektionstrycket och Steg 5 för delmängdsmaskineriet, men inte hela fauna-migreringen. Underlag: `docs/synens-axlar.md`.*
 
 Synen är i dag evolverbar i fyra diskreta steg längs en sammanslagen axel. Det som saknas är att axlarna kan handlas mot varandra och att kapaciteten kostar även när den inte används.
 
@@ -256,7 +277,7 @@ Synen är i dag evolverbar i fyra diskreta steg längs en sammanslagen axel. Det
 
 **Klart när:** en organism med `sense_radius → 0` aldrig berör sensing-koden, och spridningen i `sense_radius` differentierar mot nisch med kostnadsmodellen påslagen men driftar neutralt utan den.
 
-## Steg 5b — Fauna store-first
+## Steg 6b — Fauna store-first
 
 *Störst risk, störst utdelning.*
 
@@ -268,15 +289,15 @@ Synen är i dag evolverbar i fyra diskreta steg längs en sammanslagen axel. Det
 
 **Klart när:** inget fauna-tillstånd har två skrivare, och inget kapacitetsfält saknar läsare.
 
-## Steg 6 — Hydro
+## Steg 7 — Hydro
 
 - `elevation` får en terränggenerator: lutande plan, bassänger, höjdryggar.
 - `hydro_pass()` över fri yta `elevation + water` med grannflöde, tvåstegsmetod, strikt kontinuitet. Härledda fält som del av samma passkontrakt.
 - `flood_tolerance` och `buoyancy` får läsare i locomotion och rörelsekostnad. Passiv drift i hydro-passet.
 
-Att `nutrient` sedan Steg 3 transporteras med samma mönster gör hydro till en variant snarare än en nyhet.
+Att `nutrient` sedan Steg 4 transporteras med samma mönster gör hydro till en variant snarare än en nyhet.
 
-## Steg 7 — Acceleration
+## Steg 8 — Acceleration
 
 Profilera fasmodellen under blandad realistisk belastning. Numba för sensing, CuPy för fältpass om de dominerar. Rustkärna endast om mätvärden motiverar det.
 
@@ -290,17 +311,21 @@ Profilera fasmodellen under blandad realistisk belastning. Numba för sensing, C
 | 0 | Fält med två skrivare | 0 |
 | 1 | Referenser till rad, kolumn eller `[y, x]` utanför `Grid` | 0 |
 | 2 | Filer ändrade vid hexbytet | endast `grid.py` och viewer |
-| 3 | Floran når ett stationärt antal | ja |
-| 3 | Stationärt antal vid dubblad `capacity` | oförändrat ±10 % |
-| 3 | Överlevnadsskillnad mellan hög och låg `uptake_capacity` | statistiskt skild |
-| 3 | Massbalans i ledgern | sluten inom 1e-9 relativt |
-| 4 | Kostnad per floraindivid och tick | < 1 µs |
-| 4 | 10 000 flora | < 10 ms/tick |
-| 5a | Sensing-kostnad för organism med `sense_radius → 0` | 0, och koden aldrig berörd |
-| 5a | Spridning i `sense_radius` med kostnad kontra utan | differentierar mot nisch kontra neutral drift |
-| 5b | Kapacitetsfält utan läsare | 0 |
-| 5b | Kostnad per fauna och tick | mät baseline, tillåt ej regression |
-| 6 | Massbevarande i hydro över 10 000 tick | drift < 1e-6 relativt |
+| 2 | Populationsdifferentiering mellan klimatband | mätbar, annars är världen för smal |
+| 3 | Världspass vid 1 000 000 celler | ~10 ms/tick, från 26 |
+| 3 | Nollskilda värden i inaktiva celler i glesa fält | 0 |
+| 4 | Floran når ett stationärt antal | ja |
+| 4 | Stationärt antal vid dubblad `capacity` | oförändrat ±10 % |
+| 4 | Överlevnadsskillnad mellan hög och låg `uptake_capacity` | statistiskt skild |
+| 4 | Massbalans i ledgern | sluten inom 1e-9 relativt |
+| 5 | Kostnad per floraindivid och tick | < 1 µs |
+| 5 | 10 000 flora | < 10 ms/tick |
+| 5 | `n_cells`-beroende termer i spatialindexet | 0 |
+| 6a | Sensing-kostnad för organism med `sense_radius → 0` | 0, och koden aldrig berörd |
+| 6a | Spridning i `sense_radius` med kostnad kontra utan | differentierar mot nisch kontra neutral drift |
+| 6b | Kapacitetsfält utan läsare | 0 |
+| 6b | Kostnad per fauna och tick | mät baseline, tillåt ej regression |
+| 7 | Massbevarande i hydro över 10 000 tick | drift < 1e-6 relativt |
 
 Att floran över huvud taget når ett stationärt tillstånd, och att det tillståndet är okänsligt för `capacity`, är den viktigaste enskilda mätningen i planen. Den avgör om ekologin har tagit över från arkitekturen.
 
@@ -310,7 +335,7 @@ Att floran över huvud taget når ett stationärt tillstånd, och att det tillst
 
 ## Om ordningen ändå ska vara en annan
 
-Vill man hålla fast vid hydro tidigt är det försvarbart — men gör Steg 3:s floradödlighet och konkurrens ändå först, som ett minimalt ingrepp. Utan dem mäter man hydro i en värld där floran växer obehindrat.
+Vill man hålla fast vid hydro tidigt är det försvarbart — men gör Steg 4:s floradödlighet och konkurrens ändå först, som ett minimalt ingrepp. Utan dem mäter man hydro i en värld där floran växer obehindrat.
 
 Vill man skjuta hex till efter ekologin är också det försvarbart, men räkna då med att kalibrera diffusion, spridning och celltäthet två gånger.
 

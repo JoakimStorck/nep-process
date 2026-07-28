@@ -1,6 +1,6 @@
 # Designskiss — synens axlar
 
-*Juli 2026. Underlag för Steg 5a i TODO.md. Status: förslag, inte beslut — uppdateras eller markeras som ersatt när Steg 5a byggs.*
+*Juli 2026. Underlag för Steg 6a i TODO.md. Status: förslag, inte beslut — uppdateras eller markeras som ersatt när Steg 6a byggs.*
 
 ---
 
@@ -12,13 +12,13 @@ I dag är synen evolverbar men i fyra diskreta steg längs en enda sammanslagen 
 
 ## När det ska byggas
 
-**Efter Steg 3, inte före.**
+**Efter näringskretsloppet, inte före.**
 
 Synens värde är en funktion av resursernas fläckvishet. I en värld där maten är jämnt utspridd och obegränsad hittar en långsynt organism ingenting som en närsynt inte också hittar — den betalar bara mer. Selektionen skulle då driva akuiteten mot minimum, vilket är ett korrekt svar på en felställd fråga.
 
-Näringskretsloppet i Steg 3 är det som skapar fläckvishet: konkurrens om cellnäring ger mättnadsgradienter, dödlighet ger luckor, och lokal utarmning ger driv att söka längre bort. Först i den världen betalar sig sikt.
+Näringskretsloppet är det som skapar fläckvishet: konkurrens om cellnäring ger mättnadsgradienter, dödlighet ger luckor, och lokal utarmning ger driv att söka längre bort. Först i den världen betalar sig sikt.
 
-Däremot kräver arbetet inte att hela Steg 5 är gjort. Det behöver att `sense_radius` och `sense_rate` får läsare och kostnader — inte att `Body`:s samtliga fält har bytt ägare. Det motiverar en uppdelning: **Steg 5a — kapacitetsläsare och kostnader för sensing**, som kan ligga direkt efter Steg 3, och **Steg 5b — resten av fauna store-first**.
+Däremot kräver arbetet inte att hela faunamigreringen är gjord. Det behöver att `sense_radius` och `sense_rate` får läsare och kostnader — inte att `Body`:s samtliga fält har bytt ägare. Det motiverar en uppdelning: **Steg 6a — kapacitetsläsare och kostnader för sensing**, som kan ligga direkt efter delmängdsmaskineriet, och **Steg 6b — resten av fauna store-first**.
 
 ## Nuläget
 
@@ -139,4 +139,4 @@ Den sista raden är den viktigaste testet: en organism som inte rör sig ska kun
 
 **Vad är sektorupplösningen?** Sex matchar hexgrannarna och är billigast. Åtta eller tolv ger finare riktning men fler MLP-ingångar och därmed större nätverk för alla, även de närsynta.
 
-**Hur mäter vi att det fungerar?** Förslag: kör identiska seeds med och utan kostnadsmodellen och jämför spridningen i `sense_radius` över tid. Utan kostnad ska den drifta neutralt; med kostnad ska den differentiera mot nisch. Om den inte gör det är antingen kostnaderna felskalade eller miljön för homogen — och det senare är i så fall ett svar om Steg 3, inte om synen.
+**Hur mäter vi att det fungerar?** Förslag: kör identiska seeds med och utan kostnadsmodellen och jämför spridningen i `sense_radius` över tid. Utan kostnad ska den drifta neutralt; med kostnad ska den differentiera mot nisch. Om den inte gör det är antingen kostnaderna felskalade eller miljön för homogen — och det senare är i så fall ett svar om näringskretsloppet, inte om synen.
