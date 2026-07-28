@@ -89,6 +89,9 @@ class PopParams:
     init_pop: int = 12
     max_pop: int = 500
     flora_mortality: float = 2.0e-5   # höjt — naturlig matbrist sätter taket nu, inte detta
+    # Hur mycket dödsrisken förhöjs för en individ vid noll massa jämfört med
+    # vuxenstorlek. Groddplantor som inte får näring ska försvinna.
+    flora_seedling_mort_mult: float = 20.0
 
     store_growth_min_chunk: int = 256
     store_growth_factor: float = 2.0
@@ -1140,37 +1143,35 @@ class Population:
         dm = float(add_mass)
         if not math.isfinite(dm) or dm <= 0.0:
             return False
-    
-    
-        for slot in self.store.slots_in_cell(int(cell)):
-            s = int(slot)
-            if not bool(self.store.alive[s]):
-                continue
-            if int(self.store.kind[s]) != 1:
-                continue
-    
-            new_m = float(self.store.mass[s]) + dm
-            self.store.mass[s] = np.float32(new_m)
-            self.store.energy[s] = np.float32(new_m * self._slot_energy_per_kg(s))
-    
-            self._flora_summary_cache = None
-            return True
-    
-        self._ensure_store_capacity(1)
-        slot = self.store.alloc_slot()
-    
+
+        # Varje frö blir en egen individ, även om cellen redan är bebodd.
+        #
+        # Tidigare slogs ny massa ihop med befintlig flora i målcellen, vilket
+        # gjorde varje cell till en enda organism. Då fanns ingen konkurrens:
+        # individen hade cellens hela näringspool för sig själv, och
+        # uptake_capacity kunde inte selekteras eftersom snabbare upptag inte
+        # vann något från någon.
+        #
+        # Antalet begränsas inte här utan av näringen. En groddplanta som inte
+        # får näring växer inte, tappar mot senescensen och försvinner.
+        if len(self.store.free_slots) < 2:
+            self._ensure_store_capacity(1)
+        try:
+            slot = self.store.alloc_slot()
+        except RuntimeError:
+            return False
+
         if traits is None:
             traits = init_organism_traits(
                 self.rng,
                 int(self.PP.n_traits),
                 mode="flora",
             )
-    
+
         self._init_flora_slot(slot, int(cell), dm, traits)
         self._flora_summary_cache = None
         return True
-        
-        
+
     def _growth_system_flora(self) -> tuple[float, float, float]:
         """
         Upptag och tillväxt för diskret flora, fusionerade till ett pass.
@@ -1214,8 +1215,13 @@ class Population:
             m = float(self.store.mass[slot])
             struct = float(self.store.structure[slot])
 
-            # --- senescens: konstant risk per tick, återförs som förna ---
-            if mort > 0.0 and float(self.rng.random()) < mort:
+            # --- senescens: risk per tick, förhöjd för individer långt under
+            # sin vuxenmassa. Utan det ansamlas groddplantor som varken växer
+            # eller dör i celler där näringen är slut.
+            m_adult = max(1e-12, float(self.store.flora_adult_mass[slot]))
+            frac = min(1.0, m / m_adult)
+            risk = mort * (1.0 + float(self.PP.flora_seedling_mort_mult) * (1.0 - frac))
+            if risk > 0.0 and float(self.rng.random()) < risk:
                 if m > 0.0:
                     world.excrete_at(
                         float(self.store.pos_x[slot]),
