@@ -29,9 +29,12 @@ def clamp(x: float, lo: float, hi: float) -> float:
 # -------------------------
 @dataclass
 class WorldParams:
-    size: int = 64
-    width: int = 0     # 0 => size
-    height: int = 0    # 0 => size
+    # Världens form i celler. Höjden måste vara jämn: hexgeometrins radoffset
+    # blir annars inkonsistent över sömmen. Bredd 64 och höjd 256 ger fyra
+    # klimatband med 64 rader mellan pol och ekvator — se TODO.md, Steg 2.
+    width: int = 64
+    height: int = 256
+    size: int = 0      # bekvämlighet för kvadratiska världar; sätter båda
     dt: float = 0.02
 
     # Flora mass scale used by Population for normalization / initialization
