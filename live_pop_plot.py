@@ -13,6 +13,7 @@ import threading
 import math
 
 import numpy as np
+import matplotlib
 import matplotlib.pyplot as plt
 
 
@@ -412,6 +413,17 @@ def run_ui_loop(fig, ax_demo, ax_state, ax_energy, series: PopSeries, args, Q: "
 # Main
 # ============================================================
 
+def _backend_is_interactive(name: str) -> bool:
+    """Kan det här backendet öppna ett fönster?"""
+    try:  # matplotlib >= 3.9
+        from matplotlib.backends import backend_registry, BackendFilter
+        names = backend_registry.list_builtin(BackendFilter.INTERACTIVE)
+    except Exception:
+        names = getattr(matplotlib.rcsetup, "interactive_bk", [])
+    low = {str(n).lower() for n in names}
+    return str(name).lower() in low
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--fp", default="pop.jsonl")
@@ -421,12 +433,59 @@ def main() -> None:
     ap.add_argument("--timer_ms", type=int, default=50)
     ap.add_argument("--redraw_min_dt", type=float, default=0.20)
     ap.add_argument("--max_items_per_tick", type=int, default=5000)
+    ap.add_argument("--save", type=str, default=None,
+                    help="rita en gång ur befintlig fil och spara som bild i "
+                         "stället för att öppna fönster; fungerar utan GUI-backend")
     args = ap.parse_args()
+
+    # Utan interaktivt backend är plt.show() en tyst no-op: skriptet avslutas
+    # direkt utan fönster och utan felmeddelande. Det är värt att säga ifrån
+    # i stället för att låta det se ut som att ingenting hände.
+    backend = matplotlib.get_backend()
+    if not args.save and not _backend_is_interactive(backend):
+        print(
+            f"[live_pop_plot] matplotlib använder backend '{backend}', som inte kan\n"
+            f"                öppna fönster. Inget skulle visas.\n"
+            f"\n"
+            f"  Installera ett GUI-backend i din venv:   pip install PyQt5\n"
+            f"  eller använd systemets tkinter:          sudo apt install python3-tk\n"
+            f"                                          (kräver venv med --system-site-packages)\n"
+            f"\n"
+            f"  Eller spara en bild i stället:           python live_pop_plot.py --fp {args.fp} --save pop.png\n",
+            file=sys.stderr,
+            flush=True,
+        )
+        sys.exit(1)
 
     fig, (ax_demo, ax_state, ax_energy) = plt.subplots(3, 1, sharex=True, figsize=(11, 9))
 
     series = PopSeries(window=int(args.window))
     Q: "queue.Queue[dict]" = queue.Queue()
+
+    if args.save:
+        # Statiskt läge: läs hela filen en gång, rita, spara. run_ui_loop
+        # ritar redan innan den returnerar, så ingen extra ritväg behövs.
+        n = 0
+        try:
+            with open(str(args.fp), "r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except Exception:
+                        continue
+                    if series.append_population_event(obj):
+                        n += 1
+        except FileNotFoundError:
+            print(f"[live_pop_plot] hittar inte {args.fp}", file=sys.stderr, flush=True)
+            sys.exit(1)
+
+        run_ui_loop(fig, ax_demo, ax_state, ax_energy, series, args, Q)
+        fig.savefig(str(args.save), dpi=110, bbox_inches="tight")
+        print(f"[live_pop_plot] {n} population-händelser -> {args.save}", flush=True)
+        return
 
     th = start_tail_thread(str(args.fp), Q, poll_s=float(args.poll))
     tmr = run_ui_loop(fig, ax_demo, ax_state, ax_energy, series, args, Q)
