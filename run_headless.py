@@ -180,7 +180,7 @@ def format_stats(pop: Population, d: dict, tick: int, elapsed: float) -> str:
     )
 
 
-def print_summary(pop: Population, d0: dict, unika: int, worst_drift: float,
+def print_summary(pop: Population, d0: dict, nb0: dict, unika: int, worst_drift: float,
                   n_cells: int, elapsed: float, ticks: int) -> None:
     d = diagnostics(pop)
     nb = nutrient_balance(pop)
@@ -214,6 +214,24 @@ def print_summary(pop: Population, d0: dict, unika: int, worst_drift: float,
           f"fauna {nb['in_fauna']:.5f}  detritus {nb['in_detritus']:.5f}")
     print(f"               tillfört {nb['added']:.5f}  förlorat {nb['lost']:.5f}  "
           f"summa {nb['total']:.5f}")
+
+    # Takterna avgör om världen ackumulerar eller dräneras, och på vilken
+    # tidsskala. Totalerna ensamma döljer det: en stock som ser stabil ut över
+    # några hundra sekunder kan ha en tidskonstant på timmar.
+    # Se docs/naringens-ekonomi.md.
+    sim_h = float(pop.t) / 3600.0
+    if sim_h > 0.0:
+        add_h = (nb["added"] - nb0["added"]) / sim_h
+        lost_h = (nb["lost"] - nb0["lost"]) / sim_h
+        net_h = add_h - lost_h
+        loss_frac = max(1e-12, float(pop.WP.nutrient_loss_frac))
+        cyc_h = (lost_h / loss_frac) / max(1e-12, nb["total"])
+        line = (f"               takt: +{add_h:.5f} -{lost_h:.5f} = {net_h:+.5f} kg/h")
+        if abs(net_h) > 1e-12:
+            line += f"   tidskonstant {abs(nb['total'] / net_h):.0f} h"
+        print(line)
+        print(f"               omsättning {cyc_h:.1f} varv/h, "
+              f"{1.0 / loss_frac:.0f} varv innan förlust")
     print(f"               drift {nb['unaccounted'] / max(1e-12, abs(nb['total'])):.2e} rel "
           f"(störst under körningen {worst_drift:.2e})")
 
@@ -276,6 +294,7 @@ def run(a: argparse.Namespace, seed: int | None = None) -> int:
 def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
     pop = build_population(a, seed, hub=hub)
     d0 = diagnostics(pop)
+    nb0 = nutrient_balance(pop)
     n_cells = int(pop.grid.n_cells)
     unika = {int(x.id) for x in pop.agents if x.body.alive}
     worst_drift = 0.0
@@ -355,7 +374,7 @@ def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
             flush=True,
         )
         if a.stats:
-            print_summary(pop, d0, len(unika), worst_drift, n_cells, elapsed, tick)
+            print_summary(pop, d0, nb0, len(unika), worst_drift, n_cells, elapsed, tick)
 
     return 0 if failures == 0 else 1
 

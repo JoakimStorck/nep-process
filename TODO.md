@@ -454,6 +454,29 @@ Näringsdriften faller därmed från 2,7e-06 till 4,9e-09 relativt mätt per pas
 
 **Kostnaden var prestanda.** 34 ms/tick vid 2 200 flora mot 5,5 ms vid 150. Det var Steg 5:s argument i konkret form, och Steg 5 har sedan tagit ner samma punkt till 6,7 ms.
 
+### Näringens ekonomi — granskad, se `docs/naringens-ekonomi.md`
+
+`flora_init_mass_ratio = 10.0` visade sig inte vara en ekologisk kvot utan systemets bärkraft. `nutrient_init = 0`, så den sådda biomassan **är** hela näringsbudgeten — extern tillförsel över en 400-sekunderskörning är 0,13 % av stocken. Fördubblad sådd ger fördubblad stående gröda, och kausaliteten går fel väg: primärproduktionen härleds ur faunans massa.
+
+Den större felkalibreringen sitter dock i `nutrient_loss_frac = 0.10`, som säger att en näringsatom klarar tio varv genom levande vävnad innan den försvinner. I verkligheten är talet hundratals till tusentals. Uppmätt vid 12 fauna:
+
+```
+loss_frac = 0,100    tillfört 0,0118 kg/h   förlorat 0,1244 kg/h   netto -0,1126 kg/h
+loss_frac = 0,002    tillfört 0,0118 kg/h   förlorat 0,0028 kg/h   netto +0,0090 kg/h
+```
+
+Vid 0,100 dräneras världen med tidskonstant kring elva simulerade timmar, vilket är precis horisonten för långkörningar. Vid 0,002 ackumulerar den.
+
+Designskissen lägger fyra påståenden som var för sig går att motivera utan att fittas mot en önskad populationsstorlek: källan är en takt per cell och inte en stock, stocken sås och representerar prebiotisk ackumulation, den interna cirkulationen är nästan förlustfri, och sänkan är rumslig — begravning vid havsranden när hydron finns, inte en tiondels skatt på varje nedbrytning överallt.
+
+Den visar också varför lokaliteten i upptag, exkretion och kadaverdeponering är bärande och inte bara en prestandaprincip: vatten flyttar näring strikt utför, och den biotiska kedjan är det enda som flyttar den uppför.
+
+**Att göra i Steg 4:s kalibrering:**
+
+- `nutrient_loss_frac` till storleksordningen 10⁻³.
+- `nutrient_input` blir ett per-cell-fält i stället för en skalär, så punktkällor blir möjliga.
+- Näringsbudgeten sätts explicit; flora sås ur budgeten och fauna ur floran, i stället för tvärtom.
+
 ### Vad kalibreringen ska sikta på
 
 Efter stängningen stannar faunan på nio individer i seed 1. Det talet är **inte** ett flödesjämviktstal. Uppmätt över 12 000 tick: tolv unika individer totalt, alltså enbart den warm-startade kohorten, tre dödsfall och **noll födslar**. De nio är samma nio.
@@ -471,7 +494,7 @@ värld      agenter   täthet/1000 celler   ser ingen   utanför radie   parning
 
 Parningsfrekvensen stiger ungefär tjugofemfaldigt med fjortonfaldig täthet, och andelen som inte ser någon faller från 91 till 58 %. Vid den högsta tätheten binder däremot födan i stället — faunan går från 60 till 37 på 2 000 tick.
 
-Det ger ordningen: **hitta först den täthet där mötesfrekvensen räcker, och kalibrera födobasen mot den tätheten.** Att skruva på `nutrient_input` och floras produktivitet vid 0,67 agenter per 1000 celler mäter något som ändå inte reproducerar sig. Kandidatreglagen är `init_pop` mot världsstorlek, `mating_radius` och `sense_radius` — och den sista hör till Steg 6a, vilket är ett argument för att ta 6a före den ekologiska finjusteringen.
+Det ger ordningen: **hitta först den täthet där mötesfrekvensen räcker, och kalibrera födobasen mot den tätheten.** Med `nutrient_loss_frac` korrigerad bär världen omkring trettio djur mot dagens tolv, och de hundra som mötesfrekvensen kräver ligger ungefär fyra till fem gånger dagens tillförsel bort — mot åttio gånger räknat med det gamla läckaget. Se `docs/naringens-ekonomi.md`. Att skruva på `nutrient_input` och floras produktivitet vid 0,67 agenter per 1000 celler mäter något som ändå inte reproducerar sig. Kandidatreglagen är `init_pop` mot världsstorlek, `mating_radius` och `sense_radius` — och den sista hör till Steg 6a, vilket är ett argument för att ta 6a före den ekologiska finjusteringen.
 
 Med rätt massaskala står alltså Allee-effekten kvar ensam som blockerare: agenterna är mätta, reproduktionsklara och hittar inte varandra. Det gör `sense_radius` till nästa verkliga reglage, alltså Steg 6a.
 
