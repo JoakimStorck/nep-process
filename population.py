@@ -92,12 +92,16 @@ def _stats_1d(x: np.ndarray) -> dict[str, float]:
 class PopParams:
     init_pop: int = 12
     max_pop: int = 500
-    # Initial floramassa som multipel av faunans initiala massa. En ekologi
+    # Initial floramassa som multipel av faunans initiala massa.
+    #
+    # Talet hör ihop med B_K och måste följa med när den ändras: såddet är
+    # massastyrt, så större växter ger färre av dem. Med B_K på 11 och kvoten
+    # kvar på 10 sås ett trettiotal jätteväxter i hela världen. En ekologi
     # har mer primärproduktion än konsumenter; modellen hade förhållandet
     # omvänt med faktor 138. Talet sätter utgångsläget, inte jämvikten —
     # om dynamiken inte bär det faller floran tillbaka, och då är det den
     # dynamiken som ska rättas.
-    flora_init_mass_ratio: float = 10.0
+    flora_init_mass_ratio: float = 660.0
 
     flora_mortality: float = 2.0e-5   # höjt — naturlig matbrist sätter taket nu, inte detta
     # Hur mycket dödsrisken förhöjs för en individ vid noll massa jämfört med
@@ -1643,7 +1647,7 @@ class Population:
         return out
         
     def consume_food(self, x: float, y: float, amount: float,
-                     diet: float = 0.5) -> tuple[float, float, float, float]:
+                     diet: float = 0.5, reach: int = 1) -> tuple[float, float, float, float]:
         """
         Konsumera upp till `amount` kg, från det mest värdefulla först.
 
@@ -1663,6 +1667,10 @@ class Population:
         olika tal ur samma föda genom sina verkningsgrader, och valet följer.
         `diet` är alltså bara en avvägning mellan verkningsgrader, inte
         dessutom en smakriktning.
+
+        `reach` är hur många celler ut betningen når. Den följer sträckan
+        organismen färdats under ticken: ett betande djur äter medan det går,
+        och när ticket är över fjorton timmar hinner det korsa flera celler.
 
         Uppdelningen levande/detritus finns kvar därför att den är verklig i
         anskaffningen: levande vävnad tillhör en organism som växer tillbaka
@@ -1699,7 +1707,7 @@ class Population:
             nonlocal got_l, e_l
             if want <= 0.0:
                 return 0.0
-            g, e = self._consume_flora_from_store(x, y, want, max_radius=1)
+            g, e = self._consume_flora_from_store(x, y, want, max_radius=int(reach))
             got_l += g
             e_l += e
             return float(g)

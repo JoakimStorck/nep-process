@@ -328,7 +328,18 @@ class AgentParams:
     # Det gör gestation energimässigt rimlig utan att tömma föräldern på sekunder.
     gestation_E_per_kg: float = 10_000.0  # J/kg (var implicit E_body_J_per_kg = 7 000 000)
     growth_E_per_kg:    float = 10_000.0  # J/kg somatisk tillväxt (samma princip som gestation)
-    k_cat_dmg:          float = 1.0       # skada per relativ massförlust via katabolism
+    # Skada per relativ massförlust via katabolism. Var 1,0, vilket innebar
+    # att varje mobilisering av egen vävnad kostade skada i proportion till
+    # sin storlek — att bränna en procent av kroppen tog en procent av hela
+    # skadebudgeten, oåterkalleligt.
+    #
+    # Det är dubbelräkning. Utmärgling modelleras redan av dD_starve, som
+    # utgår från massan relativt förväntad massa för åldern och alltså mäter
+    # *utfallet*. k_cat_dmg straffade dessutom *mekanismen*. En organism som
+    # tär på reserven under en svacka och äter upp sig igen är inte skadad,
+    # och uppmätt kataboliserade agenterna varje tick trots positiv
+    # energibalans — vilket ensamt räckte för att nå D_max på fem månader.
+    k_cat_dmg:          float = 0.05
 
     # Svältskada baserad på individens massa relativt förväntad massa för åldern.
     # M_expected(age) = child_M  vid age=0
@@ -378,6 +389,11 @@ class Body:
     out_excreta_kg: float = 0.0          # massa till detritus
     out_excreta_struct_kg: float = 0.0   # dess massviktade strukturandel, i kg
     out_nutrient_kg: float = 0.0         # fri näring till cellen
+
+    # Sant om organismen kataboliserade egen vävnad under senaste steget.
+    _catabolized_last_step: bool = False
+    # Förväntad massa för åldern, cachad i step() så hunger() kan läsa den.
+    _M_expected: float = 0.0
 
     # structural state
     M: float = 0.0        # body mass
@@ -507,10 +523,40 @@ class Body:
         return self.AP.E_cap_per_M * (M if M > 1e-9 else 1e-9)
 
     def hunger(self) -> float:
+        """
+        Aptit, 0 till 1.
+
+        Reservmåttet ensamt duger inte, av två skäl.
+
+        Reserven läses i födosöket, alltså efter förra tickens intag och före
+        den här tickens dräneringar, medan den bara rymmer några få ticks
+        underhåll. En organism kunde därför avläsa en halvfull reserv, äta på
+        halv kapacitet, och ändå stå på noll när ticken var slut. Katabolism är
+        ett entydigt underskottsbesked: den som bryter ner sin egen vävnad för
+        att betala underhållet är hungrig oavsett ögonblicksbilden.
+
+        Och Ecap = reserve_cap · M, så när organismen magrar krymper både
+        reserven och taket och kvoten står nästan still. Uppmätt rapporterade
+        ett djur på väg mot M_min hunger 0,33 — lägre än ett välmatat djur
+        borde ligga över. Aptiten måste därför också mätas mot vad organismen
+        *borde* väga, inte bara mot vad den råkar rymma.
+        """
+        if bool(getattr(self, "_catabolized_last_step", False)):
+            return 1.0
+
         Et   = self.E_total()
         Ecap = self.E_cap()
         h    = (Ecap - Et) / (Ecap if Ecap > 1e-9 else 1e-9)
-        return 0.0 if h < 0.0 else 1.0 if h > 1.0 else h
+        h    = 0.0 if h < 0.0 else 1.0 if h > 1.0 else h
+
+        M_exp = float(getattr(self, "_M_expected", 0.0))
+        if M_exp > 1e-9:
+            span = max(1e-9, M_exp - float(self.AP.M_min))
+            hm = (M_exp - float(self.M)) / span
+            hm = 0.0 if hm < 0.0 else 1.0 if hm > 1.0 else hm
+            if hm > h:
+                h = hm
+        return h
 
     def weakness(self) -> float:
         m = float(self.M)
@@ -831,6 +877,7 @@ class Body:
         # eller överförd till foster. Behövs för att energiledgern ska sluta.
         E_material = 0.0
         E_overflow = 0.0
+        self._catabolized_last_step = False
 
         # ---------------------------------------------------------
         # (1) Intake -> reserv (massa), överskott exkreteras i (5)
@@ -986,28 +1033,17 @@ class Body:
         # från child_M (0.14 kg) till M_target (1+ kg) → permanenta miniagenterna.
         # Reservgaten (growth_R_min) är det primära skyddet mot okontrollerad tillväxt.
         # ---------------------------------------------------------
+        # Tillväxten flyttad till sektion (3B), efter att de obligatoriska
+        # dräneringarna och katabolismen är avklarade. Låg den kvar här blev
+        # den en obligatorisk post, och när reserven inte räckte täckte
+        # katabolismen även tillväxten — organismen bröt ner sin egen kropp
+        # för att bygga sin egen kropp. Materialet kom tillbaka som massa, så
+        # nettot syntes knappt, men varje varv kostade katabolismens utbyte
+        # och lade på skada. Uppmätt kataboliserade en agent varje tick trots
+        # fyrtio procents energiöverskott.
         out_growth = 0.0
-        dM_growth_want = 0.0
-        r_now = self.reserve_frac()
-        gR0 = float(getattr(AP, 'growth_R_min', 0.30))
-        gR1 = max(gR0 + 1e-9, float(getattr(AP, 'growth_R_full', 0.60)))
-        if r_now <= gR0:
-            growth_gate = 0.0
-        elif r_now >= gR1:
-            growth_gate = 1.0
-        else:
-            growth_gate = (r_now - gR0) / (gR1 - gR0)
-
-        if float(self.M) < _M_target and growth_gate > 0.0:
-            M_deficit      = _M_target - float(self.M)
-            dM_growth_want = min(_growth_rate * dt * growth_gate, M_deficit)
-            # Somatisk vävnad byggs av reservmassa, ett kilo per kilo, med
-            # syntesarbetet som tilläggskostnad. Tillväxten kan därför aldrig
-            # gå snabbare än födointaget bär — det är materialet som stryper,
-            # inte byggkostnaden.
-            _kg_per_kg_growth = 1.0 + (_growth_build_E_kg / _E_labile)
-            dM_growth_want = min(dM_growth_want, self.M_reserve() / _kg_per_kg_growth)
-            out_growth     = dM_growth_want * _growth_build_E_kg
+        dM_growth = 0.0
+        growth_gate = 0.0
 
         # ---------------------------------------------------------
         # (2D) Pay drains ONCE
@@ -1015,28 +1051,12 @@ class Body:
         # OBS: out_gest_build ingår INTE — redan betald i sektion (2C).
         E_out_drain = (
             out_basal + out_compute + out_sense + out_loco + out_thermo
-            + out_gest_overhead + out_growth
+            + out_gest_overhead
         )
-    
+
         paid = float(self.take_energy(E_out_drain))
         deficit = max(0.0, E_out_drain - paid)
         E_paid_drain = paid
-
-        # Applicera tillväxt proportionellt mot betald fraktion
-        dM_growth = 0.0
-        if dM_growth_want > 0.0 and E_out_drain > 1e-12:
-            frac_paid  = paid / E_out_drain
-            dM_growth  = dM_growth_want * frac_paid
-            if dM_growth > 0.0:
-                mat = self._take_reserve_mass(dM_growth)
-                dM_growth = mat
-                if mat > 0.0:
-                    self.M = float(self.M) + mat
-                    E_material += mat * _E_labile
-                    # Reserven är labil och näringsrik; vävnaden binder mindre
-                    # per kilo eftersom en del av den är strukturmaterial.
-                    # Mellanskillnaden utsöndras som kvävehaltigt avfall.
-                    self._release_nutrient(mat * (NUTRIENT_PER_KG_LABILE - _nut_tissue))
     
         # ---------------------------------------------------------
         # (3) Catabolism: cover remaining deficit (if any), above M_min
@@ -1054,6 +1074,7 @@ class Body:
             dM_cat   = min(want_cat, free)
 
             if dM_cat > 0.0:
+                self._catabolized_last_step = True
                 E_from_M = self._catabolize(dM_cat, _structure)
                 _k_cat_dmg = float(getattr(AP, 'k_cat_dmg', 1.0))
                 dD_cat = _k_cat_dmg * dM_cat / max(float(self.M), 1e-9)
@@ -1062,7 +1083,51 @@ class Body:
             paid2      = float(self.take_energy(deficit))
             deficit    = max(0.0, deficit - paid2)
             E_paid_drain += paid2
-    
+
+        # ---------------------------------------------------------
+        # (3B) Somatisk tillväxt — ur det som faktiskt återstår
+        # ---------------------------------------------------------
+        # Tillväxt är diskretionär. Den får bara ta av reserven efter att
+        # underhållet är betalt, och kan därför aldrig skapa det underskott
+        # som katabolismen sedan täcker. En svältande organism växer inte;
+        # den överlever, och växer när det finns något över.
+        #
+        # Reservgraden läses här, efter dräneringarna, så grinden bedömer det
+        # som finns kvar i stället för det som var på väg att spenderas.
+        if deficit <= 0.0 and float(self.M) < _M_target:
+            r_now = self.reserve_frac()
+            gR0 = float(getattr(AP, 'growth_R_min', 0.30))
+            gR1 = max(gR0 + 1e-9, float(getattr(AP, 'growth_R_full', 0.60)))
+            if r_now <= gR0:
+                growth_gate = 0.0
+            elif r_now >= gR1:
+                growth_gate = 1.0
+            else:
+                growth_gate = (r_now - gR0) / (gR1 - gR0)
+
+            if growth_gate > 0.0:
+                # Somatisk vävnad byggs av reservmassa, ett kilo per kilo, med
+                # syntesarbetet som tilläggskostnad. Materialet stryper, inte
+                # byggkostnaden.
+                _kg_per_kg_growth = 1.0 + (_growth_build_E_kg / _E_labile)
+                dM_want = min(_growth_rate * dt * growth_gate,
+                              _M_target - float(self.M))
+                dM_want = min(dM_want, self.M_reserve() / _kg_per_kg_growth)
+
+                if dM_want > 0.0:
+                    out_growth = float(self.take_energy(dM_want * _growth_build_E_kg))
+                    mat = self._take_reserve_mass(dM_want)
+                    if mat > 0.0:
+                        self.M = float(self.M) + mat
+                        dM_growth = mat
+                        E_material += mat * _E_labile
+                        # Reserven är labil och näringsrik; vävnaden binder
+                        # mindre per kilo eftersom en del är strukturmaterial.
+                        # Mellanskillnaden utsöndras som kvävehaltigt avfall.
+                        self._release_nutrient(
+                            mat * (NUTRIENT_PER_KG_LABILE - _nut_tissue)
+                        )
+
         # snapshot after drains/catabolism (for stress math)
         Et = float(self.E_total())
         Ecap = float(self.E_cap())
@@ -1104,6 +1169,7 @@ class Body:
         # M_expected är linjär från child_M (age=0) till M_target (age=A_mature),
         # sedan konstant. En agent under kurvan har inte kunnat växa i takt — svälter.
         M_expected = self.expected_mass(pheno, age_s)
+        self._M_expected = float(M_expected)
         m_rel = float(self.M) / max(M_expected, 1e-9)
         m_ok   = float(getattr(AP, 'starve_mass_ok_frac',   0.85))
         m_crit = float(getattr(AP, 'starve_mass_crit_frac', 0.55))
@@ -1240,6 +1306,7 @@ class Body:
             - E_out_repair
             - E_material
             - E_overflow
+            - out_growth
         )
     
         drift = E_after - expected_E_after
@@ -1309,7 +1376,7 @@ class Body:
             "E_after": E_after,
 
             "M_before": M_before,
-            "dM_growth": dM_growth_want,
+            "dM_growth": dM_growth,
             "dM_cat": dM_cat_total,
             "M_after": M_after,
     
@@ -1350,11 +1417,11 @@ class Body:
                 0.0,
                 dM_cat_total * (1.0 - _structure) * _E_labile - E_from_M_total,
             )),
-            "dM_growth": float(dM_growth_want),
+            "dM_growth": float(dM_growth),
             "M_expected": float(M_expected),
             "m_rel_expected": float(m_rel),
             "dD_starve": float(dD_starve),
-            "reserve_frac": float(r_now),
+            "reserve_frac": float(self.reserve_frac()),
             "growth_gate": float(growth_gate),
             "dM_gestation": float(dM_gest),
             "dM_catabolism": float(dM_cat_total),
@@ -2379,11 +2446,17 @@ class Agent:
 
         want_kg = float(self.AP.eat_rate) * dt * (0.25 + 0.75 * float(self.body.hunger()))
         diet = float(getattr(self.pheno, "diet", 0.5))
+        # Betningen når så långt som organismen färdats under ticken. Den äter
+        # medan den går; att bara sampla slutpunkten lämnade föda orörd längs
+        # vägen. Antagandet höll när förflyttningen var fyra hundradels cell
+        # per tick och blev fel när den är två.
+        reach = int(math.ceil(float(getattr(self, "last_speed", 0.0)) * float(dt)))
         got_l, got_d, e_l, e_d = world.consume_food(
             self.x,
             self.y,
             amount=want_kg,
             diet=diet,
+            reach=max(1, reach),
         )
 
         herb_eff, scav_eff = diet_efficiency(diet)
