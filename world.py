@@ -56,12 +56,12 @@ class WorldParams:
     # primärproduktionen — förhållandet omvänt mot hur en ekologi ser ut.
     # Ingen kalibrering av näringstillförsel eller täthet rättar en sådan
     # inversion; det är massaskalan som är fel.
-    B_K: float = 5e-2
+    B_K: float = 11.0
 
     # -------------------------
     # Temperature / seasons
     # -------------------------
-    year_len: float = 256.0
+    year_len: float = 12.0
 
     # Mean temperature profile (latitudinal):
     # T_mean(y) = T_eq - dT_pole * |lat(y)|^lat_p
@@ -105,12 +105,12 @@ class WorldParams:
     nutrient_loss_frac: float = 0.10
     # Näringstillförsel per cell och tick. Konstant tills terrängen finns; då
     # blir den vittring som funktion av höjd, och utsköljning under havsnivå.
-    nutrient_input: float = 2.0e-10
+    nutrient_input: float = 1.5e-8
     # Maximalt näringsupptag per tick vid uptake_capacity = 1.
     # Upptagstak per individ och sekund, uttryckt relativt massaskalan.
     # Ett absolut tal skulle bli hundrafalt hårdare bundet när B_K höjs och
     # göra floran upptagsbegränsad i stället för näringsbegränsad.
-    uptake_rate_max_per_BK: float = 0.10
+    uptake_rate_max_per_BK: float = 2.6e5
 
     @property
     def uptake_rate_max(self) -> float:

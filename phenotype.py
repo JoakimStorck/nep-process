@@ -154,8 +154,8 @@ class PhenoRanges:
     stress_per_drain_min: float = 0.01
     stress_per_drain_max: float = 0.05
 
-    repair_capacity_min: float = 0.002
-    repair_capacity_max: float = 0.030   # höjt — k_age1 ger lägre inflöde än k_age0=0.2
+    repair_capacity_min: float = 0.10
+    repair_capacity_max: float = 1.50   # höjt — k_age1 ger lägre inflöde än k_age0=0.2
 
     frailty_gain_min: float = 0.0
     frailty_gain_max: float = 3.0
@@ -174,8 +174,8 @@ class PhenoRanges:
 
     # Barnets massa vid födseln.
     # Kompromiss: litet nog att kosta föräldern rimligt, stort nog att överleva.
-    child_M_min: float = 0.08   # var 0.10 → 0.05 (för litet gav utrotning)
-    child_M_max: float = 0.20   # var 0.30 → 0.15 (gav utrotning) → 0.20
+    child_M_min: float = 0.16   # var 0.10 → 0.05 (för litet gav utrotning)
+    child_M_max: float = 0.40   # var 0.30 → 0.15 (gav utrotning) → 0.20
 
     cold_aversion_min: float = 0.0
     cold_aversion_max: float = 1.0
@@ -183,8 +183,8 @@ class PhenoRanges:
     # Reproduktions-mass-tröskel.
     # Genetiskt bestämd vuxenmassa
     # Brett intervall — evolution hittar r- och K-strateger
-    M_target_min: float = 0.10
-    M_target_max: float = 2.00
+    M_target_min: float = 0.20
+    M_target_max: float = 4.00
 
     # Kostpreferens — brett intervall för maximal nischuppdelning
     diet_min: float = 0.0
@@ -194,8 +194,8 @@ class PhenoRanges:
     predation_min: float = 0.0
     predation_max: float = 1.0
 
-    M_repro_min_min: float = 0.15   # var 0.20 — lite lägre för att hinna reproducera
-    M_repro_min_max: float = 0.45   # var 0.45
+    M_repro_min_min: float = 0.30   # var 0.20 — lite lägre för att hinna reproducera
+    M_repro_min_max: float = 0.90   # var 0.45
 
     # Nätverksarkitektur — tillåtna bredder för dolda lager.
     # Diskreta steg via snap-funktion i derive_pheno.
@@ -521,8 +521,8 @@ UPTAKE_INIT = (0.05, 0.95)
 
 @dataclass(frozen=True)
 class FloraRanges:
-    growth_rate_min: float = 0.005
-    growth_rate_max: float = 0.050
+    growth_rate_min: float = 1.3e4
+    growth_rate_max: float = 1.3e5
 
     # Vuxenmassa uttrycks som multipel av världens massaskala (WorldParams.B_K)
     # och skalas därför vid anropet, inte här.

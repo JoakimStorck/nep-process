@@ -97,8 +97,8 @@ class AgentParams:
     # ------------------------
     # Steering / policy kinematics
     # ------------------------
-    v_max: float = 2.2
-    turn_rate: float = 2.2
+    v_max: float = 100.0
+    turn_rate: float = 300.0
 
     # ------------------------
     # Sensing / perception
@@ -131,7 +131,7 @@ class AgentParams:
     # ------------------------
     # Feeding: world pool units -> internal energy units
     # ------------------------
-    eat_rate: float = 1e-4  # kg/s
+    eat_rate: float = 90.0  # kg/s
 
     # Energy densities (J/kg)
     # E_bio_J_per_kg behålls som bakåtkompatibelt alias för växtbiomassa.
@@ -150,7 +150,7 @@ class AgentParams:
     catabolism_eff: float = 0.90
 
     # Energy storage capacity (J/kg)
-    E_cap_per_M: float = 3.0e5
+    E_cap_per_M: float = 1.4e6
 
     # ------------------------
     # Energy ledger diagnostics
@@ -162,16 +162,16 @@ class AgentParams:
     # ------------------------
     # Initial physiological state
     # ------------------------
-    M0: float = 1.0   # initial body mass
-    E0: float = 1.5e5 # initial energy (J)
+    M0: float = 2.0   # initial body mass
+    E0: float = 1.4e6 # initial energy (J)
 
     # ------------------------
     # Basal metabolism (allometric)
     # ------------------------
-    k_basal: float = 30.0  # [W]
+    k_basal: float = 9.0e6  # [W]
 
     # Activity-related metabolic costs (non-locomotor)
-    compute_cost: float = 5.0  # [W/kg] — skalas upp proportionellt mot n_params vid agentens start
+    compute_cost: float = 1.5e6  # [W/kg] — skalas upp proportionellt mot n_params vid agentens start
 
     # Referens-nätverksstorlek för compute_cost-skalning.
     # Baseline = 23-24-24-5 = 1301 parametrar.
@@ -187,25 +187,25 @@ class AgentParams:
     Tb_min: float = 35.0
 
     heatcap_J_per_kgC: float = 3500.0   # thermal inertia ~ M
-    thermo_k_W_per_C: float = 1.0       # heat loss coefficient ~ M^(2/3)
+    thermo_k_W_per_C: float = 3.0e5       # heat loss coefficient ~ M^(2/3)
     thermo_mass_exp: float = 2.0 / 3.0
-    thermo_Pmax_per_kg: float = 20.0    # max heat generation (W/kg)
+    thermo_Pmax_per_kg: float = 5.0e7    # max heat generation (W/kg)
     cold_damage_gain: float = 0.03      # damage per second at severe cold
 
     # ------------------------
     # Locomotion mechanics
     # ------------------------
-    F0: float = 4.0
+    F0: float = 5.0e4
     force_mass_exp: float = 2.0 / 3.0
-    drag_lin: float = 0.8
-    drag_quad: float = 0.2
+    drag_lin: float = 220.0
+    drag_quad: float = 1.2
     locomotion_eff: float = 0.25
 
     # ------------------------
     # Starvation / weakness dynamics
     # ------------------------
-    M_crit: float = 0.25   # under detta försvagas rörelseförmågan
-    M_min: float = 0.07    # absolut minimum — lite under child_M_min för buffert
+    M_crit: float = 0.50   # under detta försvagas rörelseförmågan
+    M_min: float = 0.14    # absolut minimum — lite under child_M_min för buffert
     v_weak_min: float = 0.25
     rep_weak_min: float = 0.20
     starve_stress_gain: float = 1.0
@@ -248,8 +248,8 @@ class AgentParams:
     pain_tau: float = 0.5
 
     # repair (energy -> D reduction)
-    repair_gain: float = 1.0
-    repair_E_per_D: float = 0.005  # var 0.02 → sänkt: billigare reparation gör det evolutionärt lönsamt
+    repair_gain: float = 50.0
+    repair_E_per_D: float = 2.0e6  # var 0.02 → sänkt: billigare reparation gör det evolutionärt lönsamt
     repair_W_decay: float = 0.15   # var 0.3 — mjukare degradering av reparation med ålder
     repair_eta0: float = 1.0
     repair_eta_W: float = 0.1     # var 0.2
@@ -283,7 +283,7 @@ class AgentParams:
     attack_range: float = 1.5        # rutnätsenheter — max avstånd för attack
     attack_damage_per_s: float = 0.3 # D-inflöde per sekund på bytet vid attack
     attack_energy_gain: float = 0.5  # fraktion av bytets förlorade energi som predatorn får
-    attack_cost_per_s: float = 0.05  # fraktion av predatorns Ecap per sekund som attacken kostar
+    attack_cost_per_s: float = 5.0  # fraktion av predatorns Ecap per sekund som attacken kostar
 
     # Selektiv predator-prey-logik
     predator_trait_min: float = 0.20
@@ -312,14 +312,14 @@ class AgentParams:
     # Viktigt efter energikonsolideringen: tillväxt får bara ske hos omogna
     # individer och bara när reservgraden är tillräckligt hög. Annars driver
     # modellen in i en growth→catabolism-spiral direkt från warm start.
-    growth_rate_per_s: float = 0.008
+    growth_rate_per_s: float = 0.19
     growth_R_min: float = 0.30   # ingen aktiv tillväxt under denna reservgrad
     growth_R_full: float = 0.60  # full tillväxthastighet först här
 
     # Gestationstillväxthastighet (kg/s fetal vävnad per sekund).
     # 0.004 kg/s → 50s för ett 0.2 kg foster (var 0.002 = 100s).
     # Föräldern kataboliserar ~0.2 kg kroppsmassa under gestationen (M: 1.0→0.8). ✓
-    gestation_growth_kg_per_s: float = 0.004
+    gestation_growth_kg_per_s: float = 0.085
 
     # Energikostnad för att bygga fetal vävnad (J/kg).
     # OBS: Detta är INTE samma som E_body_J_per_kg (energidensitet vid katabolism).
@@ -545,9 +545,13 @@ class Body:
     
         # R_max styrs av pheno.repair_capacity, inte AP
         R_max = float(pheno.repair_capacity) * math.exp(-float(AP.repair_W_decay) * float(self.W))
+        # Reparationen saknade dt och var därmed per *tick* medan skadan är
+        # per tidsenhet. Modellens beteende berodde på tidsstegets storlek:
+        # halverad dt halverade skadan men lämnade reparationen orörd.
+        # Med dt är R_max och repair_gain takter, som allt annat.
         R_des = max(0.0, float(AP.repair_gain) * float(self.P))
-        R_des = min(R_des, R_max)
-    
+        R_des = min(R_des, R_max) * dt
+
         E_per_D = max(1e-9, float(AP.repair_E_per_D))
         E_need = R_des * E_per_D
         E_paid = float(self.take_energy(E_need))
@@ -901,9 +905,22 @@ class Body:
 
         out_thermo = dt * P_gen
 
-        Qloss   = K * (Tb - Tenv)
-        dTb     = (P_gen - Qloss) * dt / Cth
-        self.Tb = Tb + dTb
+        # Analytisk relaxation i stället för explicit Euler. Den termiska
+        # tidskonstanten Cth/K är kortare än ett tick — vid månadsskalan
+        # ungefär en halv tick — och explicit integrering divergerar då:
+        # kroppstemperaturen sköt iväg till hundratals minusgrader. Samma
+        # klass av fel som den newtonska rörelsedynamiken, där relaxationen
+        # mot terminalhastighet också är mycket kortare än tidssteget.
+        #
+        # Lösningen på dT/dt = (P_gen - K·(T - Tenv))/Cth är exakt för
+        # konstant P_gen över steget och ovillkorligt stabil.
+        T_inf = Tenv + (P_gen / K if K > 1e-30 else 0.0)
+        decay = math.exp(-K * dt / Cth) if Cth > 1e-30 else 0.0
+        self.Tb = T_inf + (Tb - T_inf) * decay
+
+        # Ledgern ska bära den värme som faktiskt avgavs, inte den som
+        # begärdes; vid jämvikt är de lika.
+        Qloss = K * (0.5 * (Tb + float(self.Tb)) - Tenv)
     
         # ---------------------------------------------------------
         # (2C) Gestation (Väg 2): overhead + build energy
@@ -1069,8 +1086,13 @@ class Body:
         frailty_gain = clamp(float(pheno.frailty_gain), 0.0, max(0.0, _frailty_cap))
         frail        = 1.0 + frailty_gain * d_norm
 
+        # Normera dräneringen mot basalmetabolismen, inte mot reservens
+        # storlek. Ecap är en stock och drain_rate en takt; kvoten mellan dem
+        # har enheten 1/tid och ändrar värde när tidsenheten byts. Mot basalen
+        # blir kvoten dimensionslös och skalfri.
         drain_rate   = E_out_drain / max(dt, 1e-12)
-        drain_rate_n = drain_rate / max(Ecap, 1e-9)
+        basal_rate   = max(1e-30, _k_basal * (M_eff ** 0.75))
+        drain_rate_n = drain_rate / basal_rate
 
         dD_eff = dt * (_k_damage * susc * (1.0 + 1.2 * e_lack) * frail * effort * starve_stress)
         dD_met = dt * (float(pheno.stress_per_drain) * drain_rate_n * starve_stress)
