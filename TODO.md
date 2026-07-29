@@ -325,7 +325,7 @@ Dynamiken är statistiskt oförändrad. Vid 3 000 tick: flora 2 207 mot 2 214 f�
 
 Näringsdriften är oförändrat god efter omskrivningen: 7,7e-10 relativt vid 10 000 flora, 5,3e-09 vid 2 100. Den exakta avräkningen från 0040 — nedåtavrundning av lagrad massa och återföring av mellanskillnaden — är överförd till arrayform.
 
-**Mätverktyg:** `bench.py` rapporterar ms per tick, µs per floraindivid, näringsdrift och invariantbrott, med `--ratio` för att skala floran och `--profile` för hotspots.
+**Mätverktyg:** `run_headless.py --stats --flora-ratio N` rapporterar ms per tick och µs per floraindivid tillsammans med näringsdrift och invariantstatus; `--profile` ger hotspots.
 
 ## Steg 6a — Sensing som evolverbar kapacitet
 
@@ -477,7 +477,7 @@ Med rätt massaskala står alltså Allee-effekten kvar ensam som blockerare: age
 
 Anmärkning: mötesproblemet är inte skapat av näringsstängningen. Före den fanns också bara enstaka födslar; skillnaden är att faunan då bar sig själv på manufakturerad massa och därför inte behövde reproducera sig för att synas som stabil.
 
-**Verktyg:** `measure_leak.py` (faunans massaflöden, energiledgern, näringsbalansens drift), `reproduktion.py` (var reproduktionen fastnar, per utfall), `omsattning.py` (unika individer, dödsfall, ålder vid död — skiljer flödesjämvikt från stillastående kohort).
+**Verktyg:** `run_headless.py --stats` ger allt detta i en körning — bestånd, massakvot flora mot fauna, omsättning i unika individer, var reproduktionen fastnar uppdelat på ser-ingen mot utanför-radie, näringsbalansens termer och takt. `--seeds 1,2,3` för spridning mellan körningar, `--size` och `--init_pop` för täthetssvep, `--flora-ratio` för att skala primärproduktionen. `measure_leak.py` finns kvar för faunans massaflöden och energiledgern, som ligger utanför det `--stats` visar.
 
 **Kroppen har tre fraktioner, inte två.** `structure` beskriver *sammansättningen* och avgör näringsinnehåll och kadavrets egenskaper. `E_cap` beskriver hur mycket som är *fritt mobiliserbart*, och tillåter en reserv på 3,2 % av kroppsmassan. Kvoten mot den labila fraktionen på 75 % är 23 gånger, och båda är riktiga: strukturell vävnad mobiliseras aldrig, funktionell vävnad bara vid svält, reserven fritt. Den nuvarande tvåstegskatabolismen — först energilagren, sedan kroppsmassa ner till `M_min` — motsvarar reserv först och funktionell vävnad sedan, och är alltså biologiskt riktig snarare än godtycklig.
 
