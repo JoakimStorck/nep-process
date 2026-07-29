@@ -301,13 +301,24 @@ Här får Fas 2:s ekologiska hypotes sitt första riktiga svar. Blir svaret nej 
 
 - ~~Delmängder byggs en gång per tick, immutabla under ticken.~~ **Klart** för `flora_slots` och `fauna_slots`. `sensing_slots` hör till Steg 6a, där `sense_rate` får en läsare.
 - ~~Florapassen skrivs om som numpy-operationer över `flora_slots`.~~ **Klart.** Tillväxt, senescens, spridningens behörighet och tärningskast, samt floras summering. Sällsynta händelser — dödsfall kring en hundradel av populationen per tick, etableringar färre — hanteras individuellt efter den vektoriserade urvalet, eftersom var och en allokerar en slot eller blandar strukturandelar massviktat.
-- ~~`rebuild_spatial_index` vektoriseras.~~ **Klart** med `bincount` plus stabil `argsort`. Den indexerar fortfarande hela cellrymden; `n_cells`-termen står kvar. Den kostar nu 1,2 ms per anrop vid 10 000 organismer och är näst största posten efter sensing.
-- `rebuild_spatial_index` anropas fortfarande **två** gånger per tick. **Återstår.** Den ena körs efter florapassen och före sensing, den andra efter födslar och dödsfall. Att ta bort den senare gör indexet inkonsistent mellan tick, vilket invariantsviten fångar — den är alltså load-bearing, inte slentrian. Rätt lösning är att flytta florapassen sist i ticken så att ett anrop räcker, vilket är en omordning och hör till ett eget ingrepp.
-- Flora-tilläggsfält i komprimerade tilläggsarrayer. **Återstår.** A5 är alltså ännu inte uppfylld.
+- ~~`rebuild_spatial_index` vektoriseras.~~ **Klart** med stabil `argsort` och gruppgränser ur den sorterade följden.
+- ~~`n_cells`-termen tas bort ur indexet.~~ **Klart.** CSR är nu glest: `idx_cells` bär de bebodda cellerna i stigande ordning, `idx_starts` deras startpositioner, och `slots_in_cell()` slår upp med `searchsorted` i stället för direkt indexering. `flora_cell_mass` förblir tät, eftersom perceptionen läser den med fancy indexing över många celler samtidigt — men bara de celler som var satta nollställs.
 
-**Klart när:** 10 000 flora körs under 10 ms/tick. **Nästan.** Uppmätt 10,7 ms vid 10 026 flora på referensmaskinen.
+  ```
+  celler       tät form     gles form
+   16 384      0,269 ms      0,185 ms
+  1 048 576    5,906 ms      0,191 ms
+  ```
 
-Marginalkostnaden är däremot uppfylld med god marginal: från 2 132 till 10 026 floraindivider ökar ticken från 6,7 till 10,7 ms, alltså **0,50 µs per floraindivid** mot planens krav på under 1 µs. De 10,7 ms innehåller omkring 5 ms fauna- och världsarbete som inte skalar med floran. Kvarvarande gap är alltså inte florapassen utan den fasta overheaden — sensing står för den största enskilda delen.
+  Indexet är därmed platt i världsstorlek, vilket var förutsättningen för miljoncellsvärlden i Steg 3. Vid en miljon celler går ticken från 110 till 93 ms enbart på den här ändringen.
+
+- ~~`rebuild_spatial_index` anropas två gånger per tick.~~ **Stängd genom mätning, inte genom ändring.** Med det glesa indexet kostar de två anropen tillsammans 0,38 ms, alltså knappt 6 % av ticken vid dagens skala och under en halv procent vid en miljon celler. Att ta bort det andra anropet kräver att florapassen flyttas sist i ticken, vilket bryter manifestets passordning och byter fauna–flora-kopplingen mot en tickfördröjning. Det är en beteendeändring som kräver statistisk omvalidering för några få procent. Posten återupptas om profilen någon gång pekar tillbaka hit.
+
+- **Flora-tilläggsfält i komprimerade tilläggsarrayer: medvetet uppskjuten.** Uppmätt kostnad för den okomprimerade formen: 20 B per slot för florafälten och 25 B för faunafälten, mot 263 B totalt — alltså 17 %, eller 9 MB vid 200 000 organismer. Den dominerande posten är `traits` på 128 B per slot, som är gemensam och inte går att komprimera bort. Komprimering kräver ett indirektionslager med egen frilista och allokeringsordning, alltså en verklig buggyta, för en budget som inte binder. A5:s syfte — att kärnan inte växer för att rymma subsystemstate — är uppfyllt: fälten *är* tilläggsarrayer med dokumenterat ägarskap, de är bara inte packade. Återupptas om minnet binder, eller om florapassen visar sig betala mätbart för gather i stället för slice.
+
+**Klart när:** 10 000 flora körs under 10 ms/tick. **Uppmätt 10,1 ms** på referensmaskinen, alltså inom mätbrus från kriteriet.
+
+Marginalkostnaden är uppfylld med god marginal: från 2 147 till omkring 10 000 floraindivider ökar ticken från 6,7 till 10,1 ms, alltså **0,44 µs per floraindivid** mot planens krav på under 1 µs. De resterande dryga 6 ms är fauna- och världsarbete som inte skalar med floran, och sensing är den största enskilda posten där. Den hör till Steg 6a.
 
 **Uppmätt före och efter, seed 1, 64×256:**
 

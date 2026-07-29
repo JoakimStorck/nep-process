@@ -205,21 +205,56 @@ def check_finite_and_nonnegative(pop) -> list[Violation]:
 
 
 def check_spatial_index(pop) -> list[Violation]:
-    """CSR-indexet ska innehålla exakt de levande slotarna, grupperade rätt."""
+    """Glest CSR-index ska innehålla exakt de levande, placerade slotarna."""
     store = pop.store
     out: list[Violation] = []
 
-    offsets = np.asarray(store.cell_offsets)
-    counts = np.asarray(store.cell_counts)
-    n_cells = int(counts.size)
+    cells = np.asarray(store.idx_cells)
+    starts = np.asarray(store.idx_starts)
 
-    if int(offsets[0]) != 0:
-        out.append(Violation("spatial_index", f"cell_offsets[0]={int(offsets[0])}, förväntat 0"))
-
-    expected_offsets = np.concatenate(([0], np.cumsum(counts)))
-    if not np.array_equal(offsets, expected_offsets):
-        out.append(Violation("spatial_index", "cell_offsets stämmer inte med cumsum(cell_counts)"))
+    if starts.size != cells.size + 1:
+        out.append(Violation(
+            "spatial_index",
+            f"idx_starts har {starts.size} element, förväntat {cells.size + 1}",
+        ))
         return out
+
+    if int(starts[0]) != 0:
+        out.append(Violation("spatial_index", f"idx_starts[0]={int(starts[0])}, förväntat 0"))
+
+    if cells.size and not np.all(np.diff(cells) > 0):
+        out.append(Violation("spatial_index", "idx_cells är inte strikt stigande"))
+        return out
+
+    if starts.size > 1 and not np.all(np.diff(starts) > 0):
+        out.append(Violation("spatial_index", "idx_starts är inte strikt stigande"))
+        return out
+
+    total = int(starts[-1])
+    live = _live_slots(store)
+    live_placed = int(np.count_nonzero(store.cell_idx[live] >= 0)) if live.size else 0
+    if total != live_placed:
+        out.append(Violation(
+            "spatial_index",
+            f"indexet rymmer {total} slotar, {live_placed} levande med giltig cell",
+        ))
+
+    packed = np.asarray(store.cell_slots)[:total]
+    if packed.size:
+        if not np.all(store.alive[packed]):
+            dead = packed[~store.alive[packed]]
+            out.append(Violation("spatial_index", f"döda slotar i indexet: {dead[:MAX_EXAMPLES].tolist()}"))
+
+        counts = np.diff(starts)
+        cell_of_packed = np.repeat(cells, counts)
+        mismatch = packed[store.cell_idx[packed] != cell_of_packed]
+        if mismatch.size:
+            out.append(Violation(
+                "spatial_index",
+                f"slotar i fel cellbucket: {mismatch[:MAX_EXAMPLES].tolist()}",
+            ))
+
+    return out
 
     total = int(offsets[n_cells])
     live = _live_slots(store)

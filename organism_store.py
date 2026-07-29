@@ -30,17 +30,29 @@ _organism_id_counter = _itertools.count(1)
 # med slotkapaciteten.
 #
 #   slotindexerade   längd = capacity   (id, alive, mass, cell_slots, ...)
-#   cellindexerade   längd = n_cells    (cell_counts, flora_cell_mass)
-#                    längd = n_cells+1  (cell_offsets)
+#   cellindexerade   längd = n_cells    (flora_cell_mass)
+#   glest cellvisa   längd = bebodda     (idx_cells, idx_starts)
 #   id-indexerade    egen tillväxt      (id_to_slot_arr)
 #
 # Nya fält som inte är slotindexerade MÅSTE läggas till här.
 _NON_SLOT_ARRAYS = frozenset({
     "id_to_slot_arr",
-    "cell_counts",
-    "cell_offsets",
+    "idx_cells",
+    "idx_starts",
     "flora_cell_mass",
+    "_flora_cells_prev",
 })
+
+
+def _group_starts(sorted_keys: np.ndarray) -> np.ndarray:
+    """Startindex för varje grupp i en redan sorterad nyckelföljd."""
+    if sorted_keys.size == 0:
+        return np.zeros(0, dtype=np.int64)
+    bounds = np.flatnonzero(sorted_keys[1:] != sorted_keys[:-1]) + 1
+    out = np.empty(bounds.size + 1, dtype=np.int64)
+    out[0] = 0
+    out[1:] = bounds
+    return out
 
 
 def next_organism_id() -> int:
@@ -95,8 +107,13 @@ class OrganismStore:
     pos_y: np.ndarray = field(init=False)
     cell_idx: np.ndarray = field(init=False)
 
-    cell_counts: np.ndarray = field(init=False)
-    cell_offsets: np.ndarray = field(init=False)
+    # Glest CSR: `idx_cells` är de bebodda cellerna i stigande ordning och
+    # `idx_starts` deras startpositioner i `cell_slots`, med en avslutande
+    # totalsumma. Uppslag sker med `searchsorted` i stället för direkt
+    # indexering, vilket tar bort n_cells-termen ur bygget.
+    idx_cells: np.ndarray = field(init=False)
+    idx_starts: np.ndarray = field(init=False)
+    _flora_cells_prev: np.ndarray = field(init=False)
     cell_slots: np.ndarray = field(init=False)
 
     # Härlett perceptionsfält: summa flora-massa per cell.
@@ -207,8 +224,9 @@ class OrganismStore:
 
         self.kind = np.zeros(cap, dtype=np.int8)
 
-        self.cell_counts = np.zeros(n_cells, dtype=np.int32)
-        self.cell_offsets = np.zeros(n_cells + 1, dtype=np.int32)
+        self.idx_cells = np.zeros(0, dtype=np.int64)
+        self.idx_starts = np.zeros(1, dtype=np.int64)
+        self._flora_cells_prev = np.zeros(0, dtype=np.int64)
         self.cell_slots = np.zeros(cap, dtype=np.int32)
         self.flora_cell_mass = np.zeros(n_cells, dtype=np.float32)
 
@@ -289,16 +307,21 @@ class OrganismStore:
         ett nytt fält som läggs till utan att klassificeras.
         """
         cap = int(self.capacity)
-        n_cells = int(self.cell_counts.shape[0])
-    
-        for name in ("cell_counts", "flora_cell_mass"):
-            got = int(getattr(self, name).shape[0])
-            if got != n_cells:
-                raise AssertionError(f"{name} har längd {got}, förväntat n_cells={n_cells}")
-    
-        if int(self.cell_offsets.shape[0]) != n_cells + 1:
+        n_cells = int(self.n_cells)
+
+        if int(self.flora_cell_mass.shape[0]) != n_cells:
             raise AssertionError(
-                f"cell_offsets har längd {int(self.cell_offsets.shape[0])}, förväntat {n_cells + 1}"
+                f"flora_cell_mass har längd {int(self.flora_cell_mass.shape[0])}, "
+                f"förväntat n_cells={n_cells}"
+            )
+
+        # Det glesa indexet har inte n_cells som längd — dess arrayer är lika
+        # långa som antalet bebodda celler. Det som ska hålla är relationen
+        # mellan dem.
+        if int(self.idx_starts.shape[0]) != int(self.idx_cells.shape[0]) + 1:
+            raise AssertionError(
+                f"idx_starts har längd {int(self.idx_starts.shape[0])}, "
+                f"förväntat idx_cells + 1 = {int(self.idx_cells.shape[0]) + 1}"
             )
     
         for f in fields(self):
@@ -415,33 +438,33 @@ class OrganismStore:
         """
         Bygg gemensamt spatialindex för alla levande organismer.
 
-        CSR-liknande layout:
-          - cell_counts[c]   = antal levande slotar i cell c
-          - cell_offsets[c]  = startindex i cell_slots för cell c
-          - cell_slots[...]  = platt lista av slotindex, grupperade per cell
+        Glest CSR-liknande layout:
+          - idx_cells[k]   = bebodda cell-ID, stigande
+          - idx_starts[k]  = startindex i cell_slots, med totalsumma sist
+          - cell_slots[..] = platt lista av slotindex, grupperade per cell
 
-        Samtidigt byggs:
-          - snabb id->slot-lookup för levande organismer
-          - platt härlett flora-perceptionsfält: flora_cell_mass[cell]
-            (ej source of truth, bara sensing-cache)
+        Samtidigt byggs snabb id->slot-lookup och det härledda
+        perceptionsfältet `flora_cell_mass`, som inte är source of truth.
 
-        Vektoriserad: bincount för räkning och för florafältet, stabil argsort
-        för packningen. Den stabila sorteringen bevarar slotordningen inom
-        varje cell, vilket är samma ordning som den tidigare loopen gav —
-        allt som itererar över en cells slotar ser alltså oförändrad ordning.
+        Ingenting här skalar med n_cells. Den täta formen räknade och
+        kumulerade över hela cellrymden, vilket vid en miljon celler och
+        femtontusen organismer betydde att indexet nästan uteslutande
+        arbetade med tomrum. `flora_cell_mass` är fortfarande tät, eftersom
+        perceptionen läser den med fancy indexing över många celler samtidigt
+        — men bara de celler som faktiskt var satta nollställs.
 
-        Den tidigare formen var två fulla Python-loopar över `range(n)` och
-        kostade därmed efter kapacitet i stället för efter antal levande. Det
-        var den enda posten i ticken som skalade med världens storlek.
+        Den stabila sorteringen bevarar slotordningen inom varje cell.
         """
         n = int(self.n)
-        counts = self.cell_counts
-        offsets = self.cell_offsets
-        n_cells = int(counts.shape[0])
+        empty_i64 = np.zeros(0, dtype=np.int64)
 
-        counts.fill(0)
-        self.flora_cell_mass.fill(np.float32(0.0))
-        offsets.fill(0)
+        # Nollställ bara det som var satt förra bygget.
+        if self._flora_cells_prev.size:
+            self.flora_cell_mass[self._flora_cells_prev] = np.float32(0.0)
+            self._flora_cells_prev = empty_i64
+
+        self.idx_cells = empty_i64
+        self.idx_starts = np.zeros(1, dtype=np.int64)
 
         if n <= 0:
             self.id_to_slot_arr.fill(-1)
@@ -465,9 +488,7 @@ class OrganismStore:
             )
 
         # --- celltillhörighet ---
-        # int32 för sorteringen: numpy använder radixsort för stabila
-        # heltalssorteringar, och den är billigare per element på 32 bitar.
-        cells = self.cell_idx[live].astype(np.int32, copy=False)
+        cells = self.cell_idx[live].astype(np.int64, copy=False)
         placed = cells >= 0
         if not np.any(placed):
             return
@@ -475,28 +496,47 @@ class OrganismStore:
         live_c = live[placed]
         cells_c = cells[placed]
 
-        counts[:] = np.bincount(cells_c.astype(np.intp, copy=False), minlength=n_cells)[:n_cells]
-
-        is_flora = self.kind[live_c] == 1
-        if np.any(is_flora):
-            fm = np.bincount(
-                cells_c[is_flora].astype(np.intp, copy=False),
-                weights=self.mass[live_c][is_flora].astype(np.float64, copy=False),
-                minlength=n_cells,
-            )[:n_cells]
-            self.flora_cell_mass[:] = fm.astype(np.float32, copy=False)
-
-        np.cumsum(counts, out=offsets[1:])
-
         order = np.argsort(cells_c, kind="stable")
-        self.cell_slots[: live_c.size] = live_c[order].astype(
-            self.cell_slots.dtype, copy=False
-        )
+        sorted_cells = cells_c[order]
+        sorted_slots = live_c[order]
+        m = int(sorted_slots.size)
+        self.cell_slots[:m] = sorted_slots.astype(self.cell_slots.dtype, copy=False)
+
+        # Gruppgränserna läses ur den redan sorterade följden. `np.unique`
+        # hade sorterat om, alltså gjort samma arbete en gång till.
+        starts = _group_starts(sorted_cells)
+        self.idx_cells = sorted_cells[starts]
+        self.idx_starts = np.append(starts, np.int64(m))
+
+        # --- härlett florafält ---
+        is_flora = self.kind[sorted_slots] == 1
+        if np.any(is_flora):
+            fcells = sorted_cells[is_flora]
+            fmass = self.mass[sorted_slots][is_flora].astype(np.float64, copy=False)
+            fstarts = _group_starts(fcells)
+            fu = fcells[fstarts]
+            self.flora_cell_mass[fu] = np.add.reduceat(fmass, fstarts).astype(
+                np.float32, copy=False
+            )
+            self._flora_cells_prev = fu
 
     def slots_in_cell(self, cell: int) -> np.ndarray:
-        start = int(self.cell_offsets[cell])
-        end = int(self.cell_offsets[cell + 1])
-        return self.cell_slots[start:end]
+        """
+        Slotarna i en cell. Tom array om cellen är obebodd.
+
+        Uppslaget går via `searchsorted` i listan över bebodda celler i
+        stället för direkt indexering i en array av världens längd. Det gör
+        bygget oberoende av n_cells, vilket är förutsättningen för miljoncells-
+        världen i Steg 3 — där bär annars indexet en term som skalar med
+        världen och inte med livet i den.
+        """
+        cells = self.idx_cells
+        if cells.size == 0:
+            return self.cell_slots[0:0]
+        i = int(np.searchsorted(cells, int(cell)))
+        if i >= cells.size or int(cells[i]) != int(cell):
+            return self.cell_slots[0:0]
+        return self.cell_slots[int(self.idx_starts[i]):int(self.idx_starts[i + 1])]
 
     def slot_for_id(self, id_: int) -> int:
         oid = int(id_)
