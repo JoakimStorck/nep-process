@@ -10,7 +10,15 @@ import numpy as np
 
 from world import World, clamp
 from mlp import MLPGenome
-from phenotype import Phenotype, derive_pheno, phenotype_summary, digestion_efficiency, structure_fraction
+from phenotype import (
+    Phenotype,
+    derive_pheno,
+    phenotype_summary,
+    diet_efficiency,
+    assimilated_fraction,
+    nutrient_content,
+    NUTRIENT_PER_KG_LABILE,
+)
 
 from grid import Grid
 from organism_store import next_organism_id
@@ -366,6 +374,11 @@ class Body:
     M_fast: float = 0.0
     M_slow: float = 0.0
 
+    # Utflöden till cellen, ackumulerade sedan senaste tömning av body-passet.
+    out_excreta_kg: float = 0.0          # massa till detritus
+    out_excreta_struct_kg: float = 0.0   # dess massviktade strukturandel, i kg
+    out_nutrient_kg: float = 0.0         # fri näring till cellen
+
     # structural state
     M: float = 0.0        # body mass
     Fg: float = 0.15      # fatigue level
@@ -397,6 +410,93 @@ class Body:
     def M_reserve(self) -> float:
         """Total mobiliserbar reservmassa i kilo."""
         return float(self.M_fast) + float(self.M_slow)
+
+    def M_body(self) -> float:
+        """
+        Hela kroppens massa: strukturell och funktionell vävnad plus reserv.
+
+        `M` bär den committade vävnaden och reservpoolerna det mobiliserbara.
+        Den bevarade storheten är summan — det är den som kadavret bär och som
+        näringsbokföringen räknar på.
+        """
+        return float(self.M) + self.M_reserve()
+
+    # --- utflöden till världen, ackumulerade per tick ---------------------
+    # Body har ingen världsreferens och ska inte få en. Den bokför i stället
+    # vad som lämnat kroppen, och body-passet tömmer posterna till rätt cell.
+
+    def _void(self, kg: float, structure: float) -> None:
+        """Materia som lämnar kroppen som exkrement, alltså till detritus."""
+        m = float(kg)
+        if m <= 0.0:
+            return
+        self.out_excreta_kg += m
+        self.out_excreta_struct_kg += m * min(1.0, max(0.0, float(structure)))
+
+    def _burn(self, kg: float) -> None:
+        """
+        Labil massa som oxideras för energi.
+
+        Kolet går till atmosfären och lämnar modellen — massa är aldrig en
+        sluten storhet här. Näringen i den brända massan är däremot kvar och
+        utsöndras till cellen som kvävehaltigt avfall, direkt växttillgängligt.
+        """
+        m = float(kg)
+        if m <= 0.0:
+            return
+        self.out_nutrient_kg += m * NUTRIENT_PER_KG_LABILE
+
+    def _release_nutrient(self, kg: float) -> None:
+        """Fri näring rakt ut, utan att någon massa lämnar kroppen."""
+        n = float(kg)
+        if n > 0.0:
+            self.out_nutrient_kg += n
+
+    def _take_reserve_mass(self, kg: float) -> float:
+        """
+        Ta reservmassa proportionellt ur båda poolerna. Returnerar uttaget.
+
+        Ingen näringsbokföring här — anroparen avgör om massan brändes,
+        byggdes in i vävnad eller överfördes till en avkomma.
+        """
+        want = float(kg)
+        if want <= 0.0:
+            return 0.0
+        Mr = self.M_reserve()
+        if Mr <= 1e-15:
+            return 0.0
+        take = want if want < Mr else Mr
+        d_fast = take * (float(self.M_fast) / Mr)
+        self.M_fast = max(0.0, float(self.M_fast) - d_fast)
+        self.M_slow = max(0.0, float(self.M_slow) - (take - d_fast))
+        return float(take)
+
+    def _catabolize(self, dM_cat: float, structure: float) -> float:
+        """
+        Mobilisera `dM_cat` kg vävnad till reserven. Returnerar frigjord energi.
+
+        Bara den labila fraktionen kan mobiliseras; strukturmaterialet passerar
+        ut som exkrement tillsammans med katabolismens förlust. Vid faunans
+        typiska strukturandel 0,25 ger det samma energiutbyte som den tidigare
+        konstanten E_body_J_per_kg — vilket inte är en slump, eftersom
+        7,0e6 ≈ 9,302e6 · (1 − 0,25). Skillnaden är att utbytet nu följer
+        individens egen sammansättning i stället för en global konstant.
+        """
+        dM = float(dM_cat)
+        if dM <= 0.0:
+            return 0.0
+        s = min(1.0, max(0.0, float(structure)))
+        cat_eff = max(0.0, float(getattr(self.AP, "catabolism_eff", 1.0)))
+
+        lab = dM * (1.0 - s) * cat_eff
+        self.M = float(self.M) - dM
+        self.M_fast = float(self.M_fast) + lab
+
+        rest = max(0.0, dM - lab)
+        if rest > 1e-18:
+            self._void(rest, min(1.0, dM * s / rest))
+
+        return float(lab * float(self.AP.E_labile_J_per_kg))
 
     def E_total(self) -> float:
         """Tillgänglig energi, härledd ur reservmassan."""
@@ -497,27 +597,29 @@ class Body:
         self.M_fast = float(self.M_fast) * f
         self.M_slow = float(self.M_slow) * f
 
-    def take_energy(self, amount: float) -> float:
+    def take_energy(self, amount: float, *, burn: bool = True) -> float:
+        """
+        Ta ut energi ur reserven. Returnerar faktiskt uttag i joule.
+
+        Uttaget fördelas proportionellt mot poolernas massa. Skillnaden mellan
+        snabb och långsam ligger tills vidare bara i insättningskvoten; att
+        göra den till en åtkomsttakt är en egen ändring.
+
+        `burn=True` betyder att massan oxideras och att dess näring utsöndras.
+        `burn=False` används när massan i stället överförs någon annanstans —
+        till en avkomma — och alltså inte lämnar systemet.
+        """
         amt = float(max(0.0, amount))
         if amt <= 0.0:
             return 0.0
 
         e_lab = float(self.AP.E_labile_J_per_kg)
-        Mr = self.M_reserve()
-        if Mr <= 1e-15:
+        take_kg = self._take_reserve_mass(amt / e_lab)
+        if take_kg <= 0.0:
             return 0.0
 
-        # Uttaget fördelas proportionellt mot poolernas massa. Skillnaden mellan
-        # snabb och långsam ligger tills vidare bara i insättningskvoten; att
-        # göra den till en åtkomsttakt är en egen ändring.
-        want_kg = amt / e_lab
-        take_kg = want_kg if want_kg < Mr else Mr
-
-        d_fast = take_kg * (float(self.M_fast) / Mr)
-        d_slow = take_kg - d_fast
-
-        self.M_fast = max(0.0, float(self.M_fast) - d_fast)
-        self.M_slow = max(0.0, float(self.M_slow) - d_slow)
+        if burn:
+            self._burn(take_kg)
 
         return float(take_kg * e_lab)
         
@@ -593,6 +695,8 @@ class Body:
         food_carcass_kg: float,
         food_bio_J: float,
         food_carcass_J: float,
+        assim_bio_kg: float = 0.0,
+        assim_carcass_kg: float = 0.0,
         pheno: Phenotype,
         extra_drain: float = 0.0,
         T_env: float = 0.0,
@@ -677,7 +781,6 @@ class Body:
         _E_body       = float(AP.E_body_J_per_kg)
         _ana_eff      = max(1e-9, float(getattr(AP, 'anabolism_eff', 1.0)))
         _cat_eff      = max(0.0, float(getattr(AP, 'catabolism_eff', 1.0)))
-        _E_cap_per_M  = float(AP.E_cap_per_M)
         _k_basal      = float(AP.k_basal)
         _compute_cost = float(AP.compute_cost)
         _v_max        = float(AP.v_max)
@@ -712,60 +815,56 @@ class Body:
         _growth_rate  = float(AP.growth_rate_per_s)
         # M_target: genetiskt bestämd vuxenmassa från phenotype
         _M_target     = float(getattr(pheno, "M_target", float(AP.M0)))
+        # Egen strukturandel: styr katabolismens utbyte, exkrementets
+        # sammansättning och hur mycket näring vävnaden binder per kilo.
+        _structure    = min(1.0, max(0.0, float(getattr(pheno, "structure", 0.25))))
+        _nut_tissue   = nutrient_content(_structure)
         _build_E_kg        = _E_body / _ana_eff
         _gest_build_E_kg   = float(getattr(AP, 'gestation_E_per_kg', 10_000.0))
         _growth_build_E_kg = float(getattr(AP, 'growth_E_per_kg',    10_000.0))
     
+        # Reservmassa som lämnat poolerna utan att brännas: inbyggd i vävnad
+        # eller överförd till foster. Behövs för att energiledgern ska sluta.
+        E_material = 0.0
+        E_overflow = 0.0
+
         # ---------------------------------------------------------
-        # (1) Intake -> buffers (up to cap), surplus -> mass
+        # (1) Intake -> reserv (massa), överskott exkreteras i (5)
         # ---------------------------------------------------------
         m_bio = max(0.0, float(food_bio_kg))
         m_car = max(0.0, float(food_carcass_kg))
 
-        # Kostpreferens (diet-trait): 0=herbivore, 1=scavenger.
-        # herb_eff och scav_eff är negativt korrelerade — generalisten (0.5)
-        # är sämre på båda än en specialist.
-        # herb_eff(d) = (1-d)^0.7,  scav_eff(d) = d^0.7
-        # Vid d=0: herb=1.00, scav=0.00
-        # Vid d=0.5: herb=0.62, scav=0.62  (generalisten förlorar ~38%)
-        # Vid d=1: herb=0.00, scav=1.00
-        _diet     = float(getattr(pheno, "diet", 0.5))
-        herb_eff  = (1.0 - _diet) ** 0.7
-        scav_eff  = _diet ** 0.7
-
-        # Energiinnehållet kommer med födan och bär substratets strukturandel.
-        # Matsmältningens verkningsgrad härleds ur samma strukturandel, så att
-        # segt material både innehåller mindre energi och släpper ifrån sig en
-        # mindre andel av den.
         E_raw_bio = max(0.0, float(food_bio_J))
         E_raw_car = max(0.0, float(food_carcass_J))
 
-        s_bio = 1.0 - (E_raw_bio / max(m_bio * _E_labile, 1e-12)) if m_bio > 0.0 else 0.0
-        s_car = 1.0 - (E_raw_car / max(m_car * _E_labile, 1e-12)) if m_car > 0.0 else 0.0
+        # Assimilationen är redan avgjord i _perform_feeding, som också har
+        # exkreterat resten till cellen. Här kommer bara den massa som faktiskt
+        # passerat tarmväggen. Den är labil per konstruktion — strukturmaterial
+        # assimileras inte — så dess energi är massan gånger E_labile.
+        m_assim_bio = max(0.0, float(assim_bio_kg))
+        m_assim_car = max(0.0, float(assim_carcass_kg))
+        m_assim = m_assim_bio + m_assim_car
 
-        E_in_gross_bio = E_raw_bio * herb_eff
-        E_in_gross_car = E_raw_car * scav_eff
-        E_in_bio = E_in_gross_bio * digestion_efficiency(s_bio)
-        E_in_car = E_in_gross_car * digestion_efficiency(s_car)
-        E_loss_digest_bio = max(0.0, E_in_gross_bio - E_in_bio)
-        E_loss_digest_car = max(0.0, E_in_gross_car - E_in_car)
+        E_in_bio = m_assim_bio * _E_labile
+        E_in_car = m_assim_car * _E_labile
         E_in = E_in_bio + E_in_car
 
-        Et0 = float(self.E_total())
-        Ecap0 = _E_cap_per_M * max(1e-9, float(self.M))
-        room = max(0.0, Ecap0 - Et0)
+        # Förlusterna är nu massa som ligger i detrituspoolen, inte energi som
+        # försvann. Termerna behålls som diagnostik.
+        E_in_gross_bio = E_raw_bio
+        E_in_gross_car = E_raw_car
+        E_loss_digest_bio = max(0.0, E_raw_bio - E_in_bio)
+        E_loss_digest_car = max(0.0, E_raw_car - E_in_car)
 
-        dE_store = min(E_in, room)
+        # Massan går in i reserven. Taket mot E_cap tillämpas inte här utan i
+        # sektion (5), där överskottet exkreteras i stället för att raderas —
+        # att klippa intaget mot taket lät massa försvinna ur bokföringen.
+        if m_assim > 0.0:
+            self.M_fast += 0.85 * m_assim
+            self.M_slow += 0.15 * m_assim
 
-        if dE_store > 0.0:
-            dM_store = dE_store / _E_labile
-            self.M_fast += 0.85 * dM_store
-            self.M_slow += 0.15 * dM_store
-
-        E_to_M = max(0.0, E_in - dE_store)
-        # OBS: energiöverskott lagras inte längre som massa här.
-        # Tillväxt sker via det genetiska M_target-drivet i sektion 2C.5.
-        # Eventuellt överskott stannar i energibuffertarna (kläms mot Ecap nedan).
+        dE_store = E_in
+        E_to_M = 0.0
 
         # ---------------------------------------------------------
         # (2) Effective mass (carried load) + basal/compute/sense/loco
@@ -828,34 +927,32 @@ class Body:
                 dM_want = min(_gest_rate * dt, M_tgt - M_cur)
 
                 if dM_want > 0.0:
-                    E_need = dM_want * _gest_build_E_kg
-    
-                    # pay from buffers
-                    paid1 = float(self.take_energy(E_need))
-                    deficit_g = max(0.0, E_need - paid1)
-    
-                    paid2 = 0.0
-                    if deficit_g > 0.0:
+                    # Fostervävnad byggs av moderns reservmassa, ett kilo per
+                    # kilo. Byggkostnaden är syntesarbetet ovanpå materialet,
+                    # inte i stället för det — de är två termer.
+                    kg_per_kg = 1.0 + (_gest_build_E_kg / _E_labile)
+                    need_kg = dM_want * kg_per_kg
+                    have_kg = self.M_reserve()
+
+                    if have_kg < need_kg:
+                        # Katabolisera egen vävnad för att fylla på reserven.
+                        yield_kg = max(1e-12, (1.0 - _structure) * _cat_eff)
                         free = max(0.0, float(self.M) - _M_min)
-
-                        want_cat    = deficit_g / max(_cat_eff * _E_body, 1e-12)
-                        dM_cat_gest = min(want_cat, free)
-
+                        dM_cat_gest = min((need_kg - have_kg) / yield_kg, free)
                         if dM_cat_gest > 0.0:
-                            self.M -= dM_cat_gest
-                            E_from_M_gest = dM_cat_gest * _E_body * _cat_eff
-                            self.M_fast += E_from_M_gest / _E_labile
+                            E_from_M_gest = self._catabolize(dM_cat_gest, _structure)
+                        have_kg = self.M_reserve()
 
-                        paid2 = float(self.take_energy(deficit_g))
-
-                    paid_total = paid1 + paid2
-                    out_gest_build = paid_total
-
-                    # Massa byggd = betald energi / byggkostnad per kg.
-                    dM_gest = paid_total / _gest_build_E_kg
-                    if dM_gest > 0.0:
-                        self.gest_M = M_cur + dM_gest
-                        self.gest_E_J = float(self.gest_E_J) + paid_total
+                    build_kg = min(dM_want, have_kg / kg_per_kg)
+                    if build_kg > 0.0:
+                        out_gest_build = float(self.take_energy(build_kg * _gest_build_E_kg))
+                        # Fostret är ännu odifferentierad, labil vävnad; dess
+                        # struktur läggs på först vid födseln.
+                        dM_gest = self._take_reserve_mass(build_kg)
+                        E_material += dM_gest * _E_labile
+                        if dM_gest > 0.0:
+                            self.gest_M = M_cur + dM_gest
+                            self.gest_E_J = float(self.gest_E_J) + out_gest_build
     
         # ---------------------------------------------------------
         # (2C.5) Aktiv juvenil tillväxt mot M_target
@@ -887,6 +984,12 @@ class Body:
         if float(self.M) < _M_target and growth_gate > 0.0:
             M_deficit      = _M_target - float(self.M)
             dM_growth_want = min(_growth_rate * dt * growth_gate, M_deficit)
+            # Somatisk vävnad byggs av reservmassa, ett kilo per kilo, med
+            # syntesarbetet som tilläggskostnad. Tillväxten kan därför aldrig
+            # gå snabbare än födointaget bär — det är materialet som stryper,
+            # inte byggkostnaden.
+            _kg_per_kg_growth = 1.0 + (_growth_build_E_kg / _E_labile)
+            dM_growth_want = min(dM_growth_want, self.M_reserve() / _kg_per_kg_growth)
             out_growth     = dM_growth_want * _growth_build_E_kg
 
         # ---------------------------------------------------------
@@ -903,11 +1006,20 @@ class Body:
         E_paid_drain = paid
 
         # Applicera tillväxt proportionellt mot betald fraktion
+        dM_growth = 0.0
         if dM_growth_want > 0.0 and E_out_drain > 1e-12:
             frac_paid  = paid / E_out_drain
             dM_growth  = dM_growth_want * frac_paid
             if dM_growth > 0.0:
-                self.M = float(self.M) + dM_growth
+                mat = self._take_reserve_mass(dM_growth)
+                dM_growth = mat
+                if mat > 0.0:
+                    self.M = float(self.M) + mat
+                    E_material += mat * _E_labile
+                    # Reserven är labil och näringsrik; vävnaden binder mindre
+                    # per kilo eftersom en del av den är strukturmaterial.
+                    # Mellanskillnaden utsöndras som kvävehaltigt avfall.
+                    self._release_nutrient(mat * (NUTRIENT_PER_KG_LABILE - _nut_tissue))
     
         # ---------------------------------------------------------
         # (3) Catabolism: cover remaining deficit (if any), above M_min
@@ -917,14 +1029,15 @@ class Body:
         paid2 = 0.0
     
         if deficit > 0.0:
-            want_cat = deficit / max(_cat_eff * _E_body, 1e-12)
+            # Utbytet följer individens egen strukturandel i stället för den
+            # globala konstanten E_body_J_per_kg. Vid s = 0,25 är de samma tal.
+            yield_J_per_kg = max(1e-12, (1.0 - _structure) * _cat_eff * _E_labile)
+            want_cat = deficit / yield_J_per_kg
             free     = max(0.0, float(self.M) - _M_min)
             dM_cat   = min(want_cat, free)
 
             if dM_cat > 0.0:
-                self.M   -= dM_cat
-                E_from_M  = dM_cat * _E_body * _cat_eff
-                self.M_fast += E_from_M / _E_labile
+                E_from_M = self._catabolize(dM_cat, _structure)
                 _k_cat_dmg = float(getattr(AP, 'k_cat_dmg', 1.0))
                 dD_cat = _k_cat_dmg * dM_cat / max(float(self.M), 1e-9)
                 self.D = clamp(float(self.D) + dD_cat, 0.0, _D_max)
@@ -1016,18 +1129,14 @@ class Body:
         Et = float(self.E_total())
         Ecap = float(self.E_cap())
         if Et > Ecap:
-            overflow = Et - Ecap
-    
-            take_fast = min(float(self.M_fast) * _E_labile, overflow)
-            if take_fast > 0.0:
-                self.M_fast = float(self.M_fast) - (take_fast / _E_labile)
-                overflow -= take_fast
-    
-            if overflow > 0.0:
-                take_slow = min(float(self.M_slow) * _E_labile, overflow)
-                if take_slow > 0.0:
-                    self.M_slow = float(self.M_slow) - (take_slow / _E_labile)
-                    overflow -= take_slow
+            # Vad som inte får plats i reserven lämnar kroppen som exkrement.
+            # Att radera det vore att förstöra massa: djuret hann äta upp det.
+            # Att i stället begränsa intaget vid källan är biologiskt renare men
+            # rör födosöket, och tas när kalibreringen är stabil.
+            trim_kg = self._take_reserve_mass((Et - Ecap) / _E_labile)
+            if trim_kg > 0.0:
+                self._void(trim_kg, 0.0)
+                E_overflow = trim_kg * _E_labile
     
         # ---------------------------------------------------------
         # (5) Deterministic death conditions
@@ -1100,7 +1209,16 @@ class Body:
         E_after = float(self.E_total())
         M_after = float(self.M)
     
-        expected_E_after = E_before + dE_store + E_from_M_total - E_out_drain - out_gest_build - E_out_repair
+        expected_E_after = (
+            E_before
+            + dE_store
+            + E_from_M_total
+            - E_out_drain
+            - out_gest_build
+            - E_out_repair
+            - E_material
+            - E_overflow
+        )
     
         drift = E_after - expected_E_after
         drift_abs = abs(drift)
@@ -1150,6 +1268,8 @@ class Body:
             "E_loss_digest_carcass": E_loss_digest_car,
             "E_store": dE_store,
             "E_to_M": E_to_M,
+            "E_material": E_material,
+            "E_overflow": E_overflow,
     
             "E_out_basal": out_basal,
             "E_out_compute": out_compute,
@@ -1201,7 +1321,13 @@ class Body:
             "E_build_gestation": float(out_gest_build),
             "E_loss_repair": float(E_out_repair),
             "E_from_catabolism": float(E_from_M_total),
-            "E_loss_catabolism": float(max(0.0, dM_cat_total * _E_body - E_from_M_total)),
+            # Katabolismens förlust: den labila fraktion som mobiliserades
+            # men inte blev energi. Strukturmaterialet räknas inte som förlust
+            # — det lämnade kroppen som exkrement och finns kvar i detritus.
+            "E_loss_catabolism": float(max(
+                0.0,
+                dM_cat_total * (1.0 - _structure) * _E_labile - E_from_M_total,
+            )),
             "dM_growth": float(dM_growth_want),
             "M_expected": float(M_expected),
             "m_rel_expected": float(m_rel),
@@ -1561,6 +1687,8 @@ class BodyStepInput:
     food_carcass_kg: float
     food_bio_J: float
     food_carcass_J: float
+    assim_bio_kg: float
+    assim_carcass_kg: float
     E_move: float
     Tloc: float
     B0: float
@@ -2211,16 +2339,21 @@ class Agent:
         world: World,
         dt: float,
         allow_eat: float,
-    ) -> tuple[float, float, float, float]:
+    ) -> tuple[float, float, float, float, float, float]:
         """
-        Returnerar (kg_levande, kg_detritus, energi_levande_J, energi_detritus_J).
+        Returnerar (kg_levande, kg_detritus, energi_levande_J, energi_detritus_J,
+        assimilerat_levande_kg, assimilerat_detritus_kg).
 
         Energin bär substratets faktiska strukturandel med sig. Att bara skicka
         vidare kilon och multiplicera med en konstant hos konsumenten skulle
         kasta bort informationen om vad som faktiskt åts.
+
+        Assimilationen avgörs här och bara här. Body.step() får den upptagna
+        massan färdig och behöver inte räkna om verkningsgrader — det var den
+        dubbleringen som lät kostpreferensen slå på energin men inte på massan.
         """
         if allow_eat <= 0.20:
-            return 0.0, 0.0, 0.0, 0.0
+            return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
 
         want_kg = float(self.AP.eat_rate) * dt * (0.25 + 0.75 * float(self.body.hunger()))
         got_l, got_d, e_l, e_d = world.consume_food(
@@ -2230,39 +2363,44 @@ class Agent:
             prefer_detritus=True,
         )
 
-        self._excrete(world, got_l, e_l)
-        self._excrete(world, got_d, e_d)
+        herb_eff, scav_eff = diet_efficiency(float(getattr(self.pheno, "diet", 0.5)))
 
-        return float(got_l), float(got_d), float(e_l), float(e_d)
+        a_l = self._excrete(world, got_l, e_l, herb_eff)
+        a_d = self._excrete(world, got_d, e_d, scav_eff)
 
-    def _excrete(self, world: World, mass_kg: float, energy_J: float) -> None:
+        return float(got_l), float(got_d), float(e_l), float(e_d), float(a_l), float(a_d)
+
+    def _excrete(self, world: World, mass_kg: float, energy_J: float,
+                 diet_eff: float) -> float:
         """
         Återför den massa som inte assimileras till cellen som detritus.
+        Returnerar den assimilerade massan i kilo.
 
         Utan detta försvinner allt ätet ur modellen: kroppsmassan växer ur
         energibudgeten och den ingesterade massan bokförs ingenstans.
 
-        Den assimilerade massandelen är den labila fraktion som faktiskt smälts,
-        alltså (1 - struktur) * matsmältningsverkningsgrad. Resten passerar
-        igenom. Eftersom strukturmaterialet passerar i sin helhet medan bara en
-        del av det labila gör det, är exkrementet mer strukturrikt än födan —
-        betning koncentrerar segt material i detrituspoolen.
+        Assimilationsandelen är (1 - struktur) * matsmältning * kostpreferens.
+        Resten passerar igenom. Eftersom strukturmaterialet passerar i sin
+        helhet medan bara en del av det labila gör det, är exkrementet mer
+        strukturrikt än födan — betning koncentrerar segt material i
+        detrituspoolen.
         """
         m = float(mass_kg)
         if m <= 1e-15:
-            return
+            return 0.0
 
         e_lab = float(self.AP.E_labile_J_per_kg)
         s_in = 1.0 - (float(energy_J) / max(m * e_lab, 1e-30))
         s_in = min(1.0, max(0.0, s_in))
 
-        assim_frac = (1.0 - s_in) * digestion_efficiency(s_in)
-        out_kg = m * max(0.0, 1.0 - assim_frac)
+        m_assim = m * assimilated_fraction(s_in, diet_eff)
+        out_kg = max(0.0, m - m_assim)
         if out_kg <= 1e-15:
-            return
+            return float(m_assim)
 
         s_out = min(1.0, max(0.0, m * s_in / out_kg))
         world.excrete_at(self.x, self.y, out_kg, s_out)
+        return float(m_assim)
     
     
     def _activity_proxy(
@@ -2389,7 +2527,14 @@ class Agent:
             explore_drive=float(plan.explore_drive),
         )
     
-        food_bio_kg, food_carcass_kg, food_bio_J, food_carcass_J = self._perform_feeding(
+        (
+            food_bio_kg,
+            food_carcass_kg,
+            food_bio_J,
+            food_carcass_J,
+            assim_bio_kg,
+            assim_carcass_kg,
+        ) = self._perform_feeding(
             world=world,
             dt=dt,
             allow_eat=float(plan.allow_eat),
@@ -2409,6 +2554,8 @@ class Agent:
             food_carcass_kg=float(food_carcass_kg),
             food_bio_J=float(food_bio_J),
             food_carcass_J=float(food_carcass_J),
+            assim_bio_kg=float(assim_bio_kg),
+            assim_carcass_kg=float(assim_carcass_kg),
             E_move=float(E_move),
             Tloc=float(plan.Tloc),
             B0=float(plan.B0),
@@ -2422,14 +2569,18 @@ class Agent:
         M_target = float(getattr(self.pheno, "child_M", 0.0))
         return bool(self.body.start_gestation(M_target))
     
-    def pay_repro_cost(self, cost_E_J: float) -> float:
+    def pay_repro_cost(self, cost_E_J: float, *, transfer: bool = False) -> float:
         """
         Dra energi från parent. Returnerar faktiskt betald energi (J).
         OBS: Den här är bara en transfer; pain/damage ska uppstå via
         din ordinarie energi-/stresslogik i steget.
+
+        `transfer=True` när massan går vidare till en avkomma i stället för att
+        oxideras. Reproduktionens overhead brinner; barnets startreserv gör det
+        inte.
         """
         want_J = max(0.0, float(cost_E_J))
-        paid_J = float(self.body.take_energy(want_J))
+        paid_J = float(self.body.take_energy(want_J, burn=not bool(transfer)))
         return paid_J
     
     def init_newborn_state(
@@ -2464,24 +2615,16 @@ class Agent:
         self.body.M_fast = Ef_J / e_lab
         self.body.M_slow = Es_J / e_lab
     
-        # ---- Clip to Ecap deterministiskt (weighted space) ----
+        # ---- Clip to Ecap deterministiskt ----
+        # Överskottet raderas inte utan bokförs som exkrement, precis som i
+        # Body.step(). Barnet kan inte bära mer reserv än dess massa tillåter.
         Et = float(self.body.E_total())
         Ecap = float(self.body.E_cap())
-        overflow = Et - Ecap
-        if overflow > 0.0:
-            # take from fast first in weighted units
-            fast_w = float(self.body.M_fast) * float(self.AP.E_labile_J_per_kg)
-            take_fast_w = min(fast_w, overflow)
-            if take_fast_w > 0.0:
-                self.body.M_fast = float(self.body.M_fast) - (take_fast_w / float(self.AP.E_labile_J_per_kg))
-                overflow -= take_fast_w
-    
-            if overflow > 0.0:
-                slow_w = float(self.body.M_slow) * float(self.AP.E_labile_J_per_kg)
-                take_slow_w = min(slow_w, overflow)
-                if take_slow_w > 0.0:
-                    self.body.M_slow = float(self.body.M_slow) - (take_slow_w / float(self.AP.E_labile_J_per_kg))
-                    overflow -= take_slow_w
+        if Et > Ecap:
+            e_lab_c = float(self.AP.E_labile_J_per_kg)
+            trim_kg = self.body._take_reserve_mass((Et - Ecap) / e_lab_c)
+            if trim_kg > 0.0:
+                self.body._void(trim_kg, 0.0)
     
         # ---- Other body fields ----
         self.body.Fg = clamp(float(getattr(parent_pheno, "child_Fg", 0.15)), 0.0, 1.0)

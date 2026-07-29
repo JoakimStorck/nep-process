@@ -467,8 +467,38 @@ def check_sparse_fields(pop) -> list[Violation]:
     return out
 
 
+def check_nutrient_balance(pop, rel_tol: float = 1e-6) -> list[Violation]:
+    """
+    Näringen är en sluten storhet.
+
+    Massa kan aldrig sluta sig i den här modellen: flora bygger merparten av
+    sin vävnad ur luft och faunans kol lämnar kroppen som koldioxid vid
+    förbränning. Näringen kan det, och är därför den storhet som prövas.
+
+    Summan av fri näring, flora, fauna och detritus ska vara lika med extern
+    tillförsel minus nedbrytningsförlust. Toleransen är relativ mot totalen och
+    satt av att detritusfälten lagras i float32; `nutrient` ligger i float64
+    just för att den termen inte ska dominera.
+    """
+    nb = nutrient_balance(pop)
+    total = float(nb["total"])
+    scale = max(1e-12, abs(total))
+    rel = float(nb["unaccounted"]) / scale
+
+    if abs(rel) > float(rel_tol):
+        return [Violation(
+            "nutrient_balance",
+            f"näringsbalansen driver {rel:.3e} relativt "
+            f"(obokfört {nb['unaccounted']:.6e} kg av {total:.6e} kg; "
+            f"fri {nb['free']:.3e}, flora {nb['in_flora']:.3e}, "
+            f"fauna {nb['in_fauna']:.3e}, detritus {nb['in_detritus']:.3e})",
+        )]
+    return []
+
+
 ALL_CHECKS = (
     check_sparse_fields,
+    check_nutrient_balance,
     check_slot_bookkeeping,
     check_world_field_domains,
     check_body_store_mirror,
@@ -575,11 +605,16 @@ def nutrient_balance(pop) -> dict[str, float]:
     bygger merparten av sin vävnad ur luft och fauna växer ur en energibudget,
     så total massa flödar igenom snarare än cirkulerar.
 
-    Balansen gäller delsystemet mark, flora och detritus. Den sluter sig ännu
-    inte över fauna: assimilerad massa blir kroppsmassa utan att dess näring
-    bokförs, eftersom faunans reserv inte är massabaserad. Det löses i Steg 6b.
+    Balansen omfattar mark, flora, detritus och fauna. Faunan kom in när
+    reserven blev massa och tillväxten fick ett materialkrav: därefter kan
+    kroppsmassa varken uppstå ur en energibudget eller försvinna vid
+    förbränning utan att näringen bokförs.
+
+    `Body` äger fortfarande faunans massa och reserv, så de läses därifrån och
+    inte ur store:n. När Steg 6b flyttat ägarskapet kan den delen bli
+    arraybaserad som resten.
     """
-    from phenotype import nutrient_content
+    from phenotype import nutrient_content, NUTRIENT_PER_KG_LABILE
 
     world = pop.world
     store = pop.store
@@ -607,13 +642,27 @@ def nutrient_balance(pop) -> dict[str, float]:
     else:
         in_flora = 0.0
 
+    # Fauna: committad vävnad bär sin egen strukturandel, reserven och ett
+    # eventuellt foster är labila.
+    in_fauna = 0.0
+    for a in getattr(pop, "agents", ()):
+        if not a.body.alive:
+            continue
+        slot = int(getattr(a, "store_slot", -1))
+        s = float(store.structure[slot]) if slot >= 0 else 0.25
+        in_fauna += float(a.body.M) * nutrient_content(s)
+        in_fauna += a.body.M_reserve() * NUTRIENT_PER_KG_LABILE
+        if bool(a.body.gestating):
+            in_fauna += float(a.body.gest_M) * NUTRIENT_PER_KG_LABILE
+
     added = float(getattr(world, "_nutrient_added_total", 0.0))
     lost = float(getattr(world, "_nutrient_lost_total", 0.0))
-    total = free + in_detritus + in_flora
+    total = free + in_detritus + in_flora + in_fauna
 
     return {
         "free": free,
         "in_flora": in_flora,
+        "in_fauna": in_fauna,
         "in_detritus": in_detritus,
         "total": total,
         "added": added,

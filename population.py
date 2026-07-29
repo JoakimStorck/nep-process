@@ -30,6 +30,7 @@ from phenotype import (
     structure_fraction,
     energy_density,
     nutrient_content,
+    NUTRIENT_PER_KG_LABILE,
 )
 
 from organism_store import OrganismStore, next_organism_id
@@ -342,7 +343,37 @@ class Population:
         _ = self._seed_initial_flora(
             n_flora=max(16, int(self.PP.max_pop) // 2),
         )
-        self.store.rebuild_spatial_index()        
+        self.store.rebuild_spatial_index()
+
+        self._book_initial_nutrient()
+
+    def _book_initial_nutrient(self) -> None:
+        """
+        Bokför näringen i utgångstillståndet som tillförd.
+
+        Sådd flora och warm-startad fauna får sin massa gratis vid t=0. Utan
+        den här posten startar ledgern med ett konstant glapp som ser ut som
+        en läcka men bara är initialvillkoret. Efter den här raden ska
+        `nutrient_balance()['unaccounted']` vara noll vid tick 0.
+        """
+        world = self.world
+        store = self.store
+
+        total = float(np.sum(np.asarray(world.nutrient), dtype=np.float64))
+
+        for slot in range(int(store.n)):
+            if not bool(store.alive[slot]):
+                continue
+            total += float(store.mass[slot]) * nutrient_content(float(store.structure[slot]))
+
+        e_lab = float(self.WP.E_labile_J_per_kg)
+        for a in self.agents:
+            if not a.body.alive:
+                continue
+            total += a.body.M_reserve() * NUTRIENT_PER_KG_LABILE
+            total += float(a.body.gest_M) * NUTRIENT_PER_KG_LABILE
+
+        world._nutrient_added_total += total
 
     # -----------------------
     # logging helpers
@@ -940,7 +971,9 @@ class Population:
         # Föräldern betalar barnenergin ur sina egna buffrar.
         # pay_repro_cost() anropar body.take_energy() — aldrig mer än vad som finns.
         total_child_E = child_E_fast_J + child_E_slow_J
-        paid_to_child = float(parent.pay_repro_cost(total_child_E))
+        # Överföring, inte förbränning: massan lämnar föräldern och hamnar i
+        # barnet. Att bokföra den som bränd vore att utsöndra den två gånger.
+        paid_to_child = float(parent.pay_repro_cost(total_child_E, transfer=True))
         
         if total_child_E > 1e-12:
             scale = paid_to_child / total_child_E
@@ -966,6 +999,17 @@ class Population:
             child_E_slow_J=child_E_slow_J,
             other_parent=other_parent,
         )
+
+        # Fostret bars som labil vävnad. Vid födseln får barnet sin egen
+        # strukturandel, och vävnaden binder mindre näring per kilo än
+        # reserven gjorde. Mellanskillnaden utsöndras till moderns cell.
+        s_child = float(getattr(child.pheno, "structure", 0.25))
+        d_nut = float(child_M) * (NUTRIENT_PER_KG_LABILE - nutrient_content(s_child))
+        if d_nut > 0.0:
+            self.world.add_nutrient(int(self.grid.cell_of(float(parent.x), float(parent.y))), d_nut)
+
+        self._flush_body_outputs(parent)
+        self._flush_body_outputs(child)
 
         store.repro_cd[p_slot] = np.float32(float(self.AP.repro_cooldown_s))
         return child
@@ -1642,6 +1686,29 @@ class Population:
             body_slots=np.asarray(body_slots, dtype=np.int32),
         )
 
+    def _flush_body_outputs(self, a: Agent) -> None:
+        """
+        Töm kroppens ackumulerade utflöden till den cell agenten står i.
+
+        `Body` har ingen världsreferens och ska inte få en — fysiologikärnan
+        bokför vad som lämnat kroppen, passet placerar det i världen. Exkrement
+        går till detritus och måste brytas ner innan det blir tillgängligt;
+        förbränningens kväve går direkt till den fria näringspoolen.
+        """
+        b = a.body
+
+        out_kg = float(b.out_excreta_kg)
+        if out_kg > 1e-15:
+            s_out = float(b.out_excreta_struct_kg) / out_kg
+            self.world.excrete_at(float(a.x), float(a.y), out_kg, s_out)
+        b.out_excreta_kg = 0.0
+        b.out_excreta_struct_kg = 0.0
+
+        out_n = float(b.out_nutrient_kg)
+        if out_n > 1e-18:
+            self.world.add_nutrient(int(self.grid.cell_of(float(a.x), float(a.y))), out_n)
+        b.out_nutrient_kg = 0.0
+
     def _step_body_system(
         self,
         ctx: "StepCtx",
@@ -1673,12 +1740,16 @@ class Population:
                 food_carcass_kg=body_in.food_carcass_kg,
                 food_bio_J=body_in.food_bio_J,
                 food_carcass_J=body_in.food_carcass_J,
+                assim_bio_kg=body_in.assim_bio_kg,
+                assim_carcass_kg=body_in.assim_carcass_kg,
                 pheno=a.pheno,
                 extra_drain=body_in.E_move,
                 T_env=body_in.Tloc,
                 age_s=age_s,
             )
-            
+
+            self._flush_body_outputs(a)
+
             self._write_alive_to_store(slot, a.body.alive)
             self._write_body_surface_to_store(slot, a)
             
@@ -1806,24 +1877,37 @@ class Population:
                 a.store_slot = -1
     
                 body = a.body
-                M_struct = float(body.M)
-                E_buf = float(body.E_total())
-                E_carcass = float(self.WP.E_labile_J_per_kg) * (1.0 - struct)
-                M_buf_equiv = E_buf / max(E_carcass, 1e-12)
-                carcass_kg = M_struct + M_buf_equiv
-    
-                if carcass_kg > 0.0:
+
+                # Töm kroppens utflöden innan den nollställs, annars går
+                # exkrement och kväve från sista ticken förlorade.
+                self._flush_body_outputs(a)
+
+                M_tissue = float(body.M)
+                M_res = float(body.M_reserve())
+                M_fetus = float(body.gest_M) if bool(body.gestating) else 0.0
+                carcass_kg = M_tissue + M_res + M_fetus
+
+                # Reserven och fostret är labil vävnad; bara den committade
+                # massan bär strukturmaterial. Kadavrets strukturandel blir
+                # därmed massviktad, och en välgödd kropp lämnar ett mjukare
+                # kadaver än en utsvulten. Den tidigare divisionen med
+                # (1 - struktur) skalade upp reserven till kadaverekvivalenter
+                # och skapade massa vid varje dödsfall.
+                if carcass_kg > 1e-15:
+                    s_carc = min(1.0, max(0.0, M_tissue * struct / carcass_kg))
                     self.world.add_carcass(
                         float(a.x),
                         float(a.y),
                         amount_kg=carcass_kg,
                         rad=int(self.PP.carcass_rad),
-                        structure=struct,
+                        structure=s_carc,
                     )
-    
+
                 body.M = 0.0
                 body.M_fast = 0.0
                 body.M_slow = 0.0
+                body.gest_M = 0.0
+                body.gestating = False
     
                 deaths += 1
     

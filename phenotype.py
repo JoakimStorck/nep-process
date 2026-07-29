@@ -66,6 +66,11 @@ class Phenotype:
     cold_aversion: float
     sense_strength: float
 
+    # Vävnadens strukturandel. Body behöver den för katabolismens utbyte och
+    # för kadavrets sammansättning; utan den skulle fysiologin få gissa sin
+    # egen komposition ur en konstant.
+    structure: float = 0.25
+
 
 # ---- Fixed trait indices (explicit + stable) ----
 _T_A_MATURE        = 0
@@ -277,6 +282,7 @@ def derive_pheno(traits: np.ndarray | None, R: PhenoRanges = PhenoRanges()) -> P
         predation=float(_lerp(R.predation_min, R.predation_max, u_predation)),
         hidden_1=int(hidden_1),
         hidden_2=int(hidden_2),
+        structure=float(structure_fraction(traits)),
     )
 
 
@@ -455,6 +461,34 @@ def digestion_efficiency(structure: float) -> float:
     """Andel av substratets energi som konsumenten faktiskt tillgodogör sig."""
     s = min(1.0, max(0.0, float(structure)))
     return DIGEST_EFF_LABILE - (DIGEST_EFF_LABILE - DIGEST_EFF_STRUCT) * s
+
+
+# Kostpreferensens verkningsgrad. herb_eff och scav_eff är negativt
+# korrelerade — generalisten på 0,5 är sämre på båda än en specialist.
+DIET_EFF_EXP = 0.7
+
+
+def diet_efficiency(diet: float) -> tuple[float, float]:
+    """(herb_eff, scav_eff) för given kostpreferens; 0 = herbivor, 1 = asätare."""
+    d = min(1.0, max(0.0, float(diet)))
+    return (1.0 - d) ** DIET_EFF_EXP, d ** DIET_EFF_EXP
+
+
+def assimilated_fraction(structure: float, diet_eff: float) -> float:
+    """
+    Andel av ingesterad massa som passerar tarmväggen.
+
+    Tre faktorer, alla på massan: strukturmaterialet passerar orört, av det
+    labila tas bara matsmältningens andel upp, och kostpreferensen avgör hur
+    väl konsumenten är rustad för just det substratet.
+
+    Detta är den enda definitionen. Att låta kostpreferensen sitta som en
+    separat multiplikator på energin och inte på massan lät skillnaden
+    försvinna ur bokföringen: massan var varken kropp eller exkrement.
+    """
+    s = min(1.0, max(0.0, float(structure)))
+    d = min(1.0, max(0.0, float(diet_eff)))
+    return (1.0 - s) * digestion_efficiency(s) * d
 
 
 # Initieringsintervall för strukturlocus, i logit-rymdens enhetsskala.

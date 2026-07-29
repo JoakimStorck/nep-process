@@ -169,14 +169,19 @@ class World:
         # detritus är glest dynamiskt: nollskilt i en bråkdel av cellerna, och
         # ett fullt svep skulle mest multiplicera nollor. Fältet bär därför en
         # aktiv mängd, och kontraktet är att inaktiva celler är exakt noll.
-        self.detritus = np.full(nc, np.float32(self.WP.detritus_init), dtype=np.float32)
+        # detritus och detritus_structure lagras i float64 av samma skäl som
+        # nutrient: de ingår i näringsbalansen, som är hård invariant. I float32
+        # låg balansens drift kring 1e-7 relativt och golvet sattes av just
+        # dessa två fält. Kostnaden är minne, inte tid — fälten är glest
+        # dynamiska och sveps bara över den aktiva mängden.
+        self.detritus = np.full(nc, float(self.WP.detritus_init), dtype=np.float64)
         self._detritus_member = self.detritus > _DETRITUS_EPS
         self._detritus_active = np.flatnonzero(self._detritus_member).astype(np.int32, copy=False)
 
         # Massviktad medelstrukturandel i cellens detritus, ärvd från det som
         # dog. Styr nedbrytningstakten: högstrukturerat material bryts ner
         # långsammare. Samma kadensklass och samma aktiva mängd som detritus.
-        self.detritus_structure = np.zeros(nc, dtype=np.float32)
+        self.detritus_structure = np.zeros(nc, dtype=np.float64)
 
         # Ackumulerad exkreterad massa sedan senaste ledgeruppdatering.
         self._dM_excreted = 0.0
@@ -372,16 +377,16 @@ class World:
         if tot <= 0.0:
             return
         s_old = float(self.detritus_structure[c])
-        self.detritus_structure[c] = np.float32((s_old * old + float(structure) * add) / tot)
-        self.detritus[c] = np.float32(tot)
+        self.detritus_structure[c] = (s_old * old + float(structure) * add) / tot
+        self.detritus[c] = tot
         self._detritus_activate(c)
 
     def _detritus_deactivate_if_empty(self, cell: int) -> None:
         """Nollställ exakt och lämna aktiva mängden om cellen tömts."""
         c = int(cell)
         if self._detritus_member[c] and float(self.detritus[c]) <= _DETRITUS_EPS:
-            self.detritus[c] = np.float32(0.0)
-            self.detritus_structure[c] = np.float32(0.0)
+            self.detritus[c] = 0.0
+            self.detritus_structure[c] = 0.0
             self._detritus_member[c] = False
             self._detritus_dirty = True
 
@@ -452,6 +457,23 @@ class World:
         self._nutrient_added_total += total
         return total
 
+    def add_nutrient(self, cell: int, amount: float) -> float:
+        """
+        Återför näring till en cell. Returnerar tillförd mängd.
+
+        Detta är recirkulation, inte tillförsel: kvävehaltigt avfall från
+        organismernas förbränning och vävnadsomsättning. Den räknas därför
+        inte in i `_nutrient_added_total`, som bara bokför extern forcing.
+        """
+        amt = float(amount)
+        if not math.isfinite(amt) or amt <= 0.0:
+            return 0.0
+        c = int(cell)
+        if c < 0 or c >= int(self.grid.n_cells):
+            return 0.0
+        self.nutrient[c] += amt
+        return amt
+
     def take_nutrient(self, cell: int, amount: float) -> float:
         """Ta upp till `amount` kg näring ur en cell. Returnerar faktiskt uttag."""
         c = int(cell)
@@ -510,8 +532,8 @@ class World:
         if act.size == 0:
             return 0.0, 0.0
 
-        dt = np.float32(self.WP.dt)
-        rate = np.float32(self.WP.detritus_decay)
+        dt = float(self.WP.dt)
+        rate = float(self.WP.detritus_decay)
 
         d = self.detritus[act]
         st = self.detritus_structure[act]
@@ -521,11 +543,11 @@ class World:
         # fält. Att sakta ner hela massan i stället lät strukturandelen skena:
         # bara det labila försvann, och kvarvarande material blev asymptotiskt
         # ren struktur.
-        lab = d * (np.float32(1.0) - st)
+        lab = d * (1.0 - st)
         stru = d * st
 
-        k_lab = dt * rate * np.float32(DECAY_SCALE_LABILE)
-        k_str = dt * rate * np.float32(DECAY_SCALE_STRUCT)
+        k_lab = dt * rate * float(DECAY_SCALE_LABILE)
+        k_str = dt * rate * float(DECAY_SCALE_STRUCT)
 
         d_lab = np.minimum(lab, lab * k_lab)
         d_str = np.minimum(stru, stru * k_str)
@@ -534,29 +556,29 @@ class World:
         stru_new = stru - d_str
         new = lab_new + stru_new
 
-        dM_detritus_decay = float(np.sum(np.float64(d_lab) + np.float64(d_str)))
+        dM_detritus_decay = float(np.sum(d_lab + d_str, dtype=np.float64))
 
         # Frisatt näring är den nedbrutna massan gånger dess näringsinnehåll.
         released = float(
-            np.sum(np.float64(d_lab)) * NUTRIENT_PER_KG_LABILE
-            + np.sum(np.float64(d_str)) * NUTRIENT_PER_KG_STRUCT
+            np.sum(d_lab, dtype=np.float64) * NUTRIENT_PER_KG_LABILE
+            + np.sum(d_str, dtype=np.float64) * NUTRIENT_PER_KG_STRUCT
         )
-        retained = np.float32(1.0 - float(self.WP.nutrient_loss_frac))
+        retained = 1.0 - float(self.WP.nutrient_loss_frac)
         np.add.at(self.nutrient, act,
-                  (np.float64(d_lab) * NUTRIENT_PER_KG_LABILE
-                   + np.float64(d_str) * NUTRIENT_PER_KG_STRUCT) * float(retained))
+                  (d_lab * NUTRIENT_PER_KG_LABILE
+                   + d_str * NUTRIENT_PER_KG_STRUCT) * retained)
 
         # Strukturandelen följer av vad som blev kvar.
         with np.errstate(invalid="ignore", divide="ignore"):
-            st_new = np.where(new > np.float32(0.0), stru_new / np.maximum(new, np.float32(1e-30)), np.float32(0.0))
-        self.detritus_structure[act] = np.clip(st_new, 0.0, 1.0).astype(np.float32, copy=False)
+            st_new = np.where(new > 0.0, stru_new / np.maximum(new, 1e-300), 0.0)
+        self.detritus_structure[act] = np.clip(st_new, 0.0, 1.0)
 
         # Celler under tröskeln nollställs exakt och lämnar den aktiva mängden,
         # så att kontraktet "inaktiv cell är noll" håller.
-        empty = new <= np.float32(_DETRITUS_EPS)
+        empty = new <= float(_DETRITUS_EPS)
         if empty.any():
-            new[empty] = np.float32(0.0)
-            self.detritus_structure[act[empty]] = np.float32(0.0)
+            new[empty] = 0.0
+            self.detritus_structure[act[empty]] = 0.0
             self._detritus_member[act[empty]] = False
             self._detritus_dirty = True
 
@@ -700,7 +722,7 @@ class World:
             return 0.0, 0.0
 
         got = amt if amt < avail else avail
-        field[cell] = np.float32(avail - got)
+        field[cell] = (avail - got) if field.dtype == np.float64 else np.float32(avail - got)
 
         struct = 0.0
         if field is self.detritus:
@@ -766,7 +788,7 @@ class World:
         # som var det sista geometriantagandet i world.py.
         cells = self.grid.cells_within(center, r)
         if not cells:
-            self.detritus[center] = np.float32(float(self.detritus[center]) + amt)
+            self.detritus[center] = float(self.detritus[center]) + amt
             return
     
         sigma = max(0.75, 0.5 * r)
@@ -781,7 +803,7 @@ class World:
             wsum += w
     
         if wsum <= 1e-12:
-            self.detritus[center] = np.float32(float(self.detritus[center]) + amt)
+            self.detritus[center] = float(self.detritus[center]) + amt
             return
     
         scale = amt / wsum

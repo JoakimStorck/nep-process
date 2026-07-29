@@ -12,7 +12,7 @@ Men det finns ett systematiskt glapp mellan manifestets mekanismer och koden: **
 
 Världslagret har samtidigt fått fält utan dynamik och utan konsumenter: `nutrient` allokeras och rörs aldrig, `transport_pass()` returnerar noll, `decomposition_pass()` har `dM_nutrient_from_detritus = 0.0` hårdkodat, `flow_strength` nollställs varje tick. Skelettet är rätt byggt — det är bara tomt, och tomrummet växer.
 
-Och den ekologiska defekten är oförändrad: **floran har ingen begränsande resurs och ingen dödlighet.** Sedan store:n blev dynamiskt växande har den inte längre något tak alls.
+Näringskretsloppet är sedan Steg 4 slutet hela vägen runt, fauna inräknad, och prövas som hård invariant. Det som återstår i steget är kalibreringen — och den är nu meningsfull, eftersom poolen inte längre fylls på av en bokföringsbugg.
 
 ---
 
@@ -141,9 +141,9 @@ Locuskartan ägs korrekt av `phenotype.py`, som definierar `_T_*` för samtliga 
 
 ## B8. Testinfrastruktur
 
-`run_headless.py` kör utan pygame med exitkod vid invariantbrott. `invariants.py` prövar åtta invarianter: slotbokföring, speglingen mellan `Body` och store, arrayernas indexdomäner, `cell_idx`-konsistens, id-unikhet och id→slot-bijektion, finita och icke-negativa storheter, spatialindexets integritet, samt `Agent.store_slot`-bindning.
+`run_headless.py` kör utan pygame med exitkod vid invariantbrott. `invariants.py` prövar nio invarianter: slotbokföring, speglingen mellan `Body` och store, arrayernas indexdomäner, `cell_idx`-konsistens, id-unikhet och id→slot-bijektion, finita och icke-negativa storheter, spatialindexets integritet, `Agent.store_slot`-bindning, samt näringsbalansen.
 
-Massa- och energibalans är ännu diagnostik, inte assertion: systemet är öppet by construction och får en sluten balans först när näringskretsloppet finns.
+Näringsbalansen är hård sedan faunabudgeten stängdes. Massbalansen förblir diagnostik och ska så förbli: flora bygger merparten av sin vävnad ur luft och faunans kol lämnar kroppen som koldioxid, så total massa kan aldrig sluta sig. Det som cirkulerar är näringen.
 
 ## B9. Genomet
 
@@ -265,6 +265,7 @@ Kadensklasserna ska in i manifestet innan hydro byggs, så att `hydro_pass` och 
 - ~~Flera floraindivider per cell.~~ **Klart.** Varje frö blir en egen individ; antalet begränsas av näringen, inte av en regel.
 - ~~Substratets strukturandel.~~ **Klart.** `structure` som gemensamt locus med fem konsumenter: energitäthet, betningsutbyte, nedbrytningstakt, näringskostnad vid uppbyggnad och exkrementets sammansättning. Se `docs/substratets-struktur.md`.
 - ~~Exkretion.~~ **Klart.** Icke assimilerad massa återförs som detritus, mer strukturrik än födan.
+- ~~Sluten näringsbudget över fauna.~~ **Klart.** Reserven bär massa som är en del av kroppen, tillväxt och gestation kräver material 1:1 ur reserven utöver syntesarbetet, och förbränningens näring utsöndras till cellen. `check_nutrient_balance()` är hård invariant.
 - Kalibrering mot mätpunkterna. **Återstår** — se överlämningsanteckningarna nedan. Punkten låg först i Steg 2 men flyttades hit: `transport_pass()` returnerade noll, så det fanns ingen diffusion att kalibrera, och att finjustera floras spridningstakt i en modell utan mortalitet vore att kalibrera fel sak. Hela tillväxtdynamiken byter karaktär här ändå.
 
 ### Substratets struktur
@@ -357,7 +358,7 @@ Profilera fasmodellen under blandad realistisk belastning. Numba för sensing, C
 | 4 | Floran når ett stationärt antal | ja |
 | 4 | Stationärt antal vid dubblad `capacity` | oförändrat ±10 % |
 | 4 | Överlevnadsskillnad mellan hög och låg `uptake_capacity` | statistiskt skild |
-| 4 | Näringsbalans i ledgern | sluten inom 1e-9 relativt |
+| 4 | Näringsbalans i ledgern | hård invariant vid 1e-6; uppmätt 1e-7 vid 8 000 tick, växer linjärt |
 | 4 | Populationsdifferentiering mellan klimatband | mätbar, annars är världen för smal |
 | 5 | Kostnad per floraindivid och tick | < 1 µs |
 | 5 | 10 000 flora | < 10 ms/tick |
@@ -390,19 +391,51 @@ Att floran över huvud taget når ett stationärt tillstånd, och att det tillst
 
 ### Kända gap med känd lösning
 
-**Faunaläckan är en näringskälla, inte en avrundning.** Detta är det viktigaste öppna felet och blockerar all kalibrering.
+**Faunaläckan är stängd.** Kvar står kalibreringen, som den blockerade.
 
-Uppmätt i en 300 000-tickskörning: faunan dog ut mellan tick 20 000 och 60 000, och näringen i världen gick från 1,16e-03 till 1,67e-01 i samma intervall. Hoppet är kadavrens näringsinnehåll — fjorton döda agenter à ungefär 0,6 kg ger 0,214 kg näring mot observerade 0,166. **Det är 32 gånger hela den externa tillförseln över samma 80 000 tick.** Floran exploderade därefter från 290 till 7926 individer, vilket ser ut som en ekologisk process men är en bokföringsbugg.
+Läckan var två storleksordningar värre än den först beskrivna kadaverfaktorn. Uppmätt före stängningen, 6 000 tick och tolv agenter: assimilerad massa 8,2e-05 kg mot ett netto på +2,175 kg i `Body.step()`. **Kvoten skapad mot assimilerad massa var 26 500×**, och faunan bar 0,182 kg näring mot 1,10e-03 kg i hela resten av systemet. Kadavrets 1,6 gånger högre näringsinnehåll per kilo var en riktig men underordnad term.
 
-Mekanismen: fauna äter flora, vilket tar näring ur floran. Den assimilerade massan blir kroppsmassa utan att dess näring bokförs. När djuret dör beräknas kadavrets näringsinnehåll ur dess strukturandel — och eftersom fauna har låg struktur (0,25) mot floras höga (0,56) bär kadavret 1,6 gånger mer näring per kilo än vad som åts. Näring skapas alltså vid varje dödsfall.
+Den dominerande mekanismen var att materialet aldrig bokfördes. `growth_E_per_kg = 10 000 J/kg` är ett medvetet val och inget dimensionsfel — byggkostnaden är syntesarbetet, inte den lagrade energin, precis som kommentaren vid `gestation_E_per_kg` säger. Men utan ett materialkrav byggde tillväxten vävnad ur enbart det arbetet, och `growth_rate_per_s = 0,008` mot `eat_rate = 1e-4` lät massan skapas åttio gånger snabbare än den maximalt kunde ätas.
 
-Den tidigare uppmätta driften på 0,15 % över 6000 tick var missvisande: läckan är proportionell mot faunans dödlighet, inte mot tiden.
+Vad som gjordes:
 
-**Ett andra hål i samma bokföring.** `_excrete()` räknar assimilerad andel som `(1 − struktur) × matsmältningsverkningsgrad`, men den upptagna energin multipliceras dessutom med dietverkningsgraden `herb_eff`/`scav_eff`. En generalist på `diet = 0,5` har `herb_eff = 0,62`, så 38 % av den påstått assimilerade massan försvinner utan att bli vare sig kropp eller exkrement. Dietverkningsgraden hör till assimilationsandelen, inte till en separat energimultiplikator.
+- **Assimilationen på ett ställe.** `phenotype.assimilated_fraction(struktur, dietverkningsgrad)` är den enda definitionen, och den verkar på massan: `(1 − struktur) × matsmältning × diet`. `_perform_feeding()` avgör upptaget och exkreterar resten; `Body.step()` får den upptagna massan färdig. Dietverkningsgraden är därmed inte längre en separat multiplikator på energin — det var hålet som lät 38 % av en generalists föda bli varken kropp eller exkrement. Energimängden är oförändrad, exkretionen ökar.
+- **Materialet är 1:1.** Tillväxt och gestation drar ett kilo reservmassa per byggt kilo vävnad, och syntesarbetet ovanpå. De två är termer, inte alternativ. Byggkostnadens kalibrering är därmed orörd; det är materialkravet som tillkommit.
+- **Förbränningen utsöndrar.** `take_energy()` bokför den brända massans näring; kolet lämnar modellen som koldioxid. `take_energy(..., burn=False)` används när massan i stället överförs till en avkomma. Vid syntes utsöndras skillnaden mellan reservens labila näringsinnehåll och vävnadens, eftersom strukturmaterial binder mindre per kilo.
+- **Katabolismen följer strukturen.** `Body._catabolize()` mobiliserar bara den labila fraktionen och exkreterar resten. Vid `s = 0,25` ger det samma energiutbyte som konstanten `E_body_J_per_kg`, vilket inte är en slump: 7,0e6 ≈ 9,302e6 · (1 − 0,25). Utbytet följer nu individens egen sammansättning.
+- **Kadavret.** `M + reserv + eventuellt foster`, med massviktad strukturandel. Divisionen med `(1 − struktur)` är borta — det var den som skalade upp reserven till kadaverekvivalenter.
+- **`Body` bokför, passet placerar.** Kroppen har ingen världsreferens och har inte fått en. Den ackumulerar `out_excreta_kg`, `out_excreta_struct_kg` och `out_nutrient_kg`, som `_flush_body_outputs()` tömmer till rätt cell efter body-passet, vid död och efter födsel.
 
-**Lösningen** är att reserven flyttar in i kroppsmassan: ätande ökar massan, förbränning minskar den, och den förbrända massans näring utsöndras till cellen som kvävehaltigt avfall. Assimilationsandelen blir `(1 − struktur) × matsmältning × diet`, och resten exkreteras. `M_fast`/`M_slow` bär redan massaenheter sedan patch 0037; det som återstår är att koppla dem till `M` och sluta näringsflödet.
+**Uppmätt efter stängningen.** Näringsbalansen sluter sig till 1,4e-08 till 2,3e-07 relativt över 8 000 tick i seed 1, 2 och 3; energiledgern har 0 av 72 000 steg utanför tolerans med `max_rel` 6,4e-16. Faunan går från tolv till nio individer och stabiliseras där, floran stiger från 128 till omkring 150. `python run_headless.py --ticks 12000 --check-every 500` kör grönt.
 
-Först därefter kan `nutrient_balance()` bli hård invariant, och först därefter är kalibreringen meningsfull — varje parameter man justerar mäts annars mot en pool som fylls på av en bugg.
+**Kvarvarande gap i just den här delen:**
+
+- Toleransen i `check_nutrient_balance()` är 1e-6 relativt, inte planens 1e-9. `detritus` och `detritus_structure` flyttades till float64 i samma patch, men **det var inte golvet** — driften låg kvar på ~1e-7. Bisektion per pass lokaliserar restposten till `_growth_system_flora` (systematiskt +1,1e-11 per tick) och `_dispersal_system_flora` (enstaka händelser kring 8e-9). Ackumulationen är linjär i tid: ~2,4e-12 absolut per tick, alltså omkring 1e-6 relativt vid 10⁵ tick. **Det betyder att långa körningar kan slå i toleransen.** Rätt plats att åtgärda är Steg 5, där båda passen ändå skrivs om som vektoriserade arraypass och aritmetiken byter form. Ett försök att korrigera float32-avrundningen i skrivningen till store:n gjorde driften konsekvent sämre och är återställt.
+- Överskott över `E_cap` exkreteras i stället för att begränsa intaget vid källan. Biologiskt sämre, men födosöket är faunans mest kalibrerade beteende och ska inte röras i samma svep. Flyttas när kalibreringen är stabil.
+- `anabolism_eff = 0,70` är fortsatt död kod. Materialutbytet vid syntes är 1,0. Att aktivera den nu lägger en broms till på en fauna som redan har smal marginal; den kan införas när svältmarginalen är mätt.
+
+### Vad kalibreringen ska sikta på
+
+Efter stängningen stannar faunan på nio individer i seed 1. Det talet är **inte** ett flödesjämviktstal. Uppmätt över 12 000 tick: tolv unika individer totalt, alltså enbart den warm-startade kohorten, tre dödsfall och **noll födslar**. De nio är samma nio.
+
+Att öka födobasen är därför inte den första åtgärden. Fysiologin är inte grinden: `reproduktion.py` visar att **67 % av alla agenttick är reproduktionsklara**. Av dem faller 91 % på att agenten inte har någon giltig sensingträff alls — den ser ingen — och ytterligare 3 % på att den den ser ligger utanför `mating_radius`. Det är mötesfrekvensen som binder, inte energin.
+
+Bekräftat genom täthet, seed 1:
+
+```
+värld      agenter   täthet/1000 celler   ser ingen   utanför radie   parningar
+64×256          12                 0,67       91,2 %           3,3 %      2/4000 tick
+64×64           12                 1,95       90,8 %           8,8 %      4/4000 tick
+64×64           60                 9,03       57,5 %          16,0 %     25/2000 tick
+```
+
+Parningsfrekvensen stiger ungefär tjugofemfaldigt med fjortonfaldig täthet, och andelen som inte ser någon faller från 91 till 58 %. Vid den högsta tätheten binder däremot födan i stället — faunan går från 60 till 37 på 2 000 tick.
+
+Det ger ordningen: **hitta först den täthet där mötesfrekvensen räcker, och kalibrera födobasen mot den tätheten.** Att skruva på `nutrient_input` och floras produktivitet vid 0,67 agenter per 1000 celler mäter något som ändå inte reproducerar sig. Kandidatreglagen är `init_pop` mot världsstorlek, `mating_radius` och `sense_radius` — och den sista hör till Steg 6a, vilket är ett argument för att ta 6a före den ekologiska finjusteringen.
+
+Anmärkning: mötesproblemet är inte skapat av näringsstängningen. Före den fanns också bara enstaka födslar; skillnaden är att faunan då bar sig själv på manufakturerad massa och därför inte behövde reproducera sig för att synas som stabil.
+
+**Verktyg:** `measure_leak.py` (faunans massaflöden, energiledgern, näringsbalansens drift), `reproduktion.py` (var reproduktionen fastnar, per utfall), `omsattning.py` (unika individer, dödsfall, ålder vid död — skiljer flödesjämvikt från stillastående kohort).
 
 **Kroppen har tre fraktioner, inte två.** `structure` beskriver *sammansättningen* och avgör näringsinnehåll och kadavrets egenskaper. `E_cap` beskriver hur mycket som är *fritt mobiliserbart*, och tillåter en reserv på 3,2 % av kroppsmassan. Kvoten mot den labila fraktionen på 75 % är 23 gånger, och båda är riktiga: strukturell vävnad mobiliseras aldrig, funktionell vävnad bara vid svält, reserven fritt. Den nuvarande tvåstegskatabolismen — först energilagren, sedan kroppsmassa ner till `M_min` — motsvarar reserv först och funktionell vävnad sedan, och är alltså biologiskt riktig snarare än godtycklig.
 
