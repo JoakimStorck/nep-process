@@ -560,6 +560,28 @@ class Population:
                 "flora_established": int(getattr(self, "_last_flora_established", 0)),
                 "flora_dispersed_mass": float(getattr(self, "_last_flora_dispersed_mass", 0.0)),
             })
+
+            # Näringskretsloppet. Näringen är modellens bevarade valuta och det
+            # som begränsar floran, men den fanns inte i loggen alls — det gick
+            # alltså inte att följa den utan att köra invariantsviten separat.
+            # Sveparna är O(celler + flora) och sker i world-loggens kadens,
+            # alltså tiotals tick isär.
+            fl = self._flora_slots()
+            det = np.asarray(self.world.detritus, dtype=np.float64)
+            det_s = np.asarray(self.world.detritus_structure, dtype=np.float64)
+            payload.update({
+                "nutrient_free": float(np.sum(self.world.nutrient, dtype=np.float64)),
+                "nutrient_in_flora": float(np.sum(
+                    self.store.mass[fl].astype(np.float64)
+                    * nutrient_content_array(self.store.structure[fl]),
+                    dtype=np.float64,
+                )) if fl.size else 0.0,
+                "nutrient_in_detritus": float(np.sum(
+                    det * nutrient_content_array(det_s), dtype=np.float64
+                )),
+                "nutrient_added": float(getattr(self.world, "_nutrient_added_total", 0.0)),
+                "nutrient_lost": float(getattr(self.world, "_nutrient_lost_total", 0.0)),
+            })
         self._emit("world", t, payload)
 
     def _emit_step_if_tracked(self, t: float, a: Agent, B0: float, C0: float) -> None:

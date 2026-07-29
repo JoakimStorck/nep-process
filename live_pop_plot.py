@@ -120,6 +120,22 @@ class PopSeries:
         ]:
             trim(xs)
 
+
+    def _reset_if_time_went_backwards(self, tt: float) -> bool:
+        """
+        En ny körning i samma fil visar sig som att tiden hoppar bakåt.
+
+        Serierna nollställs då i stället för att fortsätta, annars binder
+        matplotlib ihop sista punkten i den gamla körningen med första i den
+        nya och ritar en diagonal tvärs över hela bilden.
+        """
+        if not self.t or tt >= self.t[-1]:
+            return False
+        for val in self.__dict__.values():
+            if isinstance(val, list):
+                val.clear()
+        return True
+
     def append_population_event(self, obj: Dict[str, Any]) -> bool:
         if obj.get("event") != "population":
             return False
@@ -136,6 +152,8 @@ class PopSeries:
 
         births_tot = float(_get_first(s, "births", "births_total", default=float("nan")))
         deaths_tot = float(_get_first(s, "deaths", "deaths_total", default=float("nan")))
+
+        self._reset_if_time_went_backwards(tt)
 
         self.t.append(tt)
         self.pop.append(pp)

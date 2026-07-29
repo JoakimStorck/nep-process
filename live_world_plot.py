@@ -12,6 +12,7 @@ import queue
 import threading
 
 import numpy as np
+import matplotlib
 import matplotlib.pyplot as plt
 
 
@@ -55,108 +56,96 @@ def _f(d: Any, *path: str, default: float = float("nan")) -> float:
 
 @dataclass
 class WorldSeries:
-    # time
+    """
+    Serier för floran och näringskretsloppet.
+
+    Ritade tidigare `B` och `C`, alltså det kontinuerliga biomassfältet och
+    kadaverfältet. `B` ersattes av diskret flora i Fas 2 och `C` av `detritus`
+    i näringsstängningen, så panelerna visade fält som inte längre finns medan
+    hela florapayloaden i loggen låg oanvänd.
+    """
+
     t: List[float] = field(default_factory=list)
 
-    # means
-    B_mean: List[float] = field(default_factory=list)
-    C_mean: List[float] = field(default_factory=list)
+    # bestånd och massa
+    flora_n: List[float] = field(default_factory=list)
+    flora_mass: List[float] = field(default_factory=list)
+    detritus_mass: List[float] = field(default_factory=list)
+    established: List[float] = field(default_factory=list)
 
-    # totals
-    B_sum: List[float] = field(default_factory=list)
-    C_sum: List[float] = field(default_factory=list)
-    BC_sum: List[float] = field(default_factory=list)
+    # näringskretsloppet
+    nut_free: List[float] = field(default_factory=list)
+    nut_flora: List[float] = field(default_factory=list)
+    nut_detritus: List[float] = field(default_factory=list)
+    nut_added: List[float] = field(default_factory=list)
+    nut_lost: List[float] = field(default_factory=list)
 
-    # mix
-    carrion_share: List[float] = field(default_factory=list)
+    # traitmedelvärden — selektionens signal
+    growth_rate: List[float] = field(default_factory=list)
+    adult_mass: List[float] = field(default_factory=list)
+    dispersal_rate: List[float] = field(default_factory=list)
+    temp_opt: List[float] = field(default_factory=list)
+    temp_width: List[float] = field(default_factory=list)
 
-    # percentiles
-    B_p10: List[float] = field(default_factory=list)
-    B_p50: List[float] = field(default_factory=list)
-    B_p90: List[float] = field(default_factory=list)
+    window: int = 4000
 
-    C_p10: List[float] = field(default_factory=list)
-    C_p50: List[float] = field(default_factory=list)
-    C_p90: List[float] = field(default_factory=list)
-
-    window: int = 4000  # 0 => keep all
-
-    def reset(self) -> None:
-        self.t.clear()
-        self.B_mean.clear()
-        self.C_mean.clear()
-        self.B_sum.clear()
-        self.C_sum.clear()
-        self.BC_sum.clear()
-        self.carrion_share.clear()
-        self.B_p10.clear()
-        self.B_p50.clear()
-        self.B_p90.clear()
-        self.C_p10.clear()
-        self.C_p50.clear()
-        self.C_p90.clear()
+    _TRAITS = ("growth_rate", "adult_mass", "dispersal_rate", "temp_opt", "temp_width")
 
     def _trim(self) -> None:
         w = int(self.window)
         if w <= 0:
             return
-        n = len(self.t)
-        if n <= w:
-            return
-        sl = slice(n - w, n)
-        self.t[:] = self.t[sl]
-        self.B_mean[:] = self.B_mean[sl]
-        self.C_mean[:] = self.C_mean[sl]
-        self.B_sum[:] = self.B_sum[sl]
-        self.C_sum[:] = self.C_sum[sl]
-        self.BC_sum[:] = self.BC_sum[sl]
-        self.carrion_share[:] = self.carrion_share[sl]
-        self.B_p10[:] = self.B_p10[sl]
-        self.B_p50[:] = self.B_p50[sl]
-        self.B_p90[:] = self.B_p90[sl]
-        self.C_p10[:] = self.C_p10[sl]
-        self.C_p50[:] = self.C_p50[sl]
-        self.C_p90[:] = self.C_p90[sl]
+        for name, val in list(self.__dict__.items()):
+            if isinstance(val, list) and len(val) > w:
+                del val[: len(val) - w]
 
-    def append_summary(self, s: Dict[str, Any]) -> bool:
-        try:
-            tt = float(_f(s, "t", default=float("nan")))
-        except Exception:
+
+    def _reset_if_time_went_backwards(self, tt: float) -> bool:
+        """
+        En ny körning i samma fil visar sig som att tiden hoppar bakåt.
+
+        Serierna nollställs då i stället för att fortsätta, annars binder
+        matplotlib ihop sista punkten i den gamla körningen med första i den
+        nya och ritar en diagonal tvärs över hela bilden.
+        """
+        if not self.t or tt >= self.t[-1]:
+            return False
+        for val in self.__dict__.values():
+            if isinstance(val, list):
+                val.clear()
+        return True
+
+    def append_world_event(self, obj: Dict[str, Any]) -> bool:
+        if obj.get("event") != "world":
             return False
 
-        B_mean = _f(s, "B", "mean")
-        B_sum = _f(s, "B", "sum")
-        B_p10 = _f(s, "B", "p10")
-        B_p50 = _f(s, "B", "p50")
-        B_p90 = _f(s, "B", "p90")
+        # Florafälten ligger på toppnivå; `summary` bär fältstatistiken.
+        s = obj.get("summary")
+        tt = float(obj.get("t", (s or {}).get("t", float("nan")) if isinstance(s, dict) else float("nan")))
+        if not np.isfinite(tt):
+            return False
 
-        C_mean = _f(s, "C", "mean")
-        C_sum = _f(s, "C", "sum")
-        C_p10 = _f(s, "C", "p10")
-        C_p50 = _f(s, "C", "p50")
-        C_p90 = _f(s, "C", "p90")
+        self._reset_if_time_went_backwards(tt)
 
-        BC_sum = B_sum + C_sum
-        carrion_share = (C_sum / BC_sum) if np.isfinite(BC_sum) and BC_sum > 1e-12 else 0.0
+        g = lambda k: float(obj.get(k, float("nan")))  # noqa: E731
 
         self.t.append(tt)
+        self.flora_n.append(g("flora_n"))
+        self.flora_mass.append(g("flora_mass_store"))
+        self.detritus_mass.append(g("M_C"))
+        self.established.append(g("flora_established"))
 
-        self.B_mean.append(B_mean)
-        self.C_mean.append(C_mean)
+        self.nut_free.append(g("nutrient_free"))
+        self.nut_flora.append(g("nutrient_in_flora"))
+        self.nut_detritus.append(g("nutrient_in_detritus"))
+        self.nut_added.append(g("nutrient_added"))
+        self.nut_lost.append(g("nutrient_lost"))
 
-        self.B_sum.append(B_sum)
-        self.C_sum.append(C_sum)
-        self.BC_sum.append(BC_sum)
-
-        self.carrion_share.append(carrion_share)
-
-        self.B_p10.append(B_p10)
-        self.B_p50.append(B_p50)
-        self.B_p90.append(B_p90)
-
-        self.C_p10.append(C_p10)
-        self.C_p50.append(C_p50)
-        self.C_p90.append(C_p90)
+        self.growth_rate.append(g("flora_mean_growth_rate"))
+        self.adult_mass.append(g("flora_mean_adult_mass"))
+        self.dispersal_rate.append(g("flora_mean_dispersal_rate"))
+        self.temp_opt.append(g("flora_mean_temp_opt"))
+        self.temp_width.append(g("flora_mean_temp_width"))
 
         self._trim()
         return True
@@ -237,35 +226,24 @@ def _status(series: WorldSeries, *, size: int) -> str:
         return "no world events yet"
 
     i = -1
-    t = series.t[i]
-    cells = int(size) * int(size)
+    tot = series.nut_free[i] + series.nut_flora[i] + series.nut_detritus[i]
+    bal = series.nut_added[i] - series.nut_lost[i]
+    drift = (tot - bal) / bal if (np.isfinite(bal) and abs(bal) > 1e-12) else float("nan")
 
-    Bsum = series.B_sum[i]
-    Csum = series.C_sum[i]
-    BCsum = series.BC_sum[i]
-
-    Bmean = series.B_mean[i]
-    Cmean = series.C_mean[i]
-    carrion_share = series.carrion_share[i]
-
-    meanB_from_sum = (Bsum / cells) if (cells > 0 and np.isfinite(Bsum)) else float("nan")
-    meanC_from_sum = (Csum / cells) if (cells > 0 and np.isfinite(Csum)) else float("nan")
-
-    return "\n".join(
-        [
-            f"t={t:.2f}  n={len(series.t)}  cells={cells}",
-            f"B_sum={_fmt(Bsum,2)}  B_mean={_fmt(Bmean,6)}  B_sum/cells={_fmt(meanB_from_sum,6)}",
-            f"C_sum={_fmt(Csum,2)}  C_mean={_fmt(Cmean,6)}  C_sum/cells={_fmt(meanC_from_sum,6)}",
-            f"B+C={_fmt(BCsum,2)}  carrion_share={_fmt(carrion_share,4)}",
-        ]
-    )
+    return "\n".join([
+        f"t={series.t[i]:.1f}  n={len(series.t)}",
+        f"flora={_fmt(series.flora_n[i],0)}  massa={_fmt(series.flora_mass[i],2)} kg"
+        f"  detritus={_fmt(series.detritus_mass[i],3)} kg",
+        f"näring: fri={_fmt(series.nut_free[i],5)}  flora={_fmt(series.nut_flora[i],5)}"
+        f"  detritus={_fmt(series.nut_detritus[i],5)}",
+        f"drift={drift:.2e} rel   (fauna ingår ej i world-loggen)",
+    ])
 
 
 def run_ui_loop(fig, ax_pool, ax_mix, ax_dist, txt, series: WorldSeries, args, Q: "queue.Queue[dict]"):
     last_redraw = 0.0
     redraw_min_dt = float(args.redraw_min_dt)
     max_items_per_tick = int(args.max_items_per_tick)
-    show_percentiles = not bool(args.no_percentiles)
 
     def redraw() -> None:
         ax_pool.clear()
@@ -273,88 +251,83 @@ def run_ui_loop(fig, ax_pool, ax_mix, ax_dist, txt, series: WorldSeries, args, Q
         ax_dist.clear()
 
         if not series.t:
-            ax_pool.set_title("World (waiting for events)")
-            txt.set_text(_status(series, size=int(args.size)))
+            ax_pool.set_title("Flora (waiting for events)")
             fig.canvas.draw_idle()
             return
 
         t = series.t
 
-        # Panel 1: resource pools
-        ax_pool.plot(t, series.B_sum, label="B_sum")
-        ax_pool.plot(t, series.C_sum, label="C_sum")
-        ax_pool.plot(t, series.BC_sum, label="B_sum + C_sum", linestyle="--")
-        ax_pool.set_ylabel("total mass")
-        ax_pool.set_title("World resource pools")
+        # Panel 1: bestånd och massa. Antal och massa har olika skala och
+        # rör sig olika — antalet kan stiga medan massan står still, vilket
+        # betyder att beståndet fylls med groddplantor.
+        ax_pool.plot(t, series.flora_n, label="antal individer", linewidth=2.2, color="tab:green")
+        ax_pool.set_ylabel("antal")
+        ax_pool.set_title("Floran: bestånd och massa")
         ax_pool.legend(loc="upper left", fontsize="small")
 
-        # Panel 2: ecological mix
-        ax_mix.plot(t, series.carrion_share, label="carrion_share = C / (B + C)")
-        ax_mix.set_ylabel("share")
-        ax_mix.set_ylim(0.0, 1.0)
-        ax_mix.set_title("Ecological mix")
-        ax_mix.legend(loc="upper left", fontsize="small")
+        ax_mass = ax_pool.twinx()
+        ax_mass.plot(t, series.flora_mass, label="floramassa kg", color="tab:olive", linestyle="--")
+        ax_mass.plot(t, series.detritus_mass, label="detritus kg", color="tab:brown", linestyle=":")
+        ax_mass.set_ylabel("kg")
+        ax_mass.legend(loc="upper right", fontsize="small")
 
-        # Panel 3: field distributions / means
-        ax_dist.plot(t, series.B_mean, label="B_mean")
-        ax_dist.plot(t, series.C_mean, label="C_mean")
+        # Panel 2: näringskretsloppet. Summan ska följa tillfört minus
+        # förlorat — avvikelsen är bokföringens drift.
+        ax_mix.stackplot(
+            t,
+            series.nut_free, series.nut_flora, series.nut_detritus,
+            labels=["fri", "i flora", "i detritus"],
+            colors=["tab:blue", "tab:green", "tab:brown"],
+            alpha=0.75,
+        )
+        ax_mix.set_ylabel("näring (kg)")
+        ax_mix.set_title("Näringskretsloppet")
+        ax_mix.legend(loc="upper left", fontsize="small", ncol=3)
 
-        if show_percentiles:
-            ax_dist.plot(t, series.B_p10, linestyle=":", label="B_p10")
-            ax_dist.plot(t, series.B_p50, linestyle=":", label="B_p50")
-            ax_dist.plot(t, series.B_p90, linestyle=":", label="B_p90")
-            ax_dist.plot(t, series.C_p10, linestyle="--", label="C_p10")
-            ax_dist.plot(t, series.C_p50, linestyle="--", label="C_p50")
-            ax_dist.plot(t, series.C_p90, linestyle="--", label="C_p90")
+        # Panel 3: traitmedelvärden, normerade mot sitt första värde.
+        # Absolutvärdena har olika enheter och skala; det intressanta är
+        # driften, alltså om selektionen flyttar fördelningen.
+        for name, label, style in (
+            ("growth_rate", "tillväxttakt", "-"),
+            ("adult_mass", "vuxenmassa", "-"),
+            ("dispersal_rate", "spridningstakt", "--"),
+            ("temp_opt", "temp_opt", ":"),
+            ("temp_width", "temp_bredd", ":"),
+        ):
+            v = np.asarray(getattr(series, name), dtype=float)
+            base = next((x for x in v if np.isfinite(x) and abs(x) > 1e-12), float("nan"))
+            if np.isfinite(base):
+                ax_dist.plot(t, v / base, label=label, linestyle=style)
 
-        ax_dist.set_ylabel("density")
+        ax_dist.axhline(1.0, color="0.7", linewidth=0.8)
+        ax_dist.set_ylabel("relativt startvärde")
         ax_dist.set_xlabel("t")
-        ax_dist.set_title("Field means and percentiles")
-        ax_dist.legend(loc="upper left", fontsize="small", ncol=2)
+        ax_dist.set_title("Floras traitmedelvärden — selektionens drift")
+        ax_dist.legend(loc="upper left", fontsize="small", ncol=3)
 
         txt.set_text(_status(series, size=int(args.size)))
-        fig.suptitle(f"Live world plot ({args.fp})")
         fig.canvas.draw_idle()
 
     def on_timer() -> None:
         nonlocal last_redraw
-
         changed = False
-        batch_done = False
-        did_reset = False
-
-        for _ in range(max_items_per_tick):
+        n = 0
+        while n < max_items_per_tick:
             try:
                 obj = Q.get_nowait()
             except queue.Empty:
                 break
-
-            if obj.get("_event") == "reset":
-                series.reset()
-                did_reset = True
-                continue
-            if obj.get("_event") == "batch_done":
-                batch_done = True
-                continue
-
-            s = _get_world_summary(obj)
-            if s is None:
-                continue
-
-            if series.append_summary(s):
+            n += 1
+            if series.append_world_event(obj):
                 changed = True
 
         now = time.time()
-        if did_reset or batch_done:
-            redraw()
-            last_redraw = now
-            return
-
         if changed and (now - last_redraw) >= redraw_min_dt:
             redraw()
             last_redraw = now
 
     redraw()
+
     tmr = fig.canvas.new_timer(interval=int(args.timer_ms))
     tmr.add_callback(on_timer)
     tmr.start()
@@ -364,6 +337,16 @@ def run_ui_loop(fig, ax_pool, ax_mix, ax_dist, txt, series: WorldSeries, args, Q
 # ============================================================
 # Main
 # ============================================================
+
+def _backend_is_interactive(name: str) -> bool:
+    """Kan det här backendet öppna ett fönster?"""
+    try:  # matplotlib >= 3.9
+        from matplotlib.backends import backend_registry, BackendFilter
+        names = backend_registry.list_builtin(BackendFilter.INTERACTIVE)
+    except Exception:
+        names = getattr(matplotlib.rcsetup, "interactive_bk", [])
+    return str(name).lower() in {str(n).lower() for n in names}
+
 
 def main() -> None:
     ap = argparse.ArgumentParser()
@@ -376,7 +359,23 @@ def main() -> None:
     ap.add_argument("--timer_ms", type=int, default=50)
     ap.add_argument("--redraw_min_dt", type=float, default=0.20)
     ap.add_argument("--max_items_per_tick", type=int, default=5000)
+    ap.add_argument("--save", type=str, default=None,
+                    help="rita en gång ur befintlig fil och spara som bild i "
+                         "stället för att öppna fönster; fungerar utan GUI-backend")
     args = ap.parse_args()
+
+    backend = matplotlib.get_backend()
+    if not args.save and not _backend_is_interactive(backend):
+        print(
+            f"[live_world_plot] matplotlib använder backend '{backend}', som inte kan\n"
+            f"                  öppna fönster. Inget skulle visas.\n"
+            f"\n"
+            f"  Installera ett GUI-backend i din venv:   pip install PyQt5\n"
+            f"  Eller spara en bild i stället:            python live_world_plot.py --fp {args.fp} --save world.png\n",
+            file=sys.stderr,
+            flush=True,
+        )
+        sys.exit(1)
 
     fig = plt.figure(figsize=(10, 9))
     gs = fig.add_gridspec(3, 1, height_ratios=[3, 1.5, 2.5], hspace=0.22)
@@ -397,6 +396,26 @@ def main() -> None:
 
     series = WorldSeries(window=int(args.window))
     Q: "queue.Queue[dict]" = queue.Queue()
+
+    if args.save:
+        n = 0
+        try:
+            with open(str(args.fp), "r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    obj = _safe_load_json(line)
+                    if obj is not None and series.append_world_event(obj):
+                        n += 1
+        except FileNotFoundError:
+            print(f"[live_world_plot] hittar inte {args.fp}", file=sys.stderr, flush=True)
+            sys.exit(1)
+
+        run_ui_loop(fig, ax_pool, ax_mix, ax_dist, txt, series, args, Q)
+        fig.savefig(str(args.save), dpi=110, bbox_inches="tight")
+        print(f"[live_world_plot] {n} world-händelser -> {args.save}", flush=True)
+        return
 
     th = start_tail_thread(str(args.fp), Q, poll_s=float(args.poll))
     tmr = run_ui_loop(fig, ax_pool, ax_mix, ax_dist, txt, series, args, Q)

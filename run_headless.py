@@ -137,6 +137,10 @@ def parse_args() -> argparse.Namespace:
                     help="skriv pop.jsonl för live_pop_plot.py")
     ap.add_argument("--pop-every", type=float, default=1.0,
                     help="loggintervall i simulerade sekunder för --pop-log")
+    ap.add_argument("--world-log", type=str, default=None,
+                    help="skriv world.jsonl för live_world_plot.py (flora och näring)")
+    ap.add_argument("--world-every", type=float, default=2.0,
+                    help="loggintervall i simulerade sekunder för --world-log")
     return ap.parse_args()
 
 
@@ -237,25 +241,36 @@ def run(a: argparse.Namespace, seed: int | None = None) -> int:
         for k in _R:
             _R[k] = 0
 
-    if a.pop_log:
-        # Samma logg som run_population.py skriver, men utan pygame. Det gör
-        # live_pop_plot.py användbar mot en headless-körning.
+    # Samma loggar som run_population.py skriver, men utan pygame. Det gör
+    # live_pop_plot.py och live_world_plot.py användbara mot en
+    # headless-körning.
+    writers = []
+    observers = []
+    if a.pop_log or a.world_log:
         from simlog.jsonl import JsonlWriter
         from simlog.sinks import EventHub
-        from simlog.observers import PopLogger
+        from simlog.observers import PopLogger, WorldLogger
 
-        writer = JsonlWriter(str(a.pop_log), flush_every=1)
-        writer.__enter__()
-        hub = EventHub([PopLogger(w=writer, every_s=float(a.pop_every))])
+        if a.pop_log:
+            w = JsonlWriter(str(a.pop_log), flush_every=1)
+            w.__enter__()
+            writers.append(w)
+            observers.append(PopLogger(w=w, every_s=float(a.pop_every)))
+        if a.world_log:
+            w = JsonlWriter(str(a.world_log), flush_every=1)
+            w.__enter__()
+            writers.append(w)
+            observers.append(WorldLogger(w=w, every_s=float(a.world_every)))
+
+        hub = EventHub(observers)
     else:
-        writer = None
         hub = None
 
     try:
         return _run_inner(a, seed, hub)
     finally:
-        if writer is not None:
-            writer.__exit__(None, None, None)
+        for w in writers:
+            w.__exit__(None, None, None)
 
 
 def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:

@@ -10,12 +10,24 @@ from typing import Any, Dict, Optional, TextIO
 class JsonlWriter:
     fp: str
     flush_every: int = 1  # 1 = flush varje rad (bra för tail -f), höj till 10/50 för mindre overhead
+
+    # "w" trunkerar, "a" lägger till. Trunkering är rätt förval: varje körning
+    # äger sin logg.
+    #
+    # Läget var tidigare "a", vilket staplade körningar i samma fil utan att
+    # någon märkte det. Plottrarna ritar i filordning, så tiden gick 0 -> T,
+    # hoppade tillbaka till 0 och gick 0 -> T igen — en z-form där diagonalen
+    # bara är matplotlib som binder ihop sista punkten i en körning med första
+    # i nästa. Värre var att traitnormeringen tog sin bas ur den äldsta raden i
+    # filen, som kunde komma från en helt annan parameteruppsättning.
+    mode: str = "w"
+
     _f: Optional[TextIO] = None
     _n: int = 0
 
     def __enter__(self) -> "JsonlWriter":
         # line-buffered (buffering=1) hjälper vid tail -f
-        self._f = open(self.fp, "a", encoding="utf-8", buffering=1)
+        self._f = open(self.fp, str(self.mode), encoding="utf-8", buffering=1)
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
