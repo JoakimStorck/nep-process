@@ -89,6 +89,13 @@ def _stats_1d(x: np.ndarray) -> dict[str, float]:
 class PopParams:
     init_pop: int = 12
     max_pop: int = 500
+    # Initial floramassa som multipel av faunans initiala massa. En ekologi
+    # har mer primärproduktion än konsumenter; modellen hade förhållandet
+    # omvänt med faktor 138. Talet sätter utgångsläget, inte jämvikten —
+    # om dynamiken inte bär det faller floran tillbaka, och då är det den
+    # dynamiken som ska rättas.
+    flora_init_mass_ratio: float = 10.0
+
     flora_mortality: float = 2.0e-5   # höjt — naturlig matbrist sätter taket nu, inte detta
     # Hur mycket dödsrisken förhöjs för en individ vid noll massa jämfört med
     # vuxenstorlek. Groddplantor som inte får näring ska försvinna.
@@ -340,8 +347,12 @@ class Population:
             self._emit_birth(self.t, a, parent=None)
             self.agents.append(a)
 
+        fauna_mass0 = float(sum(
+            float(x.body.M) + x.body.M_reserve()
+            for x in self.agents if x.body.alive
+        ))
         _ = self._seed_initial_flora(
-            n_flora=max(16, int(self.PP.max_pop) // 2),
+            target_mass=float(self.PP.flora_init_mass_ratio) * fauna_mass0,
         )
         self.store.rebuild_spatial_index()
 
@@ -1081,38 +1092,60 @@ class Population:
     def _seed_initial_flora(
         self,
         n_flora: int | None = None,
+        target_mass: float | None = None,
         init_mass_frac_lo: float = 0.4,
         init_mass_frac_hi: float = 1.0,
     ) -> int:
         """
-        Skapa initial diskret flora direkt i OrganismStore, utan world.B som mellanlager.
+        Skapa initial diskret flora direkt i OrganismStore.
+
+        Med `target_mass` sås individer tills den totala floramassan nås, i
+        stället för till ett fast antal. Det gör utgångsläget till en
+        ekologisk storhet — primärproduktion relativt konsumenter — och håller
+        det invariant när `B_K` eller `init_pop` ändras. Antalet faller ut ur
+        massaskalan i stället för att sättas separat.
         """
         n_cells = int(self.grid.n_cells)
         BK = float(self.WP.B_K)
         if BK <= 0.0:
             return 0
-    
-        if n_flora is None:
+
+        if target_mass is not None:
+            want = max(0.0, float(target_mass))
+            mean_seed = BK * 0.5 * (float(init_mass_frac_lo) + float(init_mass_frac_hi))
+            n_flora = int(math.ceil(want / max(mean_seed, 1e-12))) if mean_seed > 0.0 else 0
+        elif n_flora is None:
             n_flora = max(16, int(self.PP.max_pop) // 2)
+
         n_flora = max(0, min(int(n_flora), n_cells))
-    
+        if n_flora <= 0:
+            return 0
+
         cells = self.rng.choice(n_cells, size=n_flora, replace=False)
-    
+
         created = 0
+        placed = 0.0
         for cell in cells:
             self._ensure_store_capacity(1)
             slot = self.store.alloc_slot()
-    
+
             traits = init_organism_traits(
                 self.rng,
                 int(self.PP.n_traits),
                 mode="flora",
             )
-    
+
             mass = BK * float(self.rng.uniform(init_mass_frac_lo, init_mass_frac_hi))
             self._init_flora_slot(int(slot), int(cell), float(mass), traits)
             created += 1
-    
+            placed += mass
+
+        if target_mass is not None and placed < float(target_mass) * 0.999:
+            # Cellrymden räckte inte. Tyst avvikelse här vore ett dolt
+            # designfel; hellre en synlig anmärkning.
+            print(f"[flora] sådd nådde {placed:.3f} kg av begärda "
+                  f"{float(target_mass):.3f} kg — cellrymden ({n_cells}) räckte inte")
+
         return created
         
             
@@ -1183,10 +1216,11 @@ class Population:
         cell: int,
         add_mass: float,
         traits: np.ndarray | None = None,
-    ) -> bool:
+    ) -> int:
+        """Returnerar den nya individens slot, eller -1 om den inte kunde skapas."""
         dm = float(add_mass)
         if not math.isfinite(dm) or dm <= 0.0:
-            return False
+            return -1
 
         # Varje frö blir en egen individ, även om cellen redan är bebodd.
         #
@@ -1203,7 +1237,7 @@ class Population:
         try:
             slot = self.store.alloc_slot()
         except RuntimeError:
-            return False
+            return -1
 
         if traits is None:
             traits = init_organism_traits(
@@ -1214,7 +1248,7 @@ class Population:
 
         self._init_flora_slot(slot, int(cell), dm, traits)
         self._flora_summary_cache = None
-        return True
+        return int(slot)
 
     def _growth_system_flora(self) -> tuple[float, float, float]:
         """
@@ -1289,6 +1323,12 @@ class Population:
                 continue
 
             dm_want = regen * dt * m * (1.0 - m / m_cap) * gate
+            # Taket mot vuxenmassan måste tillämpas före upptaget, inte efter.
+            # Låg det efter drogs näringen för en tillväxt som sedan kapades,
+            # och skillnaden försvann ur bokföringen. Felet var proportionellt
+            # mot hur nära vuxenmassan individerna låg och blev synligt först
+            # när floran fick en massaskala där de faktiskt når dit.
+            dm_want = min(dm_want, m_cap - m)
             if dm_want <= 0.0:
                 continue
 
@@ -1300,16 +1340,31 @@ class Population:
             if got <= 0.0:
                 continue
 
-            dm = got / max(cost_per_kg, 1e-12)
-            new_m = min(m + dm, m_cap)
-            dm = new_m - m
+            # Store:n lagrar massa i float32 medan upptaget räknas i float64.
+            # Avrundningen görs alltid nedåt: rundar den uppåt binder massan
+            # mer näring än som betalats, och cellen är ofta redan tömd av
+            # just det här upptaget så skulden går inte att driva in.
+            # Nedåt är felet i stället alltid ett överskott som kan återföras.
+            target = m + got / max(cost_per_kg, 1e-12)
+            stored = np.float32(target)
+            if float(stored) > target:
+                stored = np.nextafter(stored, np.float32(0.0))
+
+            dm = float(stored) - m
             if dm <= 0.0:
+                world.add_nutrient(cell, got)
                 continue
 
-            self.store.mass[slot] = np.float32(new_m)
-            self.store.energy[slot] = np.float32(new_m * self._slot_energy_per_kg(slot))
+            self.store.mass[slot] = stored
+            used = dm * cost_per_kg
+            if got > used:
+                world.add_nutrient(cell, got - used)
+
+            self.store.energy[slot] = np.float32(
+                float(stored) * self._slot_energy_per_kg(slot)
+            )
             produced += dm
-            taken += got
+            taken += used
 
         if produced > 0.0 or died > 0.0:
             self._flora_summary_cache = None
@@ -1361,6 +1416,7 @@ class Population:
             radius = 1 if m_cap < 1.5 * float(self.WP.B_K) else 2
     
             m = float(self.store.mass[slot])
+            struct_par = float(self.store.structure[slot])
             if m < repro_threshold:
                 continue
             if m - seed_mass < min_parent_mass_after:
@@ -1389,15 +1445,45 @@ class Population:
                 p=0.10,
                 clip=2.5,
             )
-            ok = self._add_or_create_flora_in_cell(target, seed_mass, traits=child_traits)
-            if not ok:
+            child_slot = self._add_or_create_flora_in_cell(target, seed_mass, traits=child_traits)
+            if child_slot < 0:
                 continue
-    
+
             # Betala från moderorganismen
             new_m = m - seed_mass
             self.store.mass[slot] = np.float32(new_m)
             self.store.energy[slot] = np.float32(max(0.0, new_m * self._slot_energy_per_kg(slot)))
-    
+
+            # Näringen balanseras mot cellen. Fröet ärver muterad struktur, så
+            # dess näringsinnehåll per kilo är inte moderns: ett kilo seg
+            # vävnad binder en bråkdel av vad ett kilo labil gör. Utan den här
+            # avräkningen skapas eller förstörs näring vid varje spridning, och
+            # felet skalar med spridningsaktiviteten — det var det som brast när
+            # floran blev femton gånger talrikare. Att räkna ur de faktiskt
+            # lagrade massorna tar samtidigt bort float32-avrundningen.
+            nut_par = (m - float(self.store.mass[slot])) * nutrient_content(struct_par)
+            nut_chi = float(self.store.mass[child_slot]) * nutrient_content(
+                float(self.store.structure[child_slot])
+            )
+            d_nut = nut_par - nut_chi
+            if d_nut > 0.0:
+                self.world.add_nutrient(target, d_nut)
+            elif d_nut < 0.0:
+                got_n = self.world.take_nutrient(target, -d_nut)
+                if got_n < -d_nut:
+                    # Cellen kunde inte betala. Krymp fröet så att bunden
+                    # näring svarar mot vad som faktiskt fanns.
+                    deficit = -d_nut - got_n
+                    nc_chi = max(1e-12, nutrient_content(float(self.store.structure[child_slot])))
+                    shrink = min(float(self.store.mass[child_slot]), deficit / nc_chi)
+                    self.store.mass[child_slot] = np.float32(
+                        float(self.store.mass[child_slot]) - shrink
+                    )
+                    self.store.energy[child_slot] = np.float32(max(
+                        0.0,
+                        float(self.store.mass[child_slot]) * self._slot_energy_per_kg(child_slot),
+                    ))
+
             established += 1
             dispersed_mass += seed_mass
     

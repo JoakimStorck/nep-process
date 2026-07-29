@@ -48,8 +48,15 @@ class WorldParams:
     size: int = 0      # bekvämlighet för kvadratiska världar; sätter båda
     dt: float = 0.02
 
-    # Flora mass scale used by Population for normalization / initialization
-    B_K: float = 5e-4
+    # Florans massaskala. En vuxen planta väger B_K gånger sin genetiska
+    # adult_mass_k, alltså 0,25–4 gånger detta tal.
+    #
+    # Var 5e-4, vilket gjorde en vuxen planta till en halv gram mot faunans
+    # kilo. Följden var att konsumentbiomassan blev 138 gånger
+    # primärproduktionen — förhållandet omvänt mot hur en ekologi ser ut.
+    # Ingen kalibrering av näringstillförsel eller täthet rättar en sådan
+    # inversion; det är massaskalan som är fel.
+    B_K: float = 5e-2
 
     # -------------------------
     # Temperature / seasons
@@ -100,7 +107,15 @@ class WorldParams:
     # blir den vittring som funktion av höjd, och utsköljning under havsnivå.
     nutrient_input: float = 2.0e-10
     # Maximalt näringsupptag per tick vid uptake_capacity = 1.
-    uptake_rate_max: float = 5.0e-5
+    # Upptagstak per individ och sekund, uttryckt relativt massaskalan.
+    # Ett absolut tal skulle bli hundrafalt hårdare bundet när B_K höjs och
+    # göra floran upptagsbegränsad i stället för näringsbegränsad.
+    uptake_rate_max_per_BK: float = 0.10
+
+    @property
+    def uptake_rate_max(self) -> float:
+        """Upptagstak i kg näring per individ och sekund."""
+        return float(self.uptake_rate_max_per_BK) * float(self.B_K)
     # Diffusionstakt för löst näring. Explicit schema: D*dt måste hållas under
     # ett för stabilitet, och laplacianen är normerad med grannantalet.
     nutrient_diffusion: float = 0.20

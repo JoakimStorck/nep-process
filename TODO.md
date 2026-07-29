@@ -414,11 +414,30 @@ Vad som gjordes:
 - Överskott över `E_cap` exkreteras i stället för att begränsa intaget vid källan. Biologiskt sämre, men födosöket är faunans mest kalibrerade beteende och ska inte röras i samma svep. Flyttas när kalibreringen är stabil.
 - `anabolism_eff = 0,70` är fortsatt död kod. Materialutbytet vid syntes är 1,0. Att aktivera den nu lägger en broms till på en fauna som redan har smal marginal; den kan införas när svältmarginalen är mätt.
 
+### Massaskalan — designfel, rättat
+
+Svepet över täthet och näringstillförsel hittade något annat än det letade efter. Uppmätt vid den gamla skalan: **konsumentbiomassan var 138 gånger primärproduktionen** — 6,68 kg fauna mot 0,048 kg flora, med flora på 0,86 % av cellerna. Förhållandet är omvänt mot varje verklig ekologi, och ingen kalibrering av täthet eller näringstillförsel rättar en inversion i den storleksordningen. Hundrafaldigad `nutrient_input` flyttade floran från 0,048 till 0,075 kg: floran var inte näringsbegränsad utan begränsad av sin egen massaskala.
+
+`B_K` var 5e-4, vilket gjorde en vuxen planta till en halv gram mot faunans kilo. Den är nu 5e-2, och florans sådd är massastyrd i stället för antalsstyrd: `PopParams.flora_init_mass_ratio = 10.0` sår tills floran väger tio gånger faunans initiala massa. Antalet faller ut ur skalan i stället för att sättas separat, och utgångsläget förblir invariant när `B_K` eller `init_pop` ändras. `uptake_rate_max` uttrycks relativt `B_K` — ett absolut tak hade blivit hundrafalt hårdare bundet vid höjningen.
+
+Utfall vid 64×256: 2 150 floraindivider, 73,5 kg flora mot 7,36 kg fauna, stabilt över 3 000 tick. **Dödsfallen går till noll** — svälttrycket är borta.
+
+**Två latenta fel blev synliga först vid rätt skala**, båda i näringsbokföringen:
+
+- `_growth_system_flora` drog näring *före* att massan kapades mot vuxenmassan. Det som trunkerades var redan taget ur cellen. Felet var proportionellt mot hur nära vuxenmassan individerna låg, och vid den gamla skalan kom de aldrig dit.
+- `_dispersal_system_flora` flyttade massa från moder till frö utan att avräkna att fröet ärver *muterad* struktur. Ett kilo seg vävnad binder en bråkdel av vad ett kilo labil gör, så näring skapades eller förstördes vid varje spridning, proportionellt mot spridningsaktiviteten.
+
+Dessutom avrundas florans massa nu alltid nedåt vid skrivningen till store:n. Rundar den uppåt binder massan mer näring än som betalats, och cellen är ofta redan tömd av just det upptaget så skulden inte går att driva in; nedåt är felet i stället alltid ett överskott som kan återföras.
+
+Näringsdriften faller därmed från 2,7e-06 till 4,9e-09 relativt mätt per pass. Restposten ligger nu i fauna­passen och är omkring 2e-11 per tick.
+
+**Kostnaden är prestanda.** 34 ms/tick vid 2 200 flora mot 5,5 ms vid 150. Det är Steg 5:s argument i konkret form: nästa ekologiska experiment är redan begränsat av florapassens per-individ-kostnad.
+
 ### Vad kalibreringen ska sikta på
 
 Efter stängningen stannar faunan på nio individer i seed 1. Det talet är **inte** ett flödesjämviktstal. Uppmätt över 12 000 tick: tolv unika individer totalt, alltså enbart den warm-startade kohorten, tre dödsfall och **noll födslar**. De nio är samma nio.
 
-Att öka födobasen är därför inte den första åtgärden. Fysiologin är inte grinden: `reproduktion.py` visar att **67 % av alla agenttick är reproduktionsklara**. Av dem faller 91 % på att agenten inte har någon giltig sensingträff alls — den ser ingen — och ytterligare 3 % på att den den ser ligger utanför `mating_radius`. Det är mötesfrekvensen som binder, inte energin.
+Efter att massaskalan rättats är svälttrycket borta — noll dödsfall över 4 000 tick — men födslarna är fortfarande noll, och nu av en enda anledning. Fysiologin är inte grinden: `reproduktion.py` visar att **67 % av alla agenttick är reproduktionsklara**. Av dem faller 91 % på att agenten inte har någon giltig sensingträff alls — den ser ingen — och ytterligare 3 % på att den den ser ligger utanför `mating_radius`. Det är mötesfrekvensen som binder, inte energin.
 
 Bekräftat genom täthet, seed 1:
 
@@ -432,6 +451,8 @@ värld      agenter   täthet/1000 celler   ser ingen   utanför radie   parning
 Parningsfrekvensen stiger ungefär tjugofemfaldigt med fjortonfaldig täthet, och andelen som inte ser någon faller från 91 till 58 %. Vid den högsta tätheten binder däremot födan i stället — faunan går från 60 till 37 på 2 000 tick.
 
 Det ger ordningen: **hitta först den täthet där mötesfrekvensen räcker, och kalibrera födobasen mot den tätheten.** Att skruva på `nutrient_input` och floras produktivitet vid 0,67 agenter per 1000 celler mäter något som ändå inte reproducerar sig. Kandidatreglagen är `init_pop` mot världsstorlek, `mating_radius` och `sense_radius` — och den sista hör till Steg 6a, vilket är ett argument för att ta 6a före den ekologiska finjusteringen.
+
+Med rätt massaskala står alltså Allee-effekten kvar ensam som blockerare: agenterna är mätta, reproduktionsklara och hittar inte varandra. Det gör `sense_radius` till nästa verkliga reglage, alltså Steg 6a.
 
 Anmärkning: mötesproblemet är inte skapat av näringsstängningen. Före den fanns också bara enstaka födslar; skillnaden är att faunan då bar sig själv på manufakturerad massa och därför inte behövde reproducera sig för att synas som stabil.
 
