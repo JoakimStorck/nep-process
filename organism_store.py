@@ -175,7 +175,7 @@ class OrganismStore:
     flora_temp_opt: np.ndarray = field(init=False)
     flora_temp_width: np.ndarray = field(init=False)
     flora_apparatus: np.ndarray = field(init=False)
-    flora_seed_mass: np.ndarray = field(init=False)    
+    flora_seed_mass: np.ndarray = field(init=False)
 
     # Tillfällig migrationsflagga: 0=djur/nuvarande agent, 1=flora
     kind: np.ndarray = field(init=False)
@@ -234,7 +234,7 @@ class OrganismStore:
         self.flora_temp_opt = np.zeros(cap, dtype=np.float32)
         self.flora_temp_width = np.zeros(cap, dtype=np.float32)
         self.flora_apparatus = np.zeros(cap, dtype=np.float32)
-        self.flora_seed_mass = np.zeros(cap, dtype=np.float32)        
+        self.flora_seed_mass = np.zeros(cap, dtype=np.float32)
 
         self.kind = np.zeros(cap, dtype=np.int8)
 

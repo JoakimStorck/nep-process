@@ -331,6 +331,17 @@ Tre saker återstår att döma, och de kräver längre körningar än sandlådan
 
 **Döms inte här:** spridningen i vuxenmassa. Utan ljus är näringskonkurrensen symmetrisk, alla i en cell växer med samma relativa takt, och byggkostnaden i näring gynnar dessutom seg vävnad sexfaldigt. Storleksaxeln mäts men får ingen dom förrän ljuset finns.
 
+## Steg 4c — Instrumentering av växtcykeln
+
+*Litet, men förutsättningen för att 4b ska gå att döma. Tre av dess utfall kunde bara mätas med engångsprobar.*
+
+- ~~Strukturandel, täthet och fröaxel i world-loggen.~~ **Klart** — `flora_mean_structure`, `flora_mean_seed_mass`, `flora_mean_apparatus`, `flora_per_cell`, `flora_cells_occupied`, `flora_reserve_total`, `flora_pool_total`.
+- ~~Flöden och dödsorsaker.~~ **Klart** — `flora_shed`, `flora_died_age`, `flora_died_starve`, `flora_seeds`. Förnafallet syntes tidigare bara indirekt som att detritus växte, och dödsorsakerna inte alls.
+- ~~Fjärde panelen i `live_world_plot.py`.~~ **Klart** — täthet, dödsorsak och förnafall. Panel tre visar nu allokering, frömassa och strukturandel med rätta etiketter; den sa fortfarande "tillväxttakt" och "spridningstakt" om loci som bytt jobb.
+- ~~Världsparametrar på kommandoraden.~~ **Klart** — `--nutrient-init`, `--nutrient-input`, `--nutrient-loss-frac`, `--uptake-rate`. Bördigheten är ett härlett tal, men härledningen går inte att pröva utan att kunna variera den.
+
+**Bördighetstestet** är nu körbart och är den viktigaste enskilda mätningen i planen: `--nutrient-init 0.64` mot standardens 0,32 ska ge omkring dubbel stående biomassa medan dynamikens *form* är oförändrad. Håller det är taket ekologiskt; håller det inte sitter det någon annanstans.
+
 ## Steg 5 — Aktiva delmängder och vektoriserade florapass
 
 - ~~Delmängder byggs en gång per tick, immutabla under ticken.~~ **Klart** för `flora_slots` och `fauna_slots`. `sensing_slots` hör till Steg 6a, där `sense_rate` får en läsare.

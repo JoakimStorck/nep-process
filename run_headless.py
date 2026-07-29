@@ -117,6 +117,14 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--init_pop", type=int, default=12)
     ap.add_argument("--max_pop", type=int, default=256)
 
+    ap.add_argument("--nutrient-init", type=float, default=None,
+                    help="WorldParams.nutrient_init, kg fri näring per cell — bördigheten")
+    ap.add_argument("--nutrient-input", type=float, default=None,
+                    help="WorldParams.nutrient_input, per cell och månad")
+    ap.add_argument("--nutrient-loss-frac", type=float, default=None,
+                    help="WorldParams.nutrient_loss_frac, andel som lämnar systemet vid nedbrytning")
+    ap.add_argument("--uptake-rate", type=float, default=None,
+                    help="WorldParams.uptake_rate_per_area, kg näring per månad och areaenhet")
     ap.add_argument("--check-every", type=int, default=500,
                     help="kör invariantsviten var N:te tick (0 = bara vid start och slut)")
     ap.add_argument("--report-every", type=int, default=2000,
@@ -145,10 +153,23 @@ def parse_args() -> argparse.Namespace:
 
 
 def build_population(a: argparse.Namespace, seed: int, hub=None) -> Population:
+    # Världsparametrar som kan överskridas från kommandoraden. Bördigheten och
+    # förlustandelen är härledda tal, inte fria — men de behöver kunna varieras
+    # för att härledningen ska gå att pröva. Se docs/vaxternas-livscykel.md.
+    wp_over: dict[str, float] = {}
+    for cli, name in (
+        (a.nutrient_init, "nutrient_init"),
+        (a.nutrient_input, "nutrient_input"),
+        (a.nutrient_loss_frac, "nutrient_loss_frac"),
+        (a.uptake_rate, "uptake_rate_per_area"),
+    ):
+        if cli is not None:
+            wp_over[name] = float(cli)
+
     if int(a.size) > 0:
-        WP = WorldParams(size=int(a.size), width=0, height=0, dt=float(a.dt))
+        WP = WorldParams(size=int(a.size), width=0, height=0, dt=float(a.dt), **wp_over)
     else:
-        WP = WorldParams(width=int(a.width), height=int(a.height), dt=float(a.dt))
+        WP = WorldParams(width=int(a.width), height=int(a.height), dt=float(a.dt), **wp_over)
     AP = AgentParams(dt=WP.dt)
     PP = PopParams(init_pop=int(a.init_pop), max_pop=int(a.max_pop))
     if getattr(a, "flora_ratio", None) is not None:

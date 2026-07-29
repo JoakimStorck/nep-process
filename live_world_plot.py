@@ -81,11 +81,21 @@ class WorldSeries:
     nut_lost: List[float] = field(default_factory=list)
 
     # traitmedelvärden — selektionens signal
-    growth_rate: List[float] = field(default_factory=list)
+    repro_alloc: List[float] = field(default_factory=list)
     adult_mass: List[float] = field(default_factory=list)
-    dispersal_rate: List[float] = field(default_factory=list)
+    apparatus: List[float] = field(default_factory=list)
+    seed_mass: List[float] = field(default_factory=list)
+    structure: List[float] = field(default_factory=list)
     temp_opt: List[float] = field(default_factory=list)
     temp_width: List[float] = field(default_factory=list)
+
+    # beståndets struktur och omsättning — livscykeln i drift
+    per_cell: List[float] = field(default_factory=list)
+    cells_occupied: List[float] = field(default_factory=list)
+    shed: List[float] = field(default_factory=list)
+    died_age: List[float] = field(default_factory=list)
+    died_starve: List[float] = field(default_factory=list)
+    seeds: List[float] = field(default_factory=list)
 
     window: int = 4000
 
@@ -141,11 +151,20 @@ class WorldSeries:
         self.nut_added.append(g("nutrient_added"))
         self.nut_lost.append(g("nutrient_lost"))
 
-        self.growth_rate.append(g("flora_mean_repro_alloc"))
+        self.repro_alloc.append(g("flora_mean_repro_alloc"))
         self.adult_mass.append(g("flora_mean_adult_mass"))
-        self.dispersal_rate.append(g("flora_mean_apparatus"))
+        self.apparatus.append(g("flora_mean_apparatus"))
+        self.seed_mass.append(g("flora_mean_seed_mass"))
+        self.structure.append(g("flora_mean_structure"))
         self.temp_opt.append(g("flora_mean_temp_opt"))
         self.temp_width.append(g("flora_mean_temp_width"))
+
+        self.per_cell.append(g("flora_per_cell"))
+        self.cells_occupied.append(g("flora_cells_occupied"))
+        self.shed.append(g("flora_shed"))
+        self.died_age.append(g("flora_died_age"))
+        self.died_starve.append(g("flora_died_starve"))
+        self.seeds.append(g("flora_seeds"))
 
         self._trim()
         return True
@@ -240,7 +259,7 @@ def _status(series: WorldSeries, *, size: int) -> str:
     ])
 
 
-def run_ui_loop(fig, ax_pool, ax_mix, ax_dist, txt, series: WorldSeries, args, Q: "queue.Queue[dict]"):
+def run_ui_loop(fig, ax_pool, ax_mix, ax_dist, ax_life, txt, series: WorldSeries, args, Q: "queue.Queue[dict]"):
     last_redraw = 0.0
     redraw_min_dt = float(args.redraw_min_dt)
     max_items_per_tick = int(args.max_items_per_tick)
@@ -249,6 +268,7 @@ def run_ui_loop(fig, ax_pool, ax_mix, ax_dist, txt, series: WorldSeries, args, Q
         ax_pool.clear()
         ax_mix.clear()
         ax_dist.clear()
+        ax_life.clear()
 
         if not series.t:
             ax_pool.set_title("Flora (waiting for events)")
@@ -288,9 +308,11 @@ def run_ui_loop(fig, ax_pool, ax_mix, ax_dist, txt, series: WorldSeries, args, Q
         # Absolutvärdena har olika enheter och skala; det intressanta är
         # driften, alltså om selektionen flyttar fördelningen.
         for name, label, style in (
-            ("growth_rate", "tillväxttakt", "-"),
+            ("repro_alloc", "allokering till frön", "-"),
             ("adult_mass", "vuxenmassa", "-"),
-            ("dispersal_rate", "spridningstakt", "--"),
+            ("seed_mass", "frömassa", "-"),
+            ("structure", "strukturandel", "-"),
+            ("apparatus", "apparatandel", "--"),
             ("temp_opt", "temp_opt", ":"),
             ("temp_width", "temp_bredd", ":"),
         ):
@@ -301,9 +323,26 @@ def run_ui_loop(fig, ax_pool, ax_mix, ax_dist, txt, series: WorldSeries, args, Q
 
         ax_dist.axhline(1.0, color="0.7", linewidth=0.8)
         ax_dist.set_ylabel("relativt startvärde")
-        ax_dist.set_xlabel("t")
         ax_dist.set_title("Floras traitmedelvärden — selektionens drift")
         ax_dist.legend(loc="upper left", fontsize="small", ncol=3)
+
+        # Panel 4: livscykeln. Plantor per bebodd cell är arearegelns utfall —
+        # steg den mot ett är beståndet på väg mot ett lager groddplantor.
+        # Dödsorsakerna skiljer åldrande från svält, och förnafallet är det
+        # flöde som håller näringen i omlopp utan att någon behöver dö.
+        ax_life.plot(t, series.per_cell, label="plantor per bebodd cell",
+                     color="tab:green", linewidth=2.0)
+        ax_life.set_ylabel("per cell")
+        ax_life.set_title("Livscykeln: täthet, dödsorsak och förnafall")
+        ax_life.legend(loc="upper left", fontsize="small")
+
+        ax_flux = ax_life.twinx()
+        ax_flux.plot(t, series.shed, label="förnafall kg", color="tab:brown", linestyle=":")
+        ax_flux.plot(t, series.died_age, label="döda av ålder", color="tab:purple", linestyle="--")
+        ax_flux.plot(t, series.died_starve, label="döda av svält", color="tab:red", linestyle="--")
+        ax_flux.set_ylabel("per loggpunkt")
+        ax_flux.legend(loc="upper right", fontsize="small")
+        ax_life.set_xlabel("t")
 
         txt.set_text(_status(series, size=int(args.size)))
         fig.canvas.draw_idle()
@@ -378,10 +417,11 @@ def main() -> None:
         sys.exit(1)
 
     fig = plt.figure(figsize=(10, 9))
-    gs = fig.add_gridspec(3, 1, height_ratios=[3, 1.5, 2.5], hspace=0.22)
+    gs = fig.add_gridspec(4, 1, height_ratios=[3, 1.5, 2.5, 2.0], hspace=0.26)
     ax_pool = fig.add_subplot(gs[0, 0])
     ax_mix = fig.add_subplot(gs[1, 0], sharex=ax_pool)
     ax_dist = fig.add_subplot(gs[2, 0], sharex=ax_pool)
+    ax_life = fig.add_subplot(gs[3, 0], sharex=ax_pool)
 
     txt = ax_pool.text(
         0.01,
@@ -412,13 +452,13 @@ def main() -> None:
             print(f"[live_world_plot] hittar inte {args.fp}", file=sys.stderr, flush=True)
             sys.exit(1)
 
-        run_ui_loop(fig, ax_pool, ax_mix, ax_dist, txt, series, args, Q)
+        run_ui_loop(fig, ax_pool, ax_mix, ax_dist, ax_life, txt, series, args, Q)
         fig.savefig(str(args.save), dpi=110, bbox_inches="tight")
         print(f"[live_world_plot] {n} world-händelser -> {args.save}", flush=True)
         return
 
     th = start_tail_thread(str(args.fp), Q, poll_s=float(args.poll))
-    tmr = run_ui_loop(fig, ax_pool, ax_mix, ax_dist, txt, series, args, Q)
+    tmr = run_ui_loop(fig, ax_pool, ax_mix, ax_dist, ax_life, txt, series, args, Q)
 
     fig._tail_thread = th
     fig._live_timer = tmr

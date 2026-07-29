@@ -93,6 +93,14 @@ def _stats_1d(x: np.ndarray) -> dict[str, float]:
         "p90":    _pct(0.90),
     }
 
+def _occupied_cells(store, fl) -> int:
+    """Antal celler med minst en levande planta. Billigt: en unique över fl."""
+    if fl.size == 0:
+        return 0
+    c = store.cell_idx[fl]
+    return int(np.unique(c[c >= 0]).size)
+
+
 @dataclass
 class PopParams:
     init_pop: int = 12
@@ -228,6 +236,13 @@ class Population:
     _last_flora_growth: float = 0.0
     _last_flora_established: int = 0
     _last_flora_dispersed_mass: float = 0.0
+    # Flöden och dödsorsaker per tick. De finns för att kunna läsas i
+    # world-loggen: utan dem syns förnafallet bara indirekt som att detritus
+    # växer, och dödsorsakerna inte alls.
+    _last_flora_shed: float = 0.0
+    _last_flora_died_age: int = 0
+    _last_flora_died_starve: int = 0
+    _last_flora_seeds: int = 0
     _flora_slots_cache: object = None
     _fauna_slots_cache: object = None
     
@@ -593,6 +608,16 @@ class Population:
                 "flora_dM_growth": float(getattr(self, "_last_flora_growth", 0.0)),
                 "flora_established": int(getattr(self, "_last_flora_established", 0)),
                 "flora_dispersed_mass": float(getattr(self, "_last_flora_dispersed_mass", 0.0)),
+                "flora_shed": float(getattr(self, "_last_flora_shed", 0.0)),
+                "flora_died_age": int(getattr(self, "_last_flora_died_age", 0)),
+                "flora_died_starve": int(getattr(self, "_last_flora_died_starve", 0)),
+                "flora_seeds": int(getattr(self, "_last_flora_seeds", 0)),
+                "flora_mean_structure": float(flora_info["flora_mean_structure"]),
+                "flora_cells_occupied": float(flora_info["flora_cells_occupied"]),
+                "flora_per_cell": float(flora_info["flora_per_cell"]),
+                "flora_reserve_total": float(flora_info["flora_reserve_total"]),
+                "flora_pool_total": float(flora_info["flora_pool_total"]),
+                "flora_mean_seed_mass": float(flora_info["flora_mean_seed_mass"]),
             })
 
             # Näringskretsloppet. Näringen är modellens bevarade valuta och det
@@ -1453,6 +1478,7 @@ class Population:
             stored_left[up] = np.nextafter(stored_left[up], np.float32(0.0))
         shed = m - stored_left.astype(np.float64)
         shedding = shed > 0.0
+        self._last_flora_shed = float(shed[shedding].sum()) if np.any(shedding) else 0.0
         if np.any(shedding):
             store.mass[fl[shedding]] = stored_left[shedding]
             world.excrete_cells(cells[shedding], shed[shedding], struct[shedding])
@@ -1466,7 +1492,11 @@ class Population:
             float(self.PP.flora_seedling_floor)
             * store.flora_seed_mass[fl].astype(np.float64, copy=False),
         )
-        dying = np.flatnonzero((draws < hazard) | (m <= m_floor))
+        by_age = draws < hazard
+        by_starve = (~by_age) & (m <= m_floor)
+        dying = np.flatnonzero(by_age | by_starve)
+        self._last_flora_died_age = int(np.count_nonzero(by_age))
+        self._last_flora_died_starve = int(np.count_nonzero(by_starve))
 
         # Dödsfallen är få per tick och varje deponering blandar strukturandelar
         # massviktat, så de hanteras individuellt efter det vektoriserade urvalet.
@@ -1724,6 +1754,7 @@ class Population:
         # Poolen debiteras en gång per moder, oavsett utfall: fröna byggdes.
         store.flora_repro_pool[fl[sel]] -= n_seed * seed_cost_all[sel]
         dispersed_mass = float(seed_m.sum())
+        self._last_flora_seeds = int(midx.size)
 
         # Frön som inte etablerar sig blir förna där de landade.
         lost = ~wins
@@ -1901,6 +1932,11 @@ class Population:
                 "flora_mean_adult_mass": nan,
                 "flora_mean_temp_opt": nan,
                 "flora_mean_temp_width": nan,
+                "flora_mean_structure": nan,
+                "flora_cells_occupied": 0.0,
+                "flora_per_cell": nan,
+                "flora_reserve_total": 0.0,
+                "flora_pool_total": 0.0,
                 "flora_mean_apparatus": nan,
                 "flora_mean_seed_mass": nan,
             }
@@ -1915,6 +1951,11 @@ class Population:
             "flora_mean_adult_mass": float(np.mean(store.flora_adult_mass[fl], dtype=np.float64)),
             "flora_mean_temp_opt": float(np.mean(store.flora_temp_opt[fl], dtype=np.float64)),
             "flora_mean_temp_width": float(np.mean(store.flora_temp_width[fl], dtype=np.float64)),
+            "flora_mean_structure": float(np.mean(store.structure[fl], dtype=np.float64)),
+            "flora_cells_occupied": float(_occupied_cells(store, fl)),
+            "flora_per_cell": float(fl.size / max(1.0, _occupied_cells(store, fl))),
+            "flora_reserve_total": float(np.sum(store.flora_reserve[fl], dtype=np.float64)),
+            "flora_pool_total": float(np.sum(store.flora_repro_pool[fl], dtype=np.float64)),
             "flora_mean_apparatus": float(np.mean(store.flora_apparatus[fl], dtype=np.float64)),
             "flora_mean_seed_mass": float(np.mean(store.flora_seed_mass[fl], dtype=np.float64)),
         }
