@@ -89,7 +89,13 @@ class WorldParams:
 
     elevation_init: float = 0.0
     water_init: float = 0.0
-    nutrient_init: float = 0.0
+    # Världens bördighet: fri näring per cell vid start. Var noll, vilket
+    # gjorde `flora_init_mass_ratio` till bördighetsreglage i förklädnad —
+    # hela stocken kom in i världen som vävnad i den sådda floran, och marken
+    # var steril. Talet är härlett i docs/vaxternas-livscykel.md: med
+    # M_1 = B_K täcker en planta på 11 kg exakt en cell, och stocken som bär
+    # den täckningen med förna och fri pool inräknad är 0,32 kg per cell.
+    nutrient_init: float = 0.32
     detritus_init: float = 0.0
 
     rain_input_base: float = 0.0
@@ -102,20 +108,38 @@ class WorldParams:
     # -------------------------
     detritus_decay: float = 0.077
     # Andel av frisatt näring som lämnar systemet (urlakning, denitrifikation).
-    nutrient_loss_frac: float = 0.10
-    # Näringstillförsel per cell och tick. Konstant tills terrängen finns; då
+    #
+    # Var 0,10, vilket töms världen på 37 år simulerad tid: uppmätt förlust var
+    # 40,6 kg av en stock på 536 under 6 000 tick, monotont, medan tillförseln
+    # bidrog med 0,029 kg. Ostörda landekosystem är snåla återvinnare —
+    # förlusterna är någon procent av det interna flödet, och vittring och
+    # nedfall är små i motsvarande grad. Vid 0,01 blir tömningstiden omkring
+    # 370 år och tillförseln en långsam forcing i stället för ett dropp som
+    # håller världen vid liv.
+    nutrient_loss_frac: float = 0.01
+    # Näringstillförsel per cell och månad. Konstant tills terrängen finns; då
     # blir den vittring som funktion av höjd, och utsköljning under havsnivå.
-    nutrient_input: float = 1.5e-8
-    # Maximalt näringsupptag per tick vid uptake_capacity = 1.
-    # Upptagstak per individ och sekund, uttryckt relativt massaskalan.
-    # Ett absolut tal skulle bli hundrafalt hårdare bundet när B_K höjs och
-    # göra floran upptagsbegränsad i stället för näringsbegränsad.
-    uptake_rate_max_per_BK: float = 2.6e5
+    #
+    # Tillförsel och förlust är inte oberoende: i jämvikt är förlusten
+    # `nutrient_loss_frac` gånger hela primärproduktionen. Med stocken från
+    # `nutrient_init`, två års omsättning av levande vävnad och 16 384 celler
+    # ger det 7,1e-5. Se docs/vaxternas-livscykel.md.
+    nutrient_input: float = 7.1e-5
+    # Näringsupptag per månad och **areaenhet** vid uptake_capacity = 1.
+    #
+    # Var ett tak per individ på 2,86e6, alltså sju till åtta tiopotenser för
+    # högt: uppmätt band det i noll av alla individer, med median efterfrågan
+    # 0,22 kg mot ett tak på 3,6e4. Kapacitetsmodellens första läsare läste
+    # ingenting. Med rotarean som anspråk får taket dessutom rätt form — ett
+    # upptag per areaenhet, inte per individ. Storleksordningen följer av att
+    # en medianplanta på 23 kg (area 2,1) ska hinna binda sina 0,36 kg näring
+    # på ungefär ett år.
+    uptake_rate_per_area: float = 0.03
 
     @property
     def uptake_rate_max(self) -> float:
-        """Upptagstak i kg näring per individ och sekund."""
-        return float(self.uptake_rate_max_per_BK) * float(self.B_K)
+        """Upptagstak i kg näring per månad och areaenhet."""
+        return float(self.uptake_rate_per_area)
     # Diffusionstakt för löst näring. Explicit schema: D*dt måste hållas under
     # ett för stabilitet, och laplacianen är normerad med grannantalet.
     nutrient_diffusion: float = 0.20

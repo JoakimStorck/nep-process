@@ -303,13 +303,15 @@ Här får Fas 2:s ekologiska hypotes sitt första riktiga svar. Blir svaret nej 
 
 Mätningen inför steget visade att flera mekanismer vi trodde var verksamma inte är det. `uptake_capacity` binder aldrig — noll av alla individer, fem tiopotenser från taket — och fördelningen inne i cellen sker mot tillväxtunderskottet i stället för mot upptagsförmågan. Flera flora per cell tilläts i 0032 men inträffar i 1,2 procent av cellerna, eftersom den första plantan tar hela flödet oavsett storlek. Den fria näringen ligger till 99,9 procent i obebodda celler medan bebodda är rentvättade till maskinprecision. Floran är alltså inte mätt utan svälter: 1,4 procent når vuxenmassa, medianplantan står på 26 procent. Och näringsekonomin är icke förnybar — `nutrient_init = 0`, tillförseln fem tusendels procent av stocken, förlusten tio procent per varv, vilket tömmer världen på 37 år simulerad tid.
 
-- **Rotarea som anspråk.** `A = m / B_K` ur aktuell massa, härledd per tick. Upptaget delas som `A_i / max(1, ΣA)` i cellen. Obesatt area lämnar näring i marken, trängsel späder utan egen regel, och samexistens blir normalfallet.
-- **Inkomst skild från allokering.** Näringsreserv per individ, symmetriskt med faunans energireserv. Reserven fördelas på tillväxt, omsättning och reproduktion.
+- ~~**Rotarea som anspråk.**~~ **Klart.** `A = m / B_K` ur aktuell massa, härledd per tick, delning `A_i / max(1, ΣA)` med spill över grannringen för `A > 1`. Fullvuxna plantor ingår i anspråket men tar ingenting, vilket är det som låter ett bestånd hålla undan groddplantor.
+- ~~**Näringsekonomin.**~~ **Klart.** Bördigheten ligger i `nutrient_init`, sådden debiteras marken, tillförsel och förlust är kalibrerade som par, `uptake_rate_max` är per areaenhet.
+- **Inkomst skild från allokering.** Näringsreserv per individ, symmetriskt med faunans energireserv. Reserven fördelas på tillväxt, omsättning och reproduktion. Upptag och tillväxt är tills vidare fusionerade, eftersom en reserv utan läsare vore write-only.
 - **Omsättning.** Förnafall som avtar med strukturandel — florans underhållskostnad, och det som får näringen att cirkulera utan att någon dör.
 - **Härledd livslängd** ur strukturandel, plus svältdöd när reserven inte räcker till omsättningen. `flora_mortality` som fast tal utgår.
 - **Fröet.** Propagulmassa som egen absolut axel, antal ur avsatt massa, etablering som sigmoid med tröskel, apparatandel på det frigjorda `_T_DISPERSAL`, spridning ur en kärna i kontinuerligt rum via `grid.cell_of()`.
-- **Näringsekonomin.** Bördighet skild från sådd: `nutrient_init` 0 → 0,32 kg per cell, `nutrient_input` 1,5e-8 → 7,1e-5, `nutrient_loss_frac` 0,10 → 0,01, sådden betald ur marken. `uptake_rate_max` blir per areaenhet och sänks sju till åtta tiopotenser.
-- **Tillväxten begränsas av ett `min()` över resurser**, med näring som enda post, så att ljus kan läggas till utan att passet skrivs om.
+- ~~**Tillväxten begränsas av ett `min()` över resurser**~~ **Klart**, med näring som enda post, så att ljus kan läggas till utan att passet skrivs om. Temperaturgrinden sitter numera på upptaget i stället för på en logistisk term som ändå aldrig band.
+
+**Efter 0054:** floran når stationärt beteende satt av näring i stället för av `capacity`, och systemet svänger i stället för att växa monotont. Fauna toppar på 135 individer mot tidigare 29 och överlever till tick 11 000 mot tidigare 5 000, men kollapsar därefter och tar floran med sig ner. Det är boom–bust utan reglering: 0054 höjer produktionen men inför ingen återkoppling. Regleringen är 0055:s uppgift — mortalitet, omsättning och allokering — och faunans egen reglering är en senare fråga.
 
 **Beslut som är låsta:** `M₁ = B_K = 11`, alltså elva gånger dagens växtlighet; area ur aktuell massa; livslängd härledd, inte eget locus; ljus uppskjutet.
 

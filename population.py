@@ -108,6 +108,12 @@ class PopParams:
     # om dynamiken inte bär det faller floran tillbaka, och då är det den
     # dynamiken som ska rättas.
     flora_init_mass_ratio: float = 2000.0
+    #
+    # Efter Steg 4b betyder talet vad det säger. Bördigheten ligger i
+    # `WorldParams.nutrient_init` och sådden debiteras marken, så det här är en
+    # starttäthet och inte längre världens näringsmängd i förklädnad. Vid
+    # M_1 = B_K är jämviktens stående biomassa omkring 180 000 kg, så 2000 sår
+    # ungefär en sjundedel av den och låter världen växa in i resten.
 
     flora_mortality: float = 2.0e-5   # höjt — naturlig matbrist sätter taket nu, inte detta
     # Hur mycket dödsrisken förhöjs för en individ vid noll massa jämfört med
@@ -1174,8 +1180,27 @@ class Population:
 
             mass = BK * float(self.rng.uniform(init_mass_frac_lo, init_mass_frac_hi))
             self._init_flora_slot(int(slot), int(cell), float(mass), traits)
+
+            # Sådden betalas ur marken. Tidigare myntade den näring: hela
+            # stocken kom in i världen som vävnad i den sådda floran, vilket
+            # gjorde `flora_init_mass_ratio` till bördighetsreglage. Nu bär
+            # `nutrient_init` bördigheten och sådden är en starttäthet.
+            need = float(self.store.mass[slot]) * nutrient_content(
+                float(self.store.structure[slot])
+            )
+            paid = self.world.take_nutrient(int(cell), need)
+            if paid < need:
+                # Cellen kunde inte betala. Krymp plantan så att bunden näring
+                # svarar mot vad som faktiskt fanns.
+                nc = max(1e-12, nutrient_content(float(self.store.structure[slot])))
+                self.store.mass[slot] = np.float32(paid / nc)
+                self.store.energy[slot] = np.float32(max(
+                    0.0,
+                    float(self.store.mass[slot]) * self._slot_energy_per_kg(int(slot)),
+                ))
+
             created += 1
-            placed += mass
+            placed += float(self.store.mass[slot])
 
         if target_mass is not None and placed < float(target_mass) * 0.999:
             # Cellrymden räckte inte. Tyst avvikelse här vore ett dolt
@@ -1332,21 +1357,39 @@ class Population:
         Manifestet tillåter att pass med tät dataåtkomst och biologisk
         sammanhållning slås ihop. Upptaget avgör exakt hur mycket tillväxt som
         kan betalas, så att hålla dem isär skulle kräva en näringsreserv per
-        organism utan att något annat läser den.
+        organism utan att något annat läser den. Reserven kommer i nästa steg;
+        då delas passet.
 
-        Tillväxten är begränsad av tre saker: den logistiska takten mot
-        vuxenmassan, näringen i cellen, och organismens uptake_capacity.
-        Byggkostnaden per kilo följer av strukturandelen och *sjunker* med den —
-        strukturmaterial är kolrikt och näringsfattigt, vilket är varför träd
-        klarar mager mark där örter inte gör det.
+        **Rotarean som anspråk.** En planta gör anspråk på mark i proportion
+        till sin *aktuella* massa, `A = m / B_K`, härlett varje tick och aldrig
+        lagrat. `B_K` är därmed massan hos en planta vars rotsystem täcker
+        exakt en cell — världens massaskala definierad av världens geometri.
+        Anspråket växer med plantan, vilket är hela poängen: ett träd gror in i
+        en cell som redan är anspråkad av örter och får till en början nästan
+        ingenting. När örterna dör sjunker den anspråkade arean, trädets andel
+        stiger, och dess area växer med massan. Ingen arealtilldelning behöver
+        bokföras — arean *är* massan.
 
-        Näringen i en cell delas proportionellt mot efterfrågan. Tidigare
-        betjänade `take_nutrient` individerna i slotordning, så den med lägst
-        slotindex hade första tjing på poolen — en artefakt av loopen, inte en
-        biologisk regel. Med proportionell delning blir konkurrensen symmetrisk
-        som `docs/substratets-struktur.md` beskriver den, och selektionen på
-        `uptake_capacity` blir ren: en långsam planta kan inte längre vinna på
-        att råka ha lågt slotindex.
+        **Delningen** är `A_i / max(1, ΣA)` över cellen. Under ett ligger
+        outnyttjad näring kvar i marken, vilket gör obesatt mark till en resurs
+        och kolonisation lönsam; över ett späds alla lika, vilket är trängsel
+        utan egen regel. Tidigare delades näringen proportionellt mot
+        *tillväxtunderskottet*, `m · (1 − m/M_vuxen) · gate`. Det gjorde tre
+        saker fel: `uptake_capacity` föll ur helt och band i noll av alla
+        individer, en planta fick större andel bara av att deklarera en högre
+        vuxenmassa den aldrig når, och den första plantan i en cell tog hela
+        flödet oavsett storlek — vilket är varför flera flora per cell tilläts
+        i 0032 men inträffade i drygt en procent av cellerna.
+
+        Fullvuxna plantor ingår i anspråket men tar ingenting. Det är avsiktligt:
+        marken är upptagen även av den som slutat växa, och det är den
+        mekanismen som låter ett bestånd hålla undan groddplantor.
+
+        **Tillväxten begränsas av ett `min()` över resurser** med näring som
+        första och tills vidare enda post. Formen finns för att ljus ska kunna
+        läggas till som andra post utan att passet skrivs om — se
+        `docs/substratets-struktur.md` för asymmetrin och `docs/vaxternas-
+        livscykel.md` för varför den väntar.
 
         Returnerar (producerad kg, upptagen näring kg, död massa kg).
         """
@@ -1361,7 +1404,8 @@ class Population:
 
         world = self.world
         store = self.store
-        uptake_max = float(self.WP.uptake_rate_max) * dt
+        grid = self.grid
+        u_area = float(self.WP.uptake_rate_max)
         mort = float(self.PP.flora_mortality) * dt
 
         m = store.mass[fl].astype(np.float64, copy=False)
@@ -1401,87 +1445,88 @@ class Population:
         T = world.temperature_of_cells(cells).astype(np.float64, copy=False)
         Topt = store.flora_temp_opt[fl].astype(np.float64, copy=False)
         Twid = np.maximum(1e-6, store.flora_temp_width[fl].astype(np.float64, copy=False))
-        regen = np.maximum(0.0, store.flora_growth_rate[fl].astype(np.float64, copy=False))
-
         gate = np.exp(-0.5 * ((T - Topt) / Twid) ** 2)
 
-        active = (
-            alive_mask
-            & (cells >= 0)
-            & (gate > 1e-6)
-            & (m > 0.0)
-            & (m < m_adult)
-        )
-        if not np.any(active):
+        # --- anspråk: en rad per planta och berörd cell -----------------------
+        holds = alive_mask & (cells >= 0) & (m > 0.0)
+        vi = np.flatnonzero(holds)
+        if vi.size == 0:
             if died > 0.0:
                 self._flora_summary_cache = None
             return 0.0, 0.0, float(died)
 
-        idx = np.flatnonzero(active)
-        a_slots = fl[idx]
-        a_cells = cells[idx]
-        a_m = m[idx]
-        a_cap = m_adult[idx]
-        a_struct = struct[idx]
-
-        dm_want = regen[idx] * dt * a_m * (1.0 - a_m / a_cap) * gate[idx]
-        # Taket mot vuxenmassan tillämpas före upptaget, inte efter. Låg det
-        # efter drogs näringen för en tillväxt som sedan kapades.
-        dm_want = np.minimum(dm_want, a_cap - a_m)
-
-        cost = nutrient_content_array(a_struct)
-        cap_limit = np.maximum(0.0, store.uptake_capacity[a_slots].astype(np.float64, copy=False)) * uptake_max
-        demand = np.minimum(dm_want * cost, cap_limit)
-        demand = np.maximum(demand, 0.0)
-
         n_cells = int(world.nutrient.shape[0])
-        cell_demand = np.bincount(a_cells, weights=demand, minlength=n_cells)[:n_cells]
+        A = m[vi] / BK
 
-        # Proportionell delning: alla i cellen får samma andel av sin
-        # efterfrågan. Marginalen på en ulp håller summan strikt under det som
-        # finns, så att poolen aldrig kan bli negativ av avrundning.
-        share = np.zeros(n_cells, dtype=np.float64)
-        hungry = cell_demand > 0.0
-        if np.any(hungry):
-            share[hungry] = np.minimum(
-                1.0, world.nutrient[hungry] / cell_demand[hungry]
-            ) * (1.0 - 1e-12)
+        row_plant = vi
+        row_cell = cells[vi]
+        row_claim = np.minimum(A, 1.0)
 
-        got = demand * share[a_cells]
-        drawn = np.bincount(a_cells, weights=got, minlength=n_cells)[:n_cells]
-        world.nutrient -= drawn
+        # Överskjutande area fördelas jämnt över de sex grannarna. Att en enda
+        # ring räcker följer av FloraRanges.adult_mass_k_max: med taket 4,0
+        # blir A högst 4, alltså ett överskott på 3 mot ringens kapacitet 6.
+        # Höjs taket över 7 behövs ring två, och clippet nedan blir en tyst
+        # förlust i stället för en omöjlighet.
+        big = np.flatnonzero(A > 1.0)
+        if big.size:
+            nb = grid.neighbor_idx[row_cell[big]].astype(np.int64, copy=False)
+            per = np.minimum(1.0, (A[big] - 1.0) / float(nb.shape[1]))
+            row_plant = np.concatenate((row_plant, np.repeat(vi[big], nb.shape[1])))
+            row_cell = np.concatenate((row_cell, nb.reshape(-1)))
+            row_claim = np.concatenate((row_claim, np.repeat(per, nb.shape[1])))
+
+        claimed = np.bincount(row_cell, weights=row_claim, minlength=n_cells)[:n_cells]
+        # Marginalen på en ulp håller summan strikt under det som finns, så att
+        # poolen aldrig kan bli negativ av avrundning.
+        share_row = row_claim / np.maximum(1.0, claimed)[row_cell] * (1.0 - 1e-12)
+        avail_row = share_row * world.nutrient[row_cell]
+        access = np.bincount(row_plant, weights=avail_row, minlength=fl.size)[:fl.size]
+
+        # --- inkomst och tillväxt ---------------------------------------------
+        cost = nutrient_content_array(struct)
+        A_full = m / BK
+
+        # Upptagstaket är per areaenhet och grindas av temperaturen: upptag är
+        # arbete, och arbetet avstannar i kyla. Grinden satt tidigare på en
+        # logistisk term som ändå aldrig band, så den var i praktiken verkningslös.
+        cap = (np.maximum(0.0, store.uptake_capacity[fl].astype(np.float64, copy=False))
+               * u_area * A_full * gate * dt)
+        demand = np.maximum(0.0, m_adult - m) * cost
+
+        grow = holds & (m < m_adult) & (gate > 1e-6)
+        got = np.where(grow, np.minimum(np.minimum(cap, access), demand), 0.0)
 
         # Store:n lagrar massa i float32 medan upptaget räknas i float64.
         # Avrundningen görs alltid nedåt: rundar den uppåt binder massan mer
-        # näring än som betalats, och cellen är ofta redan tömd av just det
-        # upptaget så skulden går inte att driva in. Nedåt är felet i stället
-        # alltid ett överskott som kan återföras.
-        target = a_m + got / np.maximum(cost, 1e-12)
+        # näring än som betalats. Genom att dra först efter avrundningen tas
+        # bara det som faktiskt blev vävnad — ingen återföring behövs.
+        target = m + got / np.maximum(cost, 1e-12)
         stored = target.astype(np.float32)
         rounded_up = stored.astype(np.float64) > target
         if np.any(rounded_up):
-            stored[rounded_up] = np.nextafter(
-                stored[rounded_up], np.float32(0.0)
-            )
+            stored[rounded_up] = np.nextafter(stored[rounded_up], np.float32(0.0))
 
-        dm = stored.astype(np.float64) - a_m
+        dm = np.where(grow, stored.astype(np.float64) - m, 0.0)
         grew = dm > 0.0
-
         used = np.where(grew, dm * cost, 0.0)
-        refund = got - used
-        if np.any(refund > 0.0):
-            world.nutrient += np.bincount(
-                a_cells, weights=refund, minlength=n_cells
+
+        if np.any(used > 0.0):
+            frac = np.zeros(fl.size, dtype=np.float64)
+            ok = access > 0.0
+            frac[ok] = np.minimum(1.0, used[ok] / access[ok])
+            draw = frac[row_plant] * avail_row
+            world.nutrient -= np.bincount(
+                row_cell, weights=draw, minlength=n_cells
             )[:n_cells]
 
         if np.any(grew):
             g = np.flatnonzero(grew)
-            g_slots = a_slots[g]
+            g_slots = fl[g]
             store.mass[g_slots] = stored[g]
             store.energy[g_slots] = (
                 stored[g].astype(np.float64)
                 * float(self.WP.E_labile_J_per_kg)
-                * (1.0 - a_struct[g])
+                * (1.0 - struct[g])
             ).astype(np.float32)
 
         produced = float(dm[grew].sum()) if np.any(grew) else 0.0
