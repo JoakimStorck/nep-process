@@ -414,69 +414,85 @@ class OrganismStore:
     def rebuild_spatial_index(self) -> None:
         """
         Bygg gemensamt spatialindex för alla levande organismer.
-    
+
         CSR-liknande layout:
           - cell_counts[c]   = antal levande slotar i cell c
           - cell_offsets[c]  = startindex i cell_slots för cell c
           - cell_slots[...]  = platt lista av slotindex, grupperade per cell
-    
+
         Samtidigt byggs:
           - snabb id->slot-lookup för levande organismer
           - platt härlett flora-perceptionsfält: flora_cell_mass[cell]
             (ej source of truth, bara sensing-cache)
+
+        Vektoriserad: bincount för räkning och för florafältet, stabil argsort
+        för packningen. Den stabila sorteringen bevarar slotordningen inom
+        varje cell, vilket är samma ordning som den tidigare loopen gav —
+        allt som itererar över en cells slotar ser alltså oförändrad ordning.
+
+        Den tidigare formen var två fulla Python-loopar över `range(n)` och
+        kostade därmed efter kapacitet i stället för efter antal levande. Det
+        var den enda posten i ticken som skalade med världens storlek.
         """
+        n = int(self.n)
         counts = self.cell_counts
         offsets = self.cell_offsets
-        slots_out = self.cell_slots
-        flora = self.flora_cell_mass
-    
+        n_cells = int(counts.shape[0])
+
         counts.fill(0)
-        flora.fill(np.float32(0.0))
-    
-        max_live_id = -1
-    
-        # Pass 1: counts + flora field + max id
-        for slot in range(int(self.n)):
-            if not bool(self.alive[slot]):
-                continue
-    
-            cell = int(self.cell_idx[slot])
-            if cell >= 0:
-                counts[cell] += 1
-                if int(self.kind[slot]) == 1:
-                    flora[cell] = np.float32(float(flora[cell]) + float(self.mass[slot]))
-    
-            oid = int(self.id[slot])
-            if oid > max_live_id:
-                max_live_id = oid
-    
+        self.flora_cell_mass.fill(np.float32(0.0))
+        offsets.fill(0)
+
+        if n <= 0:
+            self.id_to_slot_arr.fill(-1)
+            return
+
+        live = np.flatnonzero(self.alive[:n])
+        if live.size == 0:
+            self.id_to_slot_arr.fill(-1)
+            return
+
+        # --- id -> slot ---
+        ids = self.id[live].astype(np.int64, copy=False)
+        max_live_id = int(ids.max())
         if max_live_id >= 0:
             self._ensure_id_lookup_capacity(max_live_id)
-    
         self.id_to_slot_arr.fill(-1)
-    
-        offsets[0] = 0
+        ok_id = ids >= 0
+        if np.any(ok_id):
+            self.id_to_slot_arr[ids[ok_id]] = live[ok_id].astype(
+                self.id_to_slot_arr.dtype, copy=False
+            )
+
+        # --- celltillhörighet ---
+        # int32 för sorteringen: numpy använder radixsort för stabila
+        # heltalssorteringar, och den är billigare per element på 32 bitar.
+        cells = self.cell_idx[live].astype(np.int32, copy=False)
+        placed = cells >= 0
+        if not np.any(placed):
+            return
+
+        live_c = live[placed]
+        cells_c = cells[placed]
+
+        counts[:] = np.bincount(cells_c.astype(np.intp, copy=False), minlength=n_cells)[:n_cells]
+
+        is_flora = self.kind[live_c] == 1
+        if np.any(is_flora):
+            fm = np.bincount(
+                cells_c[is_flora].astype(np.intp, copy=False),
+                weights=self.mass[live_c][is_flora].astype(np.float64, copy=False),
+                minlength=n_cells,
+            )[:n_cells]
+            self.flora_cell_mass[:] = fm.astype(np.float32, copy=False)
+
         np.cumsum(counts, out=offsets[1:])
-    
-        write_ptr = offsets[:-1].copy()
-    
-        # Pass 2: id->slot + packed cell slots
-        for slot in range(int(self.n)):
-            if not bool(self.alive[slot]):
-                continue
-    
-            oid = int(self.id[slot])
-            if oid >= 0:
-                self.id_to_slot_arr[oid] = int(slot)
-    
-            cell = int(self.cell_idx[slot])
-            if cell < 0:
-                continue
-    
-            j = write_ptr[cell]
-            slots_out[j] = int(slot)
-            write_ptr[cell] += 1
-    
+
+        order = np.argsort(cells_c, kind="stable")
+        self.cell_slots[: live_c.size] = live_c[order].astype(
+            self.cell_slots.dtype, copy=False
+        )
+
     def slots_in_cell(self, cell: int) -> np.ndarray:
         start = int(self.cell_offsets[cell])
         end = int(self.cell_offsets[cell + 1])

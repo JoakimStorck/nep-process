@@ -299,12 +299,33 @@ Här får Fas 2:s ekologiska hypotes sitt första riktiga svar. Blir svaret nej 
 
 ## Steg 5 — Aktiva delmängder och vektoriserade florapass
 
-- Delmängder byggs en gång per tick, immutabla under ticken: `flora_slots`, `fauna_slots`, `sensing_slots`.
-- Florapassen skrivs om som numpy-operationer över `flora_slots`.
-- `rebuild_spatial_index` indexerar bara bebodda celler i stället för hela cellrymden, och anropas **en** gång per tick. CSR över `n_cells` gör `cumsum` över en miljon element för att indexera tiotusen organismer; sortering plus `searchsorted` tar bort `n_cells`-termen helt.
-- Flora-tilläggsfält flyttas till komprimerade tilläggsarrayer indexerade via flora-delmängden. Uppfyller A5.
+- ~~Delmängder byggs en gång per tick, immutabla under ticken.~~ **Klart** för `flora_slots` och `fauna_slots`. `sensing_slots` hör till Steg 6a, där `sense_rate` får en läsare.
+- ~~Florapassen skrivs om som numpy-operationer över `flora_slots`.~~ **Klart.** Tillväxt, senescens, spridningens behörighet och tärningskast, samt floras summering. Sällsynta händelser — dödsfall kring en hundradel av populationen per tick, etableringar färre — hanteras individuellt efter den vektoriserade urvalet, eftersom var och en allokerar en slot eller blandar strukturandelar massviktat.
+- ~~`rebuild_spatial_index` vektoriseras.~~ **Klart** med `bincount` plus stabil `argsort`. Den indexerar fortfarande hela cellrymden; `n_cells`-termen står kvar. Den kostar nu 1,2 ms per anrop vid 10 000 organismer och är näst största posten efter sensing.
+- `rebuild_spatial_index` anropas fortfarande **två** gånger per tick. **Återstår.** Den ena körs efter florapassen och före sensing, den andra efter födslar och dödsfall. Att ta bort den senare gör indexet inkonsistent mellan tick, vilket invariantsviten fångar — den är alltså load-bearing, inte slentrian. Rätt lösning är att flytta florapassen sist i ticken så att ett anrop räcker, vilket är en omordning och hör till ett eget ingrepp.
+- Flora-tilläggsfält i komprimerade tilläggsarrayer. **Återstår.** A5 är alltså ännu inte uppfylld.
 
-**Klart när:** 10 000 flora körs under 10 ms/tick.
+**Klart när:** 10 000 flora körs under 10 ms/tick. **Nästan.** Uppmätt 10,7 ms vid 10 026 flora på referensmaskinen.
+
+Marginalkostnaden är däremot uppfylld med god marginal: från 2 132 till 10 026 floraindivider ökar ticken från 6,7 till 10,7 ms, alltså **0,50 µs per floraindivid** mot planens krav på under 1 µs. De 10,7 ms innehåller omkring 5 ms fauna- och världsarbete som inte skalar med floran. Kvarvarande gap är alltså inte florapassen utan den fasta overheaden — sensing står för den största enskilda delen.
+
+**Uppmätt före och efter, seed 1, 64×256:**
+
+```
+flora        före        efter     kvot
+ 2 132     33,8 ms       6,7 ms     5,0x
+10 026    ~115 ms *     10,7 ms    ~11x
+```
+
+\* extrapolerat från 11,5 µs per individ; den gamla formen kördes aldrig vid den skalan.
+
+Dynamiken är statistiskt oförändrad. Vid 3 000 tick: flora 2 207 mot 2 214 före, floramassa 73,31 mot 73,48 kg, faunamassa 7,342 mot 7,362 kg. Identisk bana går inte att kräva — konsumtionsordningen har ändrats, se nedan.
+
+**Näringen i en cell delas nu proportionellt.** Tidigare betjänade `take_nutrient` individerna i slotordning, så den med lägst slotindex hade första tjing på cellens pool. Det var en artefakt av loopen, inte en biologisk regel, och `docs/substratets-struktur.md` beskrev redan konkurrensen som symmetrisk. Nu får alla i cellen samma andel av sin efterfrågan, viktat med `uptake_capacity`. Det gör dokumentet sant och selektionen på `uptake_capacity` ren: en långsam planta kan inte längre vinna på att råka ha lågt slotindex. En marginal på en ulp i delningsfaktorn håller summan strikt under det som finns, så poolen aldrig kan bli negativ av avrundning.
+
+Näringsdriften är oförändrat god efter omskrivningen: 7,7e-10 relativt vid 10 000 flora, 5,3e-09 vid 2 100. Den exakta avräkningen från 0040 — nedåtavrundning av lagrad massa och återföring av mellanskillnaden — är överförd till arrayform.
+
+**Mätverktyg:** `bench.py` rapporterar ms per tick, µs per floraindivid, näringsdrift och invariantbrott, med `--ratio` för att skala floran och `--profile` för hotspots.
 
 ## Steg 6a — Sensing som evolverbar kapacitet
 
@@ -431,7 +452,7 @@ Dessutom avrundas florans massa nu alltid nedåt vid skrivningen till store:n. R
 
 Näringsdriften faller därmed från 2,7e-06 till 4,9e-09 relativt mätt per pass. Restposten ligger nu i fauna­passen och är omkring 2e-11 per tick.
 
-**Kostnaden är prestanda.** 34 ms/tick vid 2 200 flora mot 5,5 ms vid 150. Det är Steg 5:s argument i konkret form: nästa ekologiska experiment är redan begränsat av florapassens per-individ-kostnad.
+**Kostnaden var prestanda.** 34 ms/tick vid 2 200 flora mot 5,5 ms vid 150. Det var Steg 5:s argument i konkret form, och Steg 5 har sedan tagit ner samma punkt till 6,7 ms.
 
 ### Vad kalibreringen ska sikta på
 

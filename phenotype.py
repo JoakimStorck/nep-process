@@ -468,6 +468,13 @@ def digestion_efficiency(structure: float) -> float:
 DIET_EFF_EXP = 0.7
 
 
+def nutrient_content_array(structure):
+    """Vektoriserad `nutrient_content`. Samma uttryck, elementvis."""
+    import numpy as _np
+    s = _np.clip(_np.asarray(structure, dtype=_np.float64), 0.0, 1.0)
+    return NUTRIENT_PER_KG_LABILE * (1.0 - s) + NUTRIENT_PER_KG_STRUCT * s
+
+
 def diet_efficiency(diet: float) -> tuple[float, float]:
     """(herb_eff, scav_eff) för given kostpreferens; 0 = herbivor, 1 = asätare."""
     d = min(1.0, max(0.0, float(diet)))

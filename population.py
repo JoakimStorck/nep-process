@@ -30,6 +30,7 @@ from phenotype import (
     structure_fraction,
     energy_density,
     nutrient_content,
+    nutrient_content_array,
     NUTRIENT_PER_KG_LABILE,
 )
 
@@ -194,6 +195,8 @@ class Population:
     _last_flora_growth: float = 0.0
     _last_flora_established: int = 0
     _last_flora_dispersed_mass: float = 0.0
+    _flora_slots_cache: object = None
+    _fauna_slots_cache: object = None
     
     _flora_summary_cache: dict[str, float] | None = field(init=False, default=None)
 
@@ -1250,6 +1253,44 @@ class Population:
         self._flora_summary_cache = None
         return int(slot)
 
+    def _fauna_slots(self, rebuild: bool = False) -> np.ndarray:
+        """
+        Aktiv delmängd: slotindex för levande fauna.
+
+        Fauna och flora delar store, så en fauna-loop över `range(store.n)`
+        kostar efter florans antal. Vid tiotusen växter och tolv djur betalade
+        metabolismpasset tusen gånger för lite arbete.
+        """
+        if rebuild or self._fauna_slots_cache is None:
+            n = int(self.store.n)
+            if n <= 0:
+                self._fauna_slots_cache = np.empty(0, dtype=np.int64)
+            else:
+                self._fauna_slots_cache = np.flatnonzero(
+                    self.store.alive[:n] & (self.store.kind[:n] == 0)
+                ).astype(np.int64, copy=False)
+        return self._fauna_slots_cache
+
+    def _flora_slots(self, rebuild: bool = False) -> np.ndarray:
+        """
+        Aktiv delmängd: slotindex för levande flora.
+
+        Byggs en gång per tick och betraktas som immutabel under ticken, enligt
+        manifestets ticksemantik. Senescens och spridning under ticken ändrar
+        inte delmängden — de pass som körs efter maskar i stället bort de
+        slotar som hunnit dö.
+        """
+        if rebuild or self._flora_slots_cache is None:
+            n = int(self.store.n)
+            if n <= 0:
+                self._flora_slots_cache = np.empty(0, dtype=np.int64)
+            else:
+                live = self.store.alive[:n]
+                self._flora_slots_cache = np.flatnonzero(
+                    live & (self.store.kind[:n] == 1)
+                ).astype(np.int64, copy=False)
+        return self._flora_slots_cache
+
     def _growth_system_flora(self) -> tuple[float, float, float]:
         """
         Upptag och tillväxt för diskret flora, fusionerade till ett pass.
@@ -1265,6 +1306,14 @@ class Population:
         strukturmaterial är kolrikt och näringsfattigt, vilket är varför träd
         klarar mager mark där örter inte gör det.
 
+        Näringen i en cell delas proportionellt mot efterfrågan. Tidigare
+        betjänade `take_nutrient` individerna i slotordning, så den med lägst
+        slotindex hade första tjing på poolen — en artefakt av loopen, inte en
+        biologisk regel. Med proportionell delning blir konkurrensen symmetrisk
+        som `docs/substratets-struktur.md` beskriver den, och selektionen på
+        `uptake_capacity` blir ren: en långsam planta kan inte längre vinna på
+        att råka ha lågt slotindex.
+
         Returnerar (producerad kg, upptagen näring kg, död massa kg).
         """
         dt = float(self.WP.dt)
@@ -1272,99 +1321,137 @@ class Population:
         if BK <= 0.0 or dt <= 0.0:
             return 0.0, 0.0, 0.0
 
+        fl = self._flora_slots(rebuild=True)
+        if fl.size == 0:
+            return 0.0, 0.0, 0.0
+
         world = self.world
+        store = self.store
         uptake_max = float(self.WP.uptake_rate_max) * dt
         mort = float(self.PP.flora_mortality) * dt
 
-        produced = 0.0
-        taken = 0.0
+        m = store.mass[fl].astype(np.float64, copy=False)
+        struct = store.structure[fl].astype(np.float64, copy=False)
+        m_adult = np.maximum(1e-12, store.flora_adult_mass[fl].astype(np.float64, copy=False))
+
+        # --- senescens: risk per tick, förhöjd för individer långt under sin
+        # vuxenmassa. Utan det ansamlas groddplantor som varken växer eller dör
+        # i celler där näringen är slut.
         died = 0.0
+        risk = mort * (1.0 + float(self.PP.flora_seedling_mort_mult)
+                       * (1.0 - np.minimum(1.0, m / m_adult)))
+        draws = self.rng.random(fl.size)
+        dying = np.flatnonzero((risk > 0.0) & (draws < risk))
 
-        for slot in range(int(self.store.n)):
-            if not bool(self.store.alive[slot]):
-                continue
-            if int(self.store.kind[slot]) != 1:
-                continue
-
-            cell = int(self.store.cell_idx[slot])
-            if cell < 0:
-                continue
-
-            m = float(self.store.mass[slot])
-            struct = float(self.store.structure[slot])
-
-            # --- senescens: risk per tick, förhöjd för individer långt under
-            # sin vuxenmassa. Utan det ansamlas groddplantor som varken växer
-            # eller dör i celler där näringen är slut.
-            m_adult = max(1e-12, float(self.store.flora_adult_mass[slot]))
-            frac = min(1.0, m / m_adult)
-            risk = mort * (1.0 + float(self.PP.flora_seedling_mort_mult) * (1.0 - frac))
-            if risk > 0.0 and float(self.rng.random()) < risk:
-                if m > 0.0:
+        # Dödsfallen är få per tick — kring en hundradel av populationen — och
+        # deponeringen blandar strukturandelar massviktat per cell. Den lilla
+        # mängden hanteras därför individuellt i stället för att vektoriseras.
+        if dying.size:
+            for k in dying:
+                slot = int(fl[k])
+                mk = float(m[k])
+                if mk > 0.0:
                     world.excrete_at(
-                        float(self.store.pos_x[slot]),
-                        float(self.store.pos_y[slot]),
-                        m,
-                        struct,
+                        float(store.pos_x[slot]),
+                        float(store.pos_y[slot]),
+                        mk,
+                        float(struct[k]),
                     )
-                    died += m
+                    died += mk
                 self._release_flora_slot(slot)
-                continue
 
-            T = self.world.temperature_of_cell(cell)
+        alive_mask = np.ones(fl.size, dtype=bool)
+        alive_mask[dying] = False
 
-            m_cap = max(1e-12, float(self.store.flora_adult_mass[slot]))
-            regen = max(0.0, float(self.store.flora_growth_rate[slot]))
-            Topt = float(self.store.flora_temp_opt[slot])
-            Twid = max(1e-6, float(self.store.flora_temp_width[slot]))
+        cells = store.cell_idx[fl].astype(np.int64, copy=False)
+        T = world.temperature_of_cells(cells).astype(np.float64, copy=False)
+        Topt = store.flora_temp_opt[fl].astype(np.float64, copy=False)
+        Twid = np.maximum(1e-6, store.flora_temp_width[fl].astype(np.float64, copy=False))
+        regen = np.maximum(0.0, store.flora_growth_rate[fl].astype(np.float64, copy=False))
 
-            gate = math.exp(-0.5 * ((T - Topt) / Twid) ** 2)
-            if gate <= 1e-6 or m <= 0.0 or m >= m_cap:
-                continue
+        gate = np.exp(-0.5 * ((T - Topt) / Twid) ** 2)
 
-            dm_want = regen * dt * m * (1.0 - m / m_cap) * gate
-            # Taket mot vuxenmassan måste tillämpas före upptaget, inte efter.
-            # Låg det efter drogs näringen för en tillväxt som sedan kapades,
-            # och skillnaden försvann ur bokföringen. Felet var proportionellt
-            # mot hur nära vuxenmassan individerna låg och blev synligt först
-            # när floran fick en massaskala där de faktiskt når dit.
-            dm_want = min(dm_want, m_cap - m)
-            if dm_want <= 0.0:
-                continue
+        active = (
+            alive_mask
+            & (cells >= 0)
+            & (gate > 1e-6)
+            & (m > 0.0)
+            & (m < m_adult)
+        )
+        if not np.any(active):
+            if died > 0.0:
+                self._flora_summary_cache = None
+            return 0.0, 0.0, float(died)
 
-            # --- näringsbegränsning ---
-            cost_per_kg = nutrient_content(struct)
-            need = dm_want * cost_per_kg
-            cap_limit = max(0.0, float(self.store.uptake_capacity[slot])) * uptake_max
-            got = world.take_nutrient(cell, min(need, cap_limit))
-            if got <= 0.0:
-                continue
+        idx = np.flatnonzero(active)
+        a_slots = fl[idx]
+        a_cells = cells[idx]
+        a_m = m[idx]
+        a_cap = m_adult[idx]
+        a_struct = struct[idx]
 
-            # Store:n lagrar massa i float32 medan upptaget räknas i float64.
-            # Avrundningen görs alltid nedåt: rundar den uppåt binder massan
-            # mer näring än som betalats, och cellen är ofta redan tömd av
-            # just det här upptaget så skulden går inte att driva in.
-            # Nedåt är felet i stället alltid ett överskott som kan återföras.
-            target = m + got / max(cost_per_kg, 1e-12)
-            stored = np.float32(target)
-            if float(stored) > target:
-                stored = np.nextafter(stored, np.float32(0.0))
+        dm_want = regen[idx] * dt * a_m * (1.0 - a_m / a_cap) * gate[idx]
+        # Taket mot vuxenmassan tillämpas före upptaget, inte efter. Låg det
+        # efter drogs näringen för en tillväxt som sedan kapades.
+        dm_want = np.minimum(dm_want, a_cap - a_m)
 
-            dm = float(stored) - m
-            if dm <= 0.0:
-                world.add_nutrient(cell, got)
-                continue
+        cost = nutrient_content_array(a_struct)
+        cap_limit = np.maximum(0.0, store.uptake_capacity[a_slots].astype(np.float64, copy=False)) * uptake_max
+        demand = np.minimum(dm_want * cost, cap_limit)
+        demand = np.maximum(demand, 0.0)
 
-            self.store.mass[slot] = stored
-            used = dm * cost_per_kg
-            if got > used:
-                world.add_nutrient(cell, got - used)
+        n_cells = int(world.nutrient.shape[0])
+        cell_demand = np.bincount(a_cells, weights=demand, minlength=n_cells)[:n_cells]
 
-            self.store.energy[slot] = np.float32(
-                float(stored) * self._slot_energy_per_kg(slot)
+        # Proportionell delning: alla i cellen får samma andel av sin
+        # efterfrågan. Marginalen på en ulp håller summan strikt under det som
+        # finns, så att poolen aldrig kan bli negativ av avrundning.
+        share = np.zeros(n_cells, dtype=np.float64)
+        hungry = cell_demand > 0.0
+        if np.any(hungry):
+            share[hungry] = np.minimum(
+                1.0, world.nutrient[hungry] / cell_demand[hungry]
+            ) * (1.0 - 1e-12)
+
+        got = demand * share[a_cells]
+        drawn = np.bincount(a_cells, weights=got, minlength=n_cells)[:n_cells]
+        world.nutrient -= drawn
+
+        # Store:n lagrar massa i float32 medan upptaget räknas i float64.
+        # Avrundningen görs alltid nedåt: rundar den uppåt binder massan mer
+        # näring än som betalats, och cellen är ofta redan tömd av just det
+        # upptaget så skulden går inte att driva in. Nedåt är felet i stället
+        # alltid ett överskott som kan återföras.
+        target = a_m + got / np.maximum(cost, 1e-12)
+        stored = target.astype(np.float32)
+        rounded_up = stored.astype(np.float64) > target
+        if np.any(rounded_up):
+            stored[rounded_up] = np.nextafter(
+                stored[rounded_up], np.float32(0.0)
             )
-            produced += dm
-            taken += used
+
+        dm = stored.astype(np.float64) - a_m
+        grew = dm > 0.0
+
+        used = np.where(grew, dm * cost, 0.0)
+        refund = got - used
+        if np.any(refund > 0.0):
+            world.nutrient += np.bincount(
+                a_cells, weights=refund, minlength=n_cells
+            )[:n_cells]
+
+        if np.any(grew):
+            g = np.flatnonzero(grew)
+            g_slots = a_slots[g]
+            store.mass[g_slots] = stored[g]
+            store.energy[g_slots] = (
+                stored[g].astype(np.float64)
+                * float(self.WP.E_labile_J_per_kg)
+                * (1.0 - a_struct[g])
+            ).astype(np.float32)
+
+        produced = float(dm[grew].sum()) if np.any(grew) else 0.0
+        taken = float(used.sum())
 
         if produced > 0.0 or died > 0.0:
             self._flora_summary_cache = None
@@ -1391,43 +1478,53 @@ class Population:
     
         established = 0
         dispersed_mass = 0.0
-    
-        # Frys listan över kandidater detta tick så att nyfödda spridare
-        # inte sprider vidare samma tick.
-        parent_slots: list[int] = []
-        for slot in range(int(self.store.n)):
-            if bool(self.store.alive[slot]) and int(self.store.kind[slot]) == 1:
-                parent_slots.append(slot)
-    
-        for slot in parent_slots:
-            if not bool(self.store.alive[slot]):
+
+        # Delmängden är den som byggdes i tickens början. Nyfödda spridare kan
+        # därför inte sprida vidare samma tick, och de som hunnit dö i
+        # senescensen maskas bort nedan.
+        store = self.store
+        fl = self._flora_slots()
+        if fl.size == 0:
+            return 0, 0.0
+
+        m_all = store.mass[fl].astype(np.float64, copy=False)
+        cap_all = np.maximum(1e-12, store.flora_adult_mass[fl].astype(np.float64, copy=False))
+
+        # Behörighet och tärningskast avgörs vektoriserat. Bara de individer
+        # som faktiskt sprider går vidare till Python-loopen — de är få, och
+        # varje etablering allokerar en slot och muterar en traitvektor, vilket
+        # inte vinner på att vektoriseras.
+        eligible = (
+            store.alive[fl]
+            & (m_all >= 0.70 * cap_all)
+            & (m_all - 0.10 * cap_all >= 0.20 * cap_all)
+        )
+        p_all = (
+            np.maximum(0.0, store.flora_dispersal_rate[fl].astype(np.float64, copy=False))
+            * store.repro_capacity[fl].astype(np.float64, copy=False)
+            * dt
+        )
+        draws = self.rng.random(fl.size)
+        chosen = np.flatnonzero(eligible & (draws < p_all))
+        if chosen.size == 0:
+            return 0, 0.0
+
+        for k in chosen:
+            slot = int(fl[k])
+            if not bool(store.alive[slot]):
                 continue
-            if int(self.store.kind[slot]) != 1:
-                continue
-    
+
             traits = self.store.traits[slot, :]
-            
-            m_cap = max(1e-12, float(self.store.flora_adult_mass[slot]))
-            base_p = max(0.0, float(self.store.flora_dispersal_rate[slot]))
-    
-            repro_threshold = 0.70 * m_cap
+
+            m_cap = float(cap_all[k])
             seed_mass = 0.10 * m_cap
-            min_parent_mass_after = 0.20 * m_cap
             radius = 1 if m_cap < 1.5 * float(self.WP.B_K) else 2
-    
-            m = float(self.store.mass[slot])
-            struct_par = float(self.store.structure[slot])
-            if m < repro_threshold:
+
+            m = float(store.mass[slot])
+            struct_par = float(store.structure[slot])
+            if m - seed_mass < 0.20 * m_cap:
                 continue
-            if m - seed_mass < min_parent_mass_after:
-                continue
-    
-            # Enkel första sannolikhet per tick
-            repro_cap = float(self.store.repro_capacity[slot])
-            p = base_p * repro_cap * dt
-            if self.rng.random() >= p:
-                continue
-    
+
             origin = int(self.store.cell_idx[slot])
             if origin < 0:
                 continue
@@ -1549,36 +1646,14 @@ class Population:
     def _rebuild_flora_summary(self) -> None:
         """
         Bygg flora-summary-cache för loggning och diagnostik.
-        Spatialt uppslag sker nu via store.spatial_index, inte via separat flora-cache.
+        Spatialt uppslag sker via store.spatial_index, inte via separat cache.
+
+        Vektoriserad över den aktiva floradelmängden. Loopen som fanns här
+        kostade efter store-kapacitet i stället för efter antal levande, och
+        kördes varje tick oavsett om något ändrats.
         """
-        flora_n = 0
-        flora_mass = 0.0
-        flora_energy = 0.0
-    
-        vals_growth = 0.0
-        vals_adult_mass = 0.0
-        vals_temp_opt = 0.0
-        vals_temp_width = 0.0
-        vals_dispersal = 0.0
-    
-        for slot in range(int(self.store.n)):
-            if not bool(self.store.alive[slot]):
-                continue
-            if int(self.store.kind[slot]) != 1:
-                continue
-    
-            flora_n += 1
-    
-            flora_mass += float(self.store.mass[slot])
-            flora_energy += float(self.store.energy[slot])
-    
-            vals_growth += float(self.store.flora_growth_rate[slot])
-            vals_adult_mass += float(self.store.flora_adult_mass[slot])
-            vals_temp_opt += float(self.store.flora_temp_opt[slot])
-            vals_temp_width += float(self.store.flora_temp_width[slot])
-            vals_dispersal += float(self.store.flora_dispersal_rate[slot])
-    
-        if flora_n <= 0:
+        fl = self._flora_slots()
+        if fl.size == 0:
             nan = float("nan")
             self._flora_summary_cache = {
                 "flora_n": 0,
@@ -1590,21 +1665,26 @@ class Population:
                 "flora_mean_temp_width": nan,
                 "flora_mean_dispersal_rate": nan,
             }
-        else:
-            inv = 1.0 / float(flora_n)
-            self._flora_summary_cache = {
-                "flora_n": int(flora_n),
-                "flora_mass_store": float(flora_mass),
-                "flora_energy_store": float(flora_energy),
-                "flora_mean_growth_rate": float(vals_growth * inv),
-                "flora_mean_adult_mass": float(vals_adult_mass * inv),
-                "flora_mean_temp_opt": float(vals_temp_opt * inv),
-                "flora_mean_temp_width": float(vals_temp_width * inv),
-                "flora_mean_dispersal_rate": float(vals_dispersal * inv),
-            }
+            return
+
+        store = self.store
+        self._flora_summary_cache = {
+            "flora_n": int(fl.size),
+            "flora_mass_store": float(np.sum(store.mass[fl], dtype=np.float64)),
+            "flora_energy_store": float(np.sum(store.energy[fl], dtype=np.float64)),
+            "flora_mean_growth_rate": float(np.mean(store.flora_growth_rate[fl], dtype=np.float64)),
+            "flora_mean_adult_mass": float(np.mean(store.flora_adult_mass[fl], dtype=np.float64)),
+            "flora_mean_temp_opt": float(np.mean(store.flora_temp_opt[fl], dtype=np.float64)),
+            "flora_mean_temp_width": float(np.mean(store.flora_temp_width[fl], dtype=np.float64)),
+            "flora_mean_dispersal_rate": float(np.mean(store.flora_dispersal_rate[fl], dtype=np.float64)),
+        }
 
     def _flora_summary(self) -> dict[str, float]:
         if self._flora_summary_cache is None:
+            # Delmängden byggs om här: senescens och spridning har hunnit
+            # ändra beståndet sedan tickens början, och summeringen ska visa
+            # läget som det är, inte som det var.
+            self._flora_slots(rebuild=True)
             self._rebuild_flora_summary()
         return self._flora_summary_cache
         
@@ -2052,23 +2132,14 @@ class Population:
             return
     
         store = self.store
-        n = int(store.n)
-    
-        for slot in range(n):
-            if not bool(store.alive[slot]):
-                continue
-            if int(store.kind[slot]) != 0:
-                continue
-    
-            store.age[slot] = np.float32(float(store.age[slot]) + dt)
-    
-        for slot in range(n):
-            if not bool(store.alive[slot]):
-                continue
-            if int(store.kind[slot]) != 0:
-                continue
-        
-            store.repro_cd[slot] = np.float32(max(0.0, float(store.repro_cd[slot]) - dt))
+        fa = self._fauna_slots(rebuild=True)
+        if fa.size == 0:
+            return
+
+        store.age[fa] = (store.age[fa].astype(np.float64, copy=False) + dt).astype(np.float32)
+        store.repro_cd[fa] = np.maximum(
+            0.0, store.repro_cd[fa].astype(np.float64, copy=False) - dt
+        ).astype(np.float32)
             
             
     def _step_sampling(self) -> None:
