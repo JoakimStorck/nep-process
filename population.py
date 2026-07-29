@@ -96,12 +96,18 @@ class PopParams:
     #
     # Talet hör ihop med B_K och måste följa med när den ändras: såddet är
     # massastyrt, så större växter ger färre av dem. Med B_K på 11 och kvoten
-    # kvar på 10 sås ett trettiotal jätteväxter i hela världen. En ekologi
+    # kvar på 10 sås ett trettiotal jätteväxter i hela världen.
+    #
+    # Nivån 2000 är kalibrerad, inte härledd. Masslagret visade att
+    # assimilerat och förbränt låg inom två procent av varandra, medan en
+    # växande population kräver att intaget täcker underhåll plus egen
+    # tillväxt plus avkomma — omkring fyra procent ovanpå underhållet.
+    # Glappet på sex procent satt i primärproduktionen. En ekologi
     # har mer primärproduktion än konsumenter; modellen hade förhållandet
     # omvänt med faktor 138. Talet sätter utgångsläget, inte jämvikten —
     # om dynamiken inte bär det faller floran tillbaka, och då är det den
     # dynamiken som ska rättas.
-    flora_init_mass_ratio: float = 660.0
+    flora_init_mass_ratio: float = 2000.0
 
     flora_mortality: float = 2.0e-5   # höjt — naturlig matbrist sätter taket nu, inte detta
     # Hur mycket dödsrisken förhöjs för en individ vid noll massa jämfört med

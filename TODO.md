@@ -465,6 +465,29 @@ Näringsdriften faller därmed från 2,7e-06 till 4,9e-09 relativt mätt per pas
 
 **Kostnaden var prestanda.** 34 ms/tick vid 2 200 flora mot 5,5 ms vid 150. Det var Steg 5:s argument i konkret form, och Steg 5 har sedan tagit ner samma punkt till 6,7 ms.
 
+### Tidsskalan omskalad till månader — se `docs/metabolismen.md`
+
+Modellens tidsenhet var sekunder, vilket gav en livstidsomsättning på 2,4e-04 kroppsinnehåll mot verkliga 30–100. Ämnesomsättningen var komprimerad nio gånger och livslängden tvåhundratusen; följden var att det tog 568 livstider att bygga sin egen kropp, och att ett rovdjur hann konsumera en procent av vad det dödade.
+
+Enheten är nu månader. `k_basal = 9,0e6` är Kleiber uttryckt i den, ett tick är 14,4 timmar, `year_len = 12` ger fyra vintrar per liv. Eftersom omsättningen beror på massan som M⁻⁰·²⁵ väljer tidsenheten också kroppsmasseskalan — månader ger djur på ett par kilo.
+
+Utfallet över serien 0049–0052, seed 1:
+
+```
+                         median livslängd   max pop   födslar
+utgångsläge                     0,7 mån        12        0
+omskalning (0049)               0,3            12        0
+biologiska invarianter (0050)   9,9            12        2
+evolverbar reserv (0051)       13,2            12        3
+kalibrering (0052)             61,6            29       32
+```
+
+**Populationen växer och reproducerar sig för första gången.** Den kollapsar fortfarande vid 101 månader, men beteendet ser ut som boom-bust: beståndet växer till 29, betar ner födobasen och faller. Det är ekologi utan reglering, inte en trasig mekanism. Nästa fråga är vad som ska dämpa svängningen, och där finns kandidater i modellen som ännu inte fått verka — framför allt att `sense_radius` och rörelse gör betningen rumsligt ojämn så att fläckar hinner återhämta sig. Det hör till Steg 6a.
+
+`docs/metabolismen.md` beskriver hela metabolismen, de tre valutorna och deras olika lagar, samt de sex fällor som kostade mätbar tid under omskalningen.
+
+Kvar på listan: den newtonska rörelseintegrationen är numeriskt brus vid femton timmars tick — relaxationen mot terminalhastighet är sekunder — och bör förenklas till kvasistatisk form.
+
 ### Näringens ekonomi — granskad, se `docs/naringens-ekonomi.md`
 
 `flora_init_mass_ratio = 10.0` visade sig inte vara en ekologisk kvot utan systemets bärkraft. `nutrient_init = 0`, så den sådda biomassan **är** hela näringsbudgeten — extern tillförsel över en 400-sekunderskörning är 0,13 % av stocken. Fördubblad sådd ger fördubblad stående gröda, och kausaliteten går fel väg: primärproduktionen härleds ur faunans massa.
