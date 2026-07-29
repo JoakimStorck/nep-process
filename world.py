@@ -748,7 +748,7 @@ class World:
         return float(got), float(energy)
 
     def consume_food(self, x: float, y: float, amount: float,
-                     prefer_detritus: bool = True) -> Tuple[float, float, float, float]:
+                     diet: float = 0.5) -> Tuple[float, float, float, float]:
         """
         Reservkonsumtion i World: bara detritus. Levande föda hanteras av
         Population via consume_food_hook.
@@ -757,7 +757,7 @@ class World:
         """
         hook = getattr(self, "consume_food_hook", None)
         if hook is not None:
-            return hook(x, y, amount, prefer_detritus)
+            return hook(x, y, amount, diet)
     
         amt = float(amount)
         if not math.isfinite(amt) or amt <= 0.0:

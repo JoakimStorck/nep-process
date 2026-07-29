@@ -488,6 +488,40 @@ Den visar också varför lokaliteten i upptag, exkretion och kadaverdeponering �
 - `nutrient_input` blir ett per-cell-fält i stället för en skalär, så punktkällor blir möjliga.
 - Näringsbudgeten sätts explicit; flora sås ur budgeten och fauna ur floran, i stället för tvärtom.
 
+### Födsloproblemet — orsakskedjan kartlagd
+
+Uppmätt vid 100 agenter, 8 000 tick: 45 påbörjade gestationer, 0 födslar, 44 slutade med att bäraren dog. Samtliga dödsfall i körningen var dräktiga. De dog inte av svält i vanlig mening utan vid `D_max`: median D = 0,998 med massan på 0,858 kg, långt över `M_min` = 0,07, och reserven på noll.
+
+Kedjan visade sig ligga tre led före gestationen.
+
+**1. Djuren åt sopor.** `_perform_feeding` anropade `consume_food` med `prefer_detritus=True`, hårdkodat. Uppmätt gick 98,1 % av intaget till detritus vid härledd strukturandel 0,958, som assimileras till 1,2 %, medan levande flora gav 17,2 %. Total assimilation 1,5 %. Det var rimligt när detritus betydde kadaver, men sedan floran fick mortalitet och exkretionen koncentrerar strukturmaterial består poolen av nästan osmältbar förna — och slingan förstärker sig själv, eftersom det de äter blir det de exkreterar.
+
+  **Åtgärdat:** födovalet maximerar värde i stället för att följa en fast preferens. Värdet är `assimilated_fraction(struktur, verkningsgrad) × E_labile`, alltså joule per ingesterat kilo för just det djuret och det substratet — talet fanns redan, det som saknades var att någon läste det före valet. Den bästa födan tas först och den näst bästa rörs bara med det som återstår. Assimilationen gick från 1,5 % till 15,8 % och överskottet från −1,2e-06 till +6,8e-06 kg/s.
+
+  Preferensen behöver därmed inte lagras. `diet` är bara en avvägning mellan verkningsgrader, och beteendet härleds. Den styrde tidigare verkningsgraden men inte valet, så en herbivor med `herb_eff = 1,0` åt ändå detritus där hennes `scav_eff` var noll — traiten kunde straffa men aldrig löna sig. Nu är den en levande axel:
+
+  ```
+  diet-kvartil   andel detritus   assimilation
+   0,03–0,27          0,1 %          24,1 %
+   0,27–0,48          0,4 %          19,0 %
+   0,48–0,74         16,6 %          13,9 %
+   0,74–0,98         74,2 %           7,9 %
+  ```
+
+  **Men asätarnischen är inte livskraftig, och orsaken är poolningen.** En ren asätare får 0,087 ur detritus vid strukturandel 0,80 medan en ren betare får 0,258 ur flora vid 0,57. Verkliga asätare lever på kadaver, som är strukturfattiga och rika — men kadaver hälls i samma `detritus`-fält som förna och exkrement, och strukturandelen massviktas. Ett kadaver vid 0,25 som landar i en cell med ett kilo förna vid 0,83 blir 0,80. Asätaren ser aldrig ett rikt kadaver.
+
+  Det är en representationsfråga, inte en substratfråga: kadaver och förna behöver hållas isär, antingen som skilda pooler eller genom att inte massvikta strukturen. Tas som eget beslut.
+
+**2. Tillväxtdrivet går i futil cykel. Återstår.** Ledgern per djur och sekund: intag 100 J, obligatoriska dräneringar 33 J, men `E_material` 2 694 J och `E_from_M` 1 670 J. Tillväxten begär alltså tjugosju gånger mer material än födan ger och finansierar det med katabolism av den egna kroppen. Materialet återvänder som kroppsmassa, så nettomassan ändras knappt — men varje varv kostar 32 % i katabolismens utbyte och lägger på skada via `k_cat_dmg`.
+
+  Orsaken är att `out_growth` behandlas som en obligatorisk dränering i `Body.step()`, så när reserven inte räcker täcker katabolismen även tillväxten. Tillväxten skapar då själv det underskott den finansieras ur. Rätt regel är att tillväxt bara får ta av det som återstår när de obligatoriska dräneringarna är betalda, och aldrig utlösa katabolism.
+
+**3. Gestationstakten är fortfarande fyrtio gånger intaget.** `gestation_growth_kg_per_s = 0,004` mot `eat_rate = 1e-4`. Reservtaket på 3,2 % av kroppsmassan töms på sju sekunder, varefter modern kataboliserar sig själv. Takten kalibrerades när fostermassa kostade 10 kJ/kg och inget material.
+
+  Den ska bli en evolverbar axel, men intervallet går inte att sätta förrän punkt 2 är åtgärdad — vilket överskott som helst äts upp av den futila cykeln. Storleken hjälper inte heller: andelen av fostret som kan ätas in under gestationen är 2,5 % oavsett `child_M`, eftersom det är takten och inte massan som är fel.
+
+**Ordning:** tillväxtcykeln först, sedan mät om budgeten, och sätt gestationsintervallet mot ett verkligt överskott.
+
 ### Vad kalibreringen ska sikta på
 
 Efter stängningen stannar faunan på nio individer i seed 1. Det talet är **inte** ett flödesjämviktstal. Uppmätt över 12 000 tick: tolv unika individer totalt, alltså enbart den warm-startade kohorten, tre dödsfall och **noll födslar**. De nio är samma nio.

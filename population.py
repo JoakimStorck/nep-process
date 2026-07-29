@@ -31,6 +31,8 @@ from phenotype import (
     energy_density,
     nutrient_content,
     nutrient_content_array,
+    diet_efficiency,
+    assimilated_fraction,
     NUTRIENT_PER_KG_LABILE,
 )
 
@@ -1640,29 +1642,78 @@ class Population:
     
         return out
         
-    def consume_food(self, x: float, y: float, amount: float, prefer_detritus: bool = True) -> tuple[float, float, float, float]:
+    def consume_food(self, x: float, y: float, amount: float,
+                     diet: float = 0.5) -> tuple[float, float, float, float]:
         """
-        Konsumera upp till `amount` kg totalt.
+        Konsumera upp till `amount` kg, från det mest värdefulla först.
 
         Returnerar (kg_levande, kg_detritus, energi_levande_J, energi_detritus_J).
 
-        Uppdelningen finns kvar därför att den är verklig i *anskaffningen*:
-        levande vävnad tillhör en organism som växer tillbaka och senare kan
-        försvara sig, medan detritus är en pool som bara sönderfaller. Den finns
-        däremot inte längre i energiomvandlingen — där avgör materialets
-        strukturandel, oavsett varifrån det kom.
+        Värdet är `assimilated_fraction(struktur, verkningsgrad) × E_labile`,
+        alltså joule per ingesterat kilo — för det här djuret och det här
+        substratet. Talet finns redan i modellen; det som saknades var att
+        någon läste det innan valet gjordes.
+
+        Ordningen är maximerande, inte blandande: den bästa födan tas först,
+        och den näst bästa rörs bara med det som återstår när den första inte
+        räcker. Det är skillnaden mot en preferensvikt, som alltid äter en
+        andel av det sämre alternativet även när det bättre står bredvid.
+
+        Preferensen behöver därmed inte lagras. En asätare och en betare får
+        olika tal ur samma föda genom sina verkningsgrader, och valet följer.
+        `diet` är alltså bara en avvägning mellan verkningsgrader, inte
+        dessutom en smakriktning.
+
+        Uppdelningen levande/detritus finns kvar därför att den är verklig i
+        anskaffningen: levande vävnad tillhör en organism som växer tillbaka
+        och senare kan försvara sig, medan detritus är en pool som bara
+        sönderfaller. Den finns inte i energiomvandlingen — där avgör
+        strukturandelen, oavsett varifrån materialet kom.
         """
         amt = float(amount)
         if not math.isfinite(amt) or amt <= 0.0:
             return 0.0, 0.0, 0.0, 0.0
-    
-        got_d = 0.0
-        e_d = 0.0
-        if prefer_detritus:
-            got_d, e_d = self.world._consume_from_field(self.world.detritus, x, y, amt)
-            amt = max(0.0, amt - got_d)
-    
-        got_l, e_l = self._consume_flora_from_store(x, y, amt, max_radius=1)
+
+        cell = int(self.grid.cell_of(float(x), float(y)))
+        herb_eff, scav_eff = diet_efficiency(float(diet))
+
+        v_detritus = assimilated_fraction(
+            float(self.world.detritus_structure[cell]), scav_eff
+        )
+        v_flora = assimilated_fraction(
+            float(self.store.flora_cell_structure[cell]), herb_eff
+        )
+
+        got_l = got_d = e_l = e_d = 0.0
+
+        def take_detritus(want: float) -> float:
+            nonlocal got_d, e_d
+            if want <= 0.0:
+                return 0.0
+            g, e = self.world._consume_from_field(self.world.detritus, x, y, want)
+            got_d += g
+            e_d += e
+            return float(g)
+
+        def take_flora(want: float) -> float:
+            nonlocal got_l, e_l
+            if want <= 0.0:
+                return 0.0
+            g, e = self._consume_flora_from_store(x, y, want, max_radius=1)
+            got_l += g
+            e_l += e
+            return float(g)
+
+        first, second = (
+            (take_flora, take_detritus)
+            if v_flora >= v_detritus
+            else (take_detritus, take_flora)
+        )
+
+        left = amt - first(amt)
+        if left > 1e-15:
+            second(left)
+
         return float(got_l), float(got_d), float(e_l), float(e_d)
 
     def _rebuild_flora_summary(self) -> None:

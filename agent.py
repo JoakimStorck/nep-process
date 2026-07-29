@@ -2356,14 +2356,15 @@ class Agent:
             return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
 
         want_kg = float(self.AP.eat_rate) * dt * (0.25 + 0.75 * float(self.body.hunger()))
+        diet = float(getattr(self.pheno, "diet", 0.5))
         got_l, got_d, e_l, e_d = world.consume_food(
             self.x,
             self.y,
             amount=want_kg,
-            prefer_detritus=True,
+            diet=diet,
         )
 
-        herb_eff, scav_eff = diet_efficiency(float(getattr(self.pheno, "diet", 0.5)))
+        herb_eff, scav_eff = diet_efficiency(diet)
 
         a_l = self._excrete(world, got_l, e_l, herb_eff)
         a_d = self._excrete(world, got_d, e_d, scav_eff)

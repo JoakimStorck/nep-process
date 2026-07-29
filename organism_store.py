@@ -40,6 +40,7 @@ _NON_SLOT_ARRAYS = frozenset({
     "idx_cells",
     "idx_starts",
     "flora_cell_mass",
+    "flora_cell_structure",
     "_flora_cells_prev",
 })
 
@@ -113,6 +114,10 @@ class OrganismStore:
     # indexering, vilket tar bort n_cells-termen ur bygget.
     idx_cells: np.ndarray = field(init=False)
     idx_starts: np.ndarray = field(init=False)
+    # Massviktad strukturandel för floran i cellen. Utan den kan en konsument
+    # se *att* det finns föda men inte värdera den, och värdet är hela
+    # skillnaden mellan seg ved och färskt blad.
+    flora_cell_structure: np.ndarray = field(init=False)
     _flora_cells_prev: np.ndarray = field(init=False)
     cell_slots: np.ndarray = field(init=False)
 
@@ -226,6 +231,7 @@ class OrganismStore:
 
         self.idx_cells = np.zeros(0, dtype=np.int64)
         self.idx_starts = np.zeros(1, dtype=np.int64)
+        self.flora_cell_structure = np.zeros(n_cells, dtype=np.float32)
         self._flora_cells_prev = np.zeros(0, dtype=np.int64)
         self.cell_slots = np.zeros(cap, dtype=np.int32)
         self.flora_cell_mass = np.zeros(n_cells, dtype=np.float32)
@@ -309,11 +315,12 @@ class OrganismStore:
         cap = int(self.capacity)
         n_cells = int(self.n_cells)
 
-        if int(self.flora_cell_mass.shape[0]) != n_cells:
-            raise AssertionError(
-                f"flora_cell_mass har längd {int(self.flora_cell_mass.shape[0])}, "
-                f"förväntat n_cells={n_cells}"
-            )
+        for _name in ("flora_cell_mass", "flora_cell_structure"):
+            _got = int(getattr(self, _name).shape[0])
+            if _got != n_cells:
+                raise AssertionError(
+                    f"{_name} har längd {_got}, förväntat n_cells={n_cells}"
+                )
 
         # Det glesa indexet har inte n_cells som längd — dess arrayer är lika
         # långa som antalet bebodda celler. Det som ska hålla är relationen
@@ -461,6 +468,7 @@ class OrganismStore:
         # Nollställ bara det som var satt förra bygget.
         if self._flora_cells_prev.size:
             self.flora_cell_mass[self._flora_cells_prev] = np.float32(0.0)
+            self.flora_cell_structure[self._flora_cells_prev] = np.float32(0.0)
             self._flora_cells_prev = empty_i64
 
         self.idx_cells = empty_i64
@@ -513,11 +521,15 @@ class OrganismStore:
         if np.any(is_flora):
             fcells = sorted_cells[is_flora]
             fmass = self.mass[sorted_slots][is_flora].astype(np.float64, copy=False)
+            fstruct = self.structure[sorted_slots][is_flora].astype(np.float64, copy=False)
             fstarts = _group_starts(fcells)
             fu = fcells[fstarts]
-            self.flora_cell_mass[fu] = np.add.reduceat(fmass, fstarts).astype(
-                np.float32, copy=False
-            )
+            msum = np.add.reduceat(fmass, fstarts)
+            ssum = np.add.reduceat(fmass * fstruct, fstarts)
+            self.flora_cell_mass[fu] = msum.astype(np.float32, copy=False)
+            self.flora_cell_structure[fu] = (
+                ssum / np.maximum(msum, 1e-30)
+            ).astype(np.float32, copy=False)
             self._flora_cells_prev = fu
 
     def slots_in_cell(self, cell: int) -> np.ndarray:
