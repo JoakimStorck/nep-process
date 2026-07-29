@@ -297,6 +297,26 @@ Underhållskostnad som *sjunker* med strukturandel, och matsmältningskapacitet 
 
 Här får Fas 2:s ekologiska hypotes sitt första riktiga svar. Blir svaret nej — revidera floramodellen, inte kärnan.
 
+## Steg 4b — Växternas livscykel
+
+*Underlag: `docs/vaxternas-livscykel.md`. Ersätter den kvarvarande kalibreringspunkten i Steg 4: hela tillväxtdynamiken byter karaktär här, så att finjustera den gamla vore att kalibrera fel sak.*
+
+Mätningen inför steget visade att flera mekanismer vi trodde var verksamma inte är det. `uptake_capacity` binder aldrig — noll av alla individer, fem tiopotenser från taket — och fördelningen inne i cellen sker mot tillväxtunderskottet i stället för mot upptagsförmågan. Flera flora per cell tilläts i 0032 men inträffar i 1,2 procent av cellerna, eftersom den första plantan tar hela flödet oavsett storlek. Den fria näringen ligger till 99,9 procent i obebodda celler medan bebodda är rentvättade till maskinprecision. Floran är alltså inte mätt utan svälter: 1,4 procent når vuxenmassa, medianplantan står på 26 procent. Och näringsekonomin är icke förnybar — `nutrient_init = 0`, tillförseln fem tusendels procent av stocken, förlusten tio procent per varv, vilket tömmer världen på 37 år simulerad tid.
+
+- **Rotarea som anspråk.** `A = m / B_K` ur aktuell massa, härledd per tick. Upptaget delas som `A_i / max(1, ΣA)` i cellen. Obesatt area lämnar näring i marken, trängsel späder utan egen regel, och samexistens blir normalfallet.
+- **Inkomst skild från allokering.** Näringsreserv per individ, symmetriskt med faunans energireserv. Reserven fördelas på tillväxt, omsättning och reproduktion.
+- **Omsättning.** Förnafall som avtar med strukturandel — florans underhållskostnad, och det som får näringen att cirkulera utan att någon dör.
+- **Härledd livslängd** ur strukturandel, plus svältdöd när reserven inte räcker till omsättningen. `flora_mortality` som fast tal utgår.
+- **Fröet.** Propagulmassa som egen absolut axel, antal ur avsatt massa, etablering som sigmoid med tröskel, apparatandel på det frigjorda `_T_DISPERSAL`, spridning ur en kärna i kontinuerligt rum via `grid.cell_of()`.
+- **Näringsekonomin.** Bördighet skild från sådd: `nutrient_init` 0 → 0,32 kg per cell, `nutrient_input` 1,5e-8 → 7,1e-5, `nutrient_loss_frac` 0,10 → 0,01, sådden betald ur marken. `uptake_rate_max` blir per areaenhet och sänks sju till åtta tiopotenser.
+- **Tillväxten begränsas av ett `min()` över resurser**, med näring som enda post, så att ljus kan läggas till utan att passet skrivs om.
+
+**Beslut som är låsta:** `M₁ = B_K = 11`, alltså elva gånger dagens växtlighet; area ur aktuell massa; livslängd härledd, inte eget locus; ljus uppskjutet.
+
+**Klart när:** `uptake_capacity` binder mätbart, näring i bebodda celler skalar med obesatt area, floras stationära antal är oförändrat vid dubblad `capacity`, näringsstocken saknar monoton trend över 20 000 tick, och kostnaden per floraindivid ligger kvar under 1 µs.
+
+**Döms inte här:** spridningen i vuxenmassa. Utan ljus är näringskonkurrensen symmetrisk, alla i en cell växer med samma relativa takt, och byggkostnaden i näring gynnar dessutom seg vävnad sexfaldigt. Storleksaxeln mäts men får ingen dom förrän ljuset finns.
+
 ## Steg 5 — Aktiva delmängder och vektoriserade florapass
 
 - ~~Delmängder byggs en gång per tick, immutabla under ticken.~~ **Klart** för `flora_slots` och `fauna_slots`. `sensing_slots` hör till Steg 6a, där `sense_rate` får en läsare.
