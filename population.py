@@ -111,7 +111,7 @@ class PopParams:
     store_growth_min_chunk: int = 256
     store_growth_factor: float = 2.0
     
-    n_traits: int = 34   # +2 arkitekturtraits (hidden_1=23, hidden_2=24)
+    n_traits: int = 35   # +2 arkitekturtraits (hidden_1=23, hidden_2=24)
 
     spawn_jitter_r: float = 1.5
 

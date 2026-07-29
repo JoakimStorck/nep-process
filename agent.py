@@ -394,6 +394,8 @@ class Body:
     _catabolized_last_step: bool = False
     # Förväntad massa för åldern, cachad i step() så hunger() kan läsa den.
     _M_expected: float = 0.0
+    # Reservkapacitet per kilo, cachad från fenotypen så E_cap() kan läsa den.
+    _reserve_cap: float = 0.0
 
     # structural state
     M: float = 0.0        # body mass
@@ -519,8 +521,22 @@ class Body:
         return self.M_reserve() * float(self.AP.E_labile_J_per_kg)
 
     def E_cap(self) -> float:
+        """
+        Reservens tak i joule.
+
+        Kapaciteten per kilo är en genetisk axel, cachad från fenotypen i
+        step(). Ett fast tak gjorde upplagring omöjlig: en vuxen individ vid
+        M_target kunde varken växa eller lagra, så allt överskott
+        exkreterades medan varje svacka kostade massa — ett tak uppåt utan
+        golv nedåt, vilket ger en långsam nedgång oavsett hur god
+        försörjningen är.
+
+        Med säsonger som verkar över fyra vintrar per liv är förmågan att
+        lägga på hull dessutom det som avgör om vintern går att överleva.
+        """
         M = self.M
-        return self.AP.E_cap_per_M * (M if M > 1e-9 else 1e-9)
+        cap = float(getattr(self, "_reserve_cap", 0.0)) or float(self.AP.E_cap_per_M)
+        return cap * (M if M > 1e-9 else 1e-9)
 
     def hunger(self) -> float:
         """
@@ -920,7 +936,12 @@ class Body:
         # ---------------------------------------------------------
         # (2) Effective mass (carried load) + basal/compute/sense/loco
         # ---------------------------------------------------------
-        M_carry = float(self.M)
+        # Reserven är massa organismen faktiskt bär, och ska belasta basal,
+        # rörelse och värmeförlust som all annan massa. Att utesluta den
+        # gjorde fett gratis — och utan kostnad har en evolverbar
+        # reservkapacitet ingen avvägning att selekteras på.
+        self._reserve_cap = float(getattr(pheno, "reserve_cap", 0.0))
+        M_carry = float(self.M) + self.M_reserve()
         if bool(self.gestating):
             M_carry += _gest_burden * max(0.0, float(self.gest_M))
 

@@ -36,6 +36,7 @@ class Phenotype:
     susceptibility: float
     stress_per_drain: float
     repair_capacity: float
+    reserve_cap: float
     frailty_gain: float
     E_rep_min: float
 
@@ -127,6 +128,10 @@ _T_STRUCTURE       = 32
 # utnyttjat — selektionen hade nästan ingenting att gripa i.
 _T_UPTAKE          = 33
 
+# Reservkapacitet: hur mycket energi organismen kan bära som mobiliserbar
+# reserv, i joule per kilo kroppsmassa. Var konstanten AP.E_cap_per_M.
+_T_RESERVE         = 34
+
 @dataclass(frozen=True)
 class PhenoRanges:
     # maturity
@@ -153,6 +158,13 @@ class PhenoRanges:
 
     stress_per_drain_min: float = 0.01
     stress_per_drain_max: float = 0.05
+
+    # Reservkapacitet i J/kg kroppsmassa. 0,5e6 är ungefär 5 % av
+    # kroppsmassan som mobiliserbar reserv, 4,0e6 är drygt 40 % — magert
+    # respektive vinterfett. Att bära reserven kostar, eftersom den räknas
+    # in i M_carry och därmed i basal, rörelse och värmeförlust.
+    reserve_cap_min: float = 0.5e6
+    reserve_cap_max: float = 4.0e6
 
     repair_capacity_min: float = 0.10
     repair_capacity_max: float = 1.50   # höjt — k_age1 ger lägre inflöde än k_age0=0.2
@@ -265,6 +277,8 @@ def derive_pheno(traits: np.ndarray | None, R: PhenoRanges = PhenoRanges()) -> P
         susceptibility=float(_lerp(R.susceptibility_min, R.susceptibility_max, u_susc)),
         stress_per_drain=float(_lerp(R.stress_per_drain_min, R.stress_per_drain_max, u_spd)),
         repair_capacity=float(_lerp(R.repair_capacity_min, R.repair_capacity_max, u_rep)),
+        reserve_cap=float(_lerp(R.reserve_cap_min, R.reserve_cap_max,
+                                _sigmoid(_get_trait(traits, _T_RESERVE)))),
         frailty_gain=float(_lerp(R.frailty_gain_min, R.frailty_gain_max, u_frail)),
         E_rep_min=float(_lerp(R.E_rep_min_min, R.E_rep_min_max, u_erep)),
     
@@ -302,6 +316,7 @@ def phenotype_summary(p: Phenotype) -> dict[str, float]:
         "susceptibility": float(p.susceptibility),
         "stress_per_drain": float(p.stress_per_drain),
         "repair_capacity": float(p.repair_capacity),
+        "reserve_cap": float(p.reserve_cap),
         "frailty_gain": float(p.frailty_gain),
 
         "child_E_fast": float(p.child_E_fast),
