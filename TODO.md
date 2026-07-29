@@ -305,11 +305,15 @@ Mätningen inför steget visade att flera mekanismer vi trodde var verksamma int
 
 - ~~**Rotarea som anspråk.**~~ **Klart.** `A = m / B_K` ur aktuell massa, härledd per tick, delning `A_i / max(1, ΣA)` med spill över grannringen för `A > 1`. Fullvuxna plantor ingår i anspråket men tar ingenting, vilket är det som låter ett bestånd hålla undan groddplantor.
 - ~~**Näringsekonomin.**~~ **Klart.** Bördigheten ligger i `nutrient_init`, sådden debiteras marken, tillförsel och förlust är kalibrerade som par, `uptake_rate_max` är per areaenhet.
-- **Inkomst skild från allokering.** Näringsreserv per individ, symmetriskt med faunans energireserv. Reserven fördelas på tillväxt, omsättning och reproduktion. Upptag och tillväxt är tills vidare fusionerade, eftersom en reserv utan läsare vore write-only.
-- **Omsättning.** Förnafall som avtar med strukturandel — florans underhållskostnad, och det som får näringen att cirkulera utan att någon dör.
-- **Härledd livslängd** ur strukturandel, plus svältdöd när reserven inte räcker till omsättningen. `flora_mortality` som fast tal utgår.
+- ~~**Inkomst skild från allokering.**~~ **Klart.** `flora_reserve` och `flora_repro_pool` i kg näring, float64 av bokföringsskäl. Allokeringsandelen tar över `_T_GROWTH`, som blev ledigt när tillväxten blev inkomstbegränsad.
+- ~~**Omsättning.**~~ **Klart.** Förnafall per tick i en takt som avtar med strukturandel, deponerat vektoriserat via `World.excrete_cells()`.
+- ~~**Härledd livslängd**~~ **Klart** ur strukturandel, 7 till 138 månader. Svältdöden är emergent: den som inte växer snabbare än sitt förnafall krymper under `flora_min_mass_frac · B_K`. `flora_mortality` och `flora_seedling_mort_mult` utgår.
 - **Fröet.** Propagulmassa som egen absolut axel, antal ur avsatt massa, etablering som sigmoid med tröskel, apparatandel på det frigjorda `_T_DISPERSAL`, spridning ur en kärna i kontinuerligt rum via `grid.cell_of()`.
 - ~~**Tillväxten begränsas av ett `min()` över resurser**~~ **Klart**, med näring som enda post, så att ljus kan läggas till utan att passet skrivs om. Temperaturgrinden sitter numera på upptaget i stället för på en logistisk term som ändå aldrig band.
+
+**Efter 0055:** floran samexisterar på riktigt — 4,06 plantor per bebodd cell i medel, median 3, mest 49, och 79,8 procent av de bebodda cellerna har fler än en. Allokeringsaxeln bär en verklig fördelning (p10 0,30, median 0,48, p90 0,67) i stället för att kollapsa. Faunan går inte längre under: den når `max_pop` på 256 och stannar där, mot en topp på 135 följd av utdöende före steget.
+
+**Men `structure` har kollapsat mot den vedartade änden** — median 0,771 av taket 0,85, p10 till p90 bara 0,690 till 0,789. Det var förutsett i `docs/vaxternas-livscykel.md`, men 0055 gjorde det värre snarare än bättre: axeln fick två *nya* uppsidor, lång livslängd och lågt förnafall, medan den snabba änden fortfarande saknar sin — hög tillväxt är ingen fördel när tillväxten är inkomstbegränsad och inkomsten följer arean, inte vävnadstypen. Seg vävnad är dessutom sex gånger billigare i näring per kilo. Strukturaxeln har alltså fyra uppsidor och noll nedsidor, och kommer att ligga i taket tills ljuset finns. **Den ska inte läsas som ett resultat.**
 
 **Efter 0054:** floran når stationärt beteende satt av näring i stället för av `capacity`, och systemet svänger i stället för att växa monotont. Fauna toppar på 135 individer mot tidigare 29 och överlever till tick 11 000 mot tidigare 5 000, men kollapsar därefter och tar floran med sig ner. Det är boom–bust utan reglering: 0054 höjer produktionen men inför ingen återkoppling. Regleringen är 0055:s uppgift — mortalitet, omsättning och allokering — och faunans egen reglering är en senare fråga.
 

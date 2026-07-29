@@ -165,8 +165,13 @@ class OrganismStore:
     flood_tolerance: np.ndarray = field(init=False)
     buoyancy: np.ndarray = field(init=False)
 
-    flora_growth_rate: np.ndarray = field(init=False)
     flora_adult_mass: np.ndarray = field(init=False)
+    flora_repro_alloc: np.ndarray = field(init=False)
+    # Näringsreserv och reproduktionspool, i kg näring. float64 av
+    # bokföringsskäl: reserven är källa och sänka i näringsbalansen, och
+    # float32 skulle kräva samma nedåtavrundningsdans som massan.
+    flora_reserve: np.ndarray = field(init=False)
+    flora_repro_pool: np.ndarray = field(init=False)
     flora_temp_opt: np.ndarray = field(init=False)
     flora_temp_width: np.ndarray = field(init=False)
     flora_dispersal_rate: np.ndarray = field(init=False)    
@@ -221,8 +226,10 @@ class OrganismStore:
         self.flood_tolerance = np.zeros(cap, dtype=np.float32)
         self.buoyancy = np.zeros(cap, dtype=np.float32)
 
-        self.flora_growth_rate = np.zeros(cap, dtype=np.float32)
         self.flora_adult_mass = np.zeros(cap, dtype=np.float32)
+        self.flora_repro_alloc = np.zeros(cap, dtype=np.float32)
+        self.flora_reserve = np.zeros(cap, dtype=np.float64)
+        self.flora_repro_pool = np.zeros(cap, dtype=np.float64)
         self.flora_temp_opt = np.zeros(cap, dtype=np.float32)
         self.flora_temp_width = np.zeros(cap, dtype=np.float32)
         self.flora_dispersal_rate = np.zeros(cap, dtype=np.float32)        
@@ -433,8 +440,10 @@ class OrganismStore:
         self.flood_tolerance[slot] = 0.0
         self.buoyancy[slot] = 0.0
     
-        self.flora_growth_rate[slot] = 0.0
         self.flora_adult_mass[slot] = 0.0
+        self.flora_repro_alloc[slot] = 0.0
+        self.flora_reserve[slot] = 0.0
+        self.flora_repro_pool[slot] = 0.0
         self.flora_temp_opt[slot] = 0.0
         self.flora_temp_width[slot] = 0.0
         self.flora_dispersal_rate[slot] = 0.0

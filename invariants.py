@@ -674,6 +674,10 @@ def nutrient_balance(pop) -> dict[str, float]:
         from phenotype import NUTRIENT_PER_KG_LABILE, NUTRIENT_PER_KG_STRUCT
         in_flora = float(np.sum(m * (NUTRIENT_PER_KG_LABILE * (1.0 - st)
                                      + NUTRIENT_PER_KG_STRUCT * st)))
+        # Reserven och reproduktionspoolen är näring plantan tagit upp men ännu
+        # inte bundit i vävnad. Utan dem läcker balansen i takt med upptaget.
+        in_flora += float(np.sum(store.flora_reserve[flora], dtype=np.float64))
+        in_flora += float(np.sum(store.flora_repro_pool[flora], dtype=np.float64))
     else:
         in_flora = 0.0
 

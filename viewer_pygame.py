@@ -378,7 +378,7 @@ class WorldViewer:
                     u = max(0.0, min(1.0, (val - lo) / max(hi - lo, 1e-9)))
                 
                 elif color_by == "growth":
-                    val = float(store.flora_growth_rate[slot])
+                    val = float(store.flora_repro_alloc[slot])
                     u = max(0.0, min(1.0, (val - 0.005) / (0.050 - 0.005)))
     
             except Exception:
@@ -591,7 +591,7 @@ class WorldViewer:
             color_by = str(getattr(self.cfg, "flora_color_by", "temp_opt"))
             line5 = (
                 f"flora[{color_by}]: "
-                f"g={ft['flora_mean_growth_rate']:.3f}  "
+                f"a={ft['flora_mean_repro_alloc']:.3f}  "
                 f"M*={ft['flora_mean_adult_mass']:.4f}  "
                 f"Topt={ft['flora_mean_temp_opt']:.1f}  "
                 f"Tw={ft['flora_mean_temp_width']:.1f}  "

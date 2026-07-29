@@ -534,10 +534,46 @@ UPTAKE_INIT = (0.05, 0.95)
 # i stället för att gå sönder tyst hos en anropare.
 
 
+# ---------------------------------------------------------------------------
+# Florans omsättning och livslängd — härledda ur strukturandelen
+# ---------------------------------------------------------------------------
+# Bladekonomispektrumet: tunna billiga blad omsätts fort och ger hög tillväxt,
+# seg vävnad omsätts långsamt och lever länge. Samma tal styr båda, vilket är
+# vad som gör `structure` till en långsam–snabb-axel i stället för en
+# näringsrabatt. Se docs/vaxternas-livscykel.md.
+
+# Omsättningstakt per månad: andel av massan som fälls som förna.
+FLORA_TURNOVER_LABILE = 0.083    # ren labil vävnad, uppehållstid ~12 månader
+FLORA_TURNOVER_STRUCT = 0.0083   # ren struktur, uppehållstid ~120 månader
+
+# Livslängd i månader, log-linjär i strukturandelen. Med structure i
+# [0,05, 0,85] blir spannet omkring 7 månader till 11 år — örter till björkar.
+# Ekänden ryms inte i ett fönster på 120 månader och ska inte finnas som en
+# parameter som aldrig får verka.
+FLORA_LIFESPAN_MIN = 6.0
+FLORA_LIFESPAN_MAX = 240.0
+
+
+def flora_turnover_rate(structure):
+    """Förnafall per månad som andel av massan. Skalär eller array."""
+    s = np.clip(structure, 0.0, 1.0)
+    return FLORA_TURNOVER_LABILE * (1.0 - s) + FLORA_TURNOVER_STRUCT * s
+
+
+def flora_lifespan(structure):
+    """Förväntad livslängd i månader. Skalär eller array."""
+    s = np.clip(structure, 0.0, 1.0)
+    return FLORA_LIFESPAN_MIN * (FLORA_LIFESPAN_MAX / FLORA_LIFESPAN_MIN) ** s
+
+
 @dataclass(frozen=True)
 class FloraRanges:
-    growth_rate_min: float = 1.3e4
-    growth_rate_max: float = 1.3e5
+    # Andel av inkomsten som går till reproduktion i stället för till kropp.
+    # Övre änden är avsiktligt hög: den som lägger nästan allt på frön kan inte
+    # betala sitt förnafall, krymper och dör. Semelpari är ytterligheten av
+    # axeln, inte ett specialfall.
+    repro_alloc_min: float = 0.0
+    repro_alloc_max: float = 0.9
 
     # Vuxenmassa uttrycks som multipel av världens massaskala (WorldParams.B_K)
     # och skalas därför vid anropet, inte här.
@@ -557,8 +593,16 @@ class FloraRanges:
     uptake_capacity_max: float = 1.0
 
 
-def flora_growth_rate(traits: np.ndarray | None, R: FloraRanges = FloraRanges()) -> float:
-    return _lerp(R.growth_rate_min, R.growth_rate_max, growth_from_traits(traits, default=0.0))
+def flora_repro_alloc(traits: np.ndarray | None, R: FloraRanges = FloraRanges()) -> float:
+    """
+    Andel av näringsinkomsten som avsätts till reproduktion.
+
+    Tar över `_T_GROWTH`, som blev ledigt när tillväxten blev inkomstbegränsad.
+    Locuset kodade en logistisk takt vars `regen · dt` låg mellan 260 och 2 600
+    och därför saturerade mot vuxenmassetaket varje tick — det hade i praktiken
+    ingen konsekvens. Genomet växer alltså inte.
+    """
+    return _lerp(R.repro_alloc_min, R.repro_alloc_max, growth_from_traits(traits, default=0.5))
 
 
 def flora_adult_mass(

@@ -51,8 +51,6 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--nutrient-input", type=float, default=None)
     ap.add_argument("--uptake-rate-max", type=float, default=None)
     ap.add_argument("--nutrient-diffusion", type=float, default=None)
-    ap.add_argument("--flora-mortality", type=float, default=None)
-    ap.add_argument("--seedling-mort-mult", type=float, default=None)
 
     ap.add_argument("--out", type=str, default="calibration.csv")
     ap.add_argument("--label", type=str, default="")
@@ -75,10 +73,6 @@ def build(a: argparse.Namespace) -> Population:
     WP = WorldParams(**wp_kw)
 
     pp_kw = dict(init_pop=int(a.init_pop), max_pop=int(a.max_pop))
-    if a.flora_mortality is not None:
-        pp_kw["flora_mortality"] = float(a.flora_mortality)
-    if a.seedling_mort_mult is not None:
-        pp_kw["flora_seedling_mort_mult"] = float(a.seedling_mort_mult)
     PP = PopParams(**pp_kw)
 
     return Population(WP=WP, AP=AgentParams(dt=WP.dt), PP=PP, seed=int(a.seed), hub=None)
@@ -182,7 +176,7 @@ def main() -> int:
         f"({pop.grid.n_cells} celler), seed {a.seed}, max_pop {a.max_pop}\n"
         f"  nutrient_input={pop.WP.nutrient_input:.3e}  uptake_rate_max={pop.WP.uptake_rate_max:.3e}  "
         f"diffusion={pop.WP.nutrient_diffusion:.3g}\n"
-        f"  flora_mortality={pop.PP.flora_mortality:.3e}  seedling_mult={pop.PP.flora_seedling_mort_mult:.3g}\n"
+        f"  flora_min_mass_frac={pop.PP.flora_min_mass_frac:.3e}\n"
         f"  -> {a.out}",
         flush=True,
     )

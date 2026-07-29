@@ -141,7 +141,7 @@ class WorldSeries:
         self.nut_added.append(g("nutrient_added"))
         self.nut_lost.append(g("nutrient_lost"))
 
-        self.growth_rate.append(g("flora_mean_growth_rate"))
+        self.growth_rate.append(g("flora_mean_repro_alloc"))
         self.adult_mass.append(g("flora_mean_adult_mass"))
         self.dispersal_rate.append(g("flora_mean_dispersal_rate"))
         self.temp_opt.append(g("flora_mean_temp_opt"))

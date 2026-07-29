@@ -808,6 +808,46 @@ class World:
         self._dM_excreted += amt
         return amt
 
+    def excrete_cells(self, cells, amounts, structures) -> float:
+        """
+        Vektoriserad exkretion: massa till detritus i angivna celler.
+
+        Samma semantik som `excrete_at`, men för många deponeringar på en gång.
+        Florans förnafall berör varje levande planta varje tick, och ett
+        Python-anrop per individ skulle kosta mer än hela tillväxtpasset.
+        Strukturandelen blandas in massviktat per cell, precis som i
+        `_detritus_add`.
+        """
+        c = np.asarray(cells, dtype=np.int64)
+        a = np.asarray(amounts, dtype=np.float64)
+        s = np.asarray(structures, dtype=np.float64)
+        keep = np.isfinite(a) & (a > 0.0) & (c >= 0) & (c < int(self.grid.n_cells))
+        if not np.any(keep):
+            return 0.0
+        c = c[keep]; a = a[keep]; s = s[keep]
+
+        uniq, inv = np.unique(c, return_inverse=True)
+        add = np.bincount(inv, weights=a)
+        addw = np.bincount(inv, weights=a * s)
+
+        old = np.asarray(self.detritus)[uniq].astype(np.float64)
+        s_old = np.asarray(self.detritus_structure)[uniq].astype(np.float64)
+        tot = old + add
+        safe = tot > 0.0
+        s_new = s_old.copy()
+        s_new[safe] = (s_old[safe] * old[safe] + addw[safe]) / tot[safe]
+        self.detritus[uniq] = tot.astype(self.detritus.dtype, copy=False)
+        self.detritus_structure[uniq] = s_new.astype(self.detritus_structure.dtype, copy=False)
+
+        fresh = uniq[~self._detritus_member[uniq]]
+        if fresh.size:
+            self._detritus_member[fresh] = True
+            self._detritus_pending.extend(int(v) for v in fresh)
+
+        total = float(add.sum())
+        self._dM_excreted += total
+        return total
+
     def add_carcass(self, x: float, y: float, amount_kg: float, rad: int = 3,
                     structure: float = 0.45) -> None:
         """
