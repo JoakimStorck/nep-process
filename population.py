@@ -21,8 +21,11 @@ from genetics import (
 from phenotype import (
     derive_pheno,
     flora_adult_mass,
-    flora_dispersal_rate,
+    dispersal_scale,
+    establish_p,
+    flora_apparatus,
     flora_lifespan,
+    flora_seed_mass,
     flora_repro_alloc,
     flora_turnover_rate,
     flora_repro_capacity,
@@ -125,11 +128,17 @@ class PopParams:
     # Massa under vilken en planta räknas som död. Förnafallet är
     # multiplikativt och når därför aldrig noll av sig självt.
     flora_min_mass_frac: float = 1.0e-4
+    # Tak på antal frön per planta och tick. Bara en beräkningsgräns: med
+    # propagulmassa ner till 1e-4 kg kan en full pool annars ge tusentals frön
+    # i ett svep, och etableringsutfallet dras ändå innan slots allokeras.
+    flora_max_seeds_per_tick: int = 64
+    # Andel av propagulmassan under vilken en groddplanta räknas som förlorad.
+    flora_seedling_floor: float = 0.5
 
     store_growth_min_chunk: int = 256
     store_growth_factor: float = 2.0
     
-    n_traits: int = 35   # +2 arkitekturtraits (hidden_1=23, hidden_2=24)
+    n_traits: int = 36   # +1: _T_SEED_MASS = 35, propagulmassa i absoluta tal
 
     spawn_jitter_r: float = 1.5
 
@@ -572,7 +581,8 @@ class Population:
                 "flora_mean_adult_mass": float(flora_info["flora_mean_adult_mass"]),
                 "flora_mean_temp_opt": float(flora_info["flora_mean_temp_opt"]),
                 "flora_mean_temp_width": float(flora_info["flora_mean_temp_width"]),
-                "flora_mean_dispersal_rate": float(flora_info["flora_mean_dispersal_rate"]),
+                "flora_mean_apparatus": float(flora_info["flora_mean_apparatus"]),
+                "flora_mean_seed_mass": float(flora_info["flora_mean_seed_mass"]),
     
                 "E_in_growth": float(wf.get("E_in_growth", 0.0)),
                 "E_loss_wither": float(wf.get("E_loss_wither", 0.0)),
@@ -1099,7 +1109,8 @@ class Population:
         a_mass = np.float32(flora_adult_mass(traits, mass_scale=float(self.WP.B_K)))
         t_opt = np.float32(flora_temp_opt(traits))
         t_width = np.float32(flora_temp_width(traits))
-        d_rate = np.float32(flora_dispersal_rate(traits))
+        appar = np.float32(flora_apparatus(traits))
+        s_mass = np.float32(flora_seed_mass(traits))
 
         self.store.id[slot] = int(next_organism_id())
     
@@ -1122,7 +1133,8 @@ class Population:
         self.store.flora_repro_pool[slot] = 0.0
         self.store.flora_temp_opt[slot] = t_opt
         self.store.flora_temp_width[slot] = t_width
-        self.store.flora_dispersal_rate[slot] = d_rate
+        self.store.flora_apparatus[slot] = appar
+        self.store.flora_seed_mass[slot] = s_mass
         
         # Härled enkla store-kapaciteter från traits istället för hårdkodade 1.0/0.0
         self.store.uptake_capacity[slot] = np.float32(flora_uptake_capacity(traits))
@@ -1130,7 +1142,7 @@ class Population:
         # inkomstbegränsad inte heller något locus. Den hör till Steg 6b, där
         # kapacitetsfälten får läsare och kostnader.
         self.store.growth_capacity[slot] = np.float32(0.0)
-        self.store.dispersal_capacity[slot] = np.float32(d_rate / 0.020)
+        self.store.dispersal_capacity[slot] = appar
 
         self.store.sense_radius[slot] = np.float32(0.0)
         self.store.sense_rate[slot] = np.float32(0.0)
@@ -1413,7 +1425,13 @@ class Population:
         store = self.store
         grid = self.grid
         u_area = float(self.WP.uptake_rate_max)
-        m_floor = float(self.PP.flora_min_mass_frac) * BK
+        # Svältgolvet är relativt fröet plantan kom ur, inte bara absolut. En
+        # groddplanta som tappat halva sitt förråd är död; en fullvuxen ligger
+        # tiopotenser över sitt eget frö och berörs inte. Utan den relativa
+        # termen krymper en groddplanta med förnafallets takt och lever i
+        # storleksordningen åttio månader utan att någonsin växa, vilket fyller
+        # store:n med ett groddplantslager som varken dör eller producerar.
+        m_floor_abs = float(self.PP.flora_min_mass_frac) * BK
 
         m = store.mass[fl].astype(np.float64, copy=False)
         struct = store.structure[fl].astype(np.float64, copy=False)
@@ -1443,6 +1461,11 @@ class Population:
         # --- 2. åldrande och svält -------------------------------------------
         hazard = dt / np.maximum(1e-6, flora_lifespan(struct))
         draws = self.rng.random(fl.size)
+        m_floor = np.maximum(
+            m_floor_abs,
+            float(self.PP.flora_seedling_floor)
+            * store.flora_seed_mass[fl].astype(np.float64, copy=False),
+        )
         dying = np.flatnonzero((draws < hazard) | (m <= m_floor))
 
         # Dödsfallen är få per tick och varje deponering blandar strukturandelar
@@ -1593,21 +1616,42 @@ class Population:
 
     def _dispersal_system_flora(self) -> tuple[int, float]:
         """
-        Enkel första spridning för diskret flora.
-        Returnerar (antal etableringar/påfyllningar, totalt utspridd massa i kg).
+        Fröproduktion, spridning och etablering.
+
+        Tre saker byter form här. **Propagulmassan** är en egen absolut axel i
+        stället för tio procent av moderns vuxenmassa — den gamla regeln gav ett
+        träd på 44 kg ett frö på 4,4, och var dessutom skalfri, så att en mindre
+        planta nådde sin egen tröskel snabbare och fröet krympte med henne.
+        Storleksaxeln kunde bara falla.
+
+        **Antalet** följer av poolen dividerad med propagulmassan, så "många små
+        eller få stora" blir ett val i stället för en konstant.
+
+        **Etableringen** är en Hillfunktion med exponent två på fröets förråd.
+        Formen är inte fri: fitness går som f(m)/m, och en vanlig mättande
+        funktion har inget inre optimum — då vinner alltid det minsta fröet.
+        Halvmättnaden växer med målcellens anspråkade area, så stort frö vinner
+        där det är trångt och många små där det är öppet. Utan den kopplingen
+        konvergerar axeln i stället för att differentiera.
+
+        Utfallet dras **innan** sloten allokeras. Frön som inte etablerar sig
+        blir detritus i sin målcell — fröregn föder marken — och antalet slots
+        får ett tak utan att antalet frön behöver begränsas.
+
+        Avståndet dras ur en tungsvansad kärna i kontinuerligt rum och slås upp
+        med `grid.cell_of_many()`. O(1) per frö, vektoriserbart och
+        geometriagnostiskt. Det ersätter en BFS per händelse över en skiva med
+        två diskreta radier.
+
+        Returnerar (antal etableringar, totalt utspridd massa i kg).
         """
         dt = float(self.WP.dt)
         BK = float(self.WP.B_K)
         if BK <= 0.0 or dt <= 0.0:
             return 0, 0.0
-    
-        established = 0
-        dispersed_mass = 0.0
 
-        # Delmängden är den som byggdes i tickens början. Nyfödda spridare kan
-        # därför inte sprida vidare samma tick, och de som hunnit dö i
-        # senescensen maskas bort nedan.
         store = self.store
+        grid = self.grid
         fl = self._flora_slots()
         if fl.size == 0:
             return 0, 0.0
@@ -1616,20 +1660,11 @@ class Population:
         cap_all = np.maximum(1e-12, store.flora_adult_mass[fl].astype(np.float64, copy=False))
         struct_all = store.structure[fl].astype(np.float64, copy=False)
         pool_all = store.flora_repro_pool[fl]
+        seed_all = np.maximum(1e-9, store.flora_seed_mass[fl].astype(np.float64, copy=False))
+        appar_all = store.flora_apparatus[fl].astype(np.float64, copy=False)
+        cost_all = nutrient_content_array(struct_all)
 
-        # Spridningen betalas ur reproduktionspoolen, inte ur moderns vävnad.
-        # Tidigare var villkoret att plantan nått sjuttio procent av sin *egen*
-        # vuxenmassa och att fröet kostade tio procent av samma tal — båda
-        # skalfria, vilket låste storleksaxeln: en mindre planta nådde sin egen
-        # tröskel snabbare och fröet skalades ner med henne, så en stor planta
-        # hade ingen fördel alls. Nu avgör allokeringen takten, och den är en
-        # ärftlig andel av inkomsten.
-        #
-        # Fröstorleken är tills vidare kvar som andel av vuxenmassan. Den blir
-        # en egen absolut axel i nästa steg.
-        seed_mass_all = 0.10 * cap_all
-        seed_cost_all = seed_mass_all * nutrient_content_array(struct_all)
-
+        seed_cost_all = seed_all * cost_all
         eligible = (
             store.alive[fl]
             & (pool_all >= seed_cost_all)
@@ -1639,84 +1674,106 @@ class Population:
         if chosen.size == 0:
             return 0, 0.0
 
-        for k in chosen:
-            slot = int(fl[k])
-            if not bool(store.alive[slot]):
-                continue
+        # Cellernas anspråkade area, för etableringens trängselterm. Samma
+        # storhet som upptaget delas efter, alltså samma trängsel.
+        n_cells = int(grid.n_cells)
+        live = np.flatnonzero(store.alive & (store.kind == 1))
+        crowd = np.zeros(n_cells, dtype=np.float64)
+        if live.size:
+            lc = store.cell_idx[live].astype(np.int64, copy=False)
+            ok = lc >= 0
+            crowd = np.bincount(
+                lc[ok],
+                weights=np.minimum(1.0, store.mass[live][ok].astype(np.float64) / BK),
+                minlength=n_cells,
+            )[:n_cells]
 
-            traits = self.store.traits[slot, :]
+        # Allt utom slotallokeringen görs över alla frön på en gång. En loop
+        # per moder kostade 348 ms per tick vid trettontusen plantor: femton
+        # numpy-anrop på 64-elementsarrayer, tusentals gånger. Den serielle
+        # delen är bara etableringarna, och de är få.
+        n_seed = np.minimum(
+            int(self.PP.flora_max_seeds_per_tick),
+            (pool_all[chosen] / np.maximum(1e-30, seed_cost_all[chosen])).astype(np.int64),
+        )
+        keep = n_seed > 0
+        sel = chosen[keep]
+        n_seed = n_seed[keep]
+        if sel.size == 0:
+            return 0, 0.0
 
-            m_cap = float(cap_all[k])
-            seed_mass = float(seed_mass_all[k])
-            paid = float(seed_cost_all[k])
-            radius = 1 if m_cap < 1.5 * float(self.WP.B_K) else 2
+        midx = np.repeat(sel, n_seed)
+        slots = fl[midx]
+        seed_m = seed_all[midx]
+        appar = appar_all[midx]
+        prov = seed_m * (1.0 - appar)
 
-            if float(store.flora_repro_pool[slot]) < paid:
-                continue
+        L = dispersal_scale(cap_all[midx], appar, seed_m)
+        # Stretchad exponentialkärna: tyngre svans än exponentialen, vilket är
+        # den kvalitativa egenskap verkliga spridningskärnor har.
+        d = L * self.rng.standard_exponential(midx.size) ** (1.0 / 0.7)
+        th = self.rng.uniform(0.0, 2.0 * np.pi, midx.size)
+        px = store.pos_x[slots].astype(np.float64) + d * np.cos(th)
+        py = store.pos_y[slots].astype(np.float64) + d * np.sin(th)
+        grid.wrap_pos_inplace(px, py)
+        targets = grid.cell_of_many(px, py).astype(np.int64, copy=False)
 
-            origin = int(self.store.cell_idx[slot])
-            if origin < 0:
+        pr = establish_p(prov, crowd[targets])
+        wins = self.rng.random(midx.size) < pr
+
+        # Poolen debiteras en gång per moder, oavsett utfall: fröna byggdes.
+        store.flora_repro_pool[fl[sel]] -= n_seed * seed_cost_all[sel]
+        dispersed_mass = float(seed_m.sum())
+
+        # Frön som inte etablerar sig blir förna där de landade.
+        lost = ~wins
+        if np.any(lost):
+            self.world.excrete_cells(targets[lost], seed_m[lost], struct_all[midx][lost])
+
+        established = 0
+        for j in np.flatnonzero(wins):
+            mother = int(slots[j])
+            if not bool(store.alive[mother]):
                 continue
-    
-            candidates = [int(c) for c in self.grid.cells_within(origin, radius) if int(c) != origin]
-            if not candidates:
-                continue
-    
-            target = int(candidates[int(self.rng.integers(0, len(candidates)))])
-    
+            target = int(targets[j])
+            paid_each = float(seed_cost_all[midx[j]])
+
             child_traits = mutate_trait_vector(
-                traits,
-                self.rng,
-                sigma=0.05,
-                p=0.10,
-                clip=2.5,
+                store.traits[mother, :], self.rng, sigma=0.05, p=0.10, clip=2.5,
             )
-            child_slot = self._add_or_create_flora_in_cell(target, seed_mass, traits=child_traits)
+            child_slot = self._add_or_create_flora_in_cell(
+                target, float(seed_m[j]), traits=child_traits
+            )
             if child_slot < 0:
                 continue
 
-            # Betala ur poolen. Moderns vävnad rörs inte: fröet byggdes av
-            # inkomst som redan viktes av, inte av kropp som rivs ner.
-            self.store.flora_repro_pool[slot] -= paid
-
-            # Näringen balanseras mot cellen. Fröet ärver muterad struktur, så
-            # dess näringsinnehåll per kilo är inte moderns: ett kilo seg
-            # vävnad binder en bråkdel av vad ett kilo labil gör. Utan den här
-            # avräkningen skapas eller förstörs näring vid varje spridning, och
-            # felet skalar med spridningsaktiviteten — det var det som brast när
-            # floran blev femton gånger talrikare. Att räkna ur de faktiskt
-            # lagrade massorna tar samtidigt bort float32-avrundningen.
-            nut_par = paid
-            nut_chi = float(self.store.mass[child_slot]) * nutrient_content(
-                float(self.store.structure[child_slot])
+            # Näringen balanseras mot cellen: fröet ärver muterad struktur, så
+            # dess innehåll per kilo är inte moderns.
+            nut_chi = float(store.mass[child_slot]) * nutrient_content(
+                float(store.structure[child_slot])
             )
-            d_nut = nut_par - nut_chi
+            d_nut = paid_each - nut_chi
             if d_nut > 0.0:
                 self.world.add_nutrient(target, d_nut)
             elif d_nut < 0.0:
                 got_n = self.world.take_nutrient(target, -d_nut)
                 if got_n < -d_nut:
-                    # Cellen kunde inte betala. Krymp fröet så att bunden
-                    # näring svarar mot vad som faktiskt fanns.
                     deficit = -d_nut - got_n
-                    nc_chi = max(1e-12, nutrient_content(float(self.store.structure[child_slot])))
-                    shrink = min(float(self.store.mass[child_slot]), deficit / nc_chi)
-                    self.store.mass[child_slot] = np.float32(
-                        float(self.store.mass[child_slot]) - shrink
+                    nc = max(1e-12, nutrient_content(float(store.structure[child_slot])))
+                    shrink = min(float(store.mass[child_slot]), deficit / nc)
+                    store.mass[child_slot] = np.float32(
+                        float(store.mass[child_slot]) - shrink
                     )
-                    self.store.energy[child_slot] = np.float32(max(
+                    store.energy[child_slot] = np.float32(max(
                         0.0,
-                        float(self.store.mass[child_slot]) * self._slot_energy_per_kg(child_slot),
+                        float(store.mass[child_slot]) * self._slot_energy_per_kg(child_slot),
                     ))
-
             established += 1
-            dispersed_mass += seed_mass
-    
-        return established, float(dispersed_mass)
-    
-    # -----------------------
-    # public methods
-    # -----------------------    
+
+        if established > 0 or dispersed_mass > 0.0:
+            self._flora_summary_cache = None
+
+        return int(established), float(dispersed_mass)
     def sample_flora_local(self, x: float, y: float) -> float:
         """
         Lokal flora-sampling från härlett perceptionsfält.
@@ -1844,7 +1901,8 @@ class Population:
                 "flora_mean_adult_mass": nan,
                 "flora_mean_temp_opt": nan,
                 "flora_mean_temp_width": nan,
-                "flora_mean_dispersal_rate": nan,
+                "flora_mean_apparatus": nan,
+                "flora_mean_seed_mass": nan,
             }
             return
 
@@ -1857,7 +1915,8 @@ class Population:
             "flora_mean_adult_mass": float(np.mean(store.flora_adult_mass[fl], dtype=np.float64)),
             "flora_mean_temp_opt": float(np.mean(store.flora_temp_opt[fl], dtype=np.float64)),
             "flora_mean_temp_width": float(np.mean(store.flora_temp_width[fl], dtype=np.float64)),
-            "flora_mean_dispersal_rate": float(np.mean(store.flora_dispersal_rate[fl], dtype=np.float64)),
+            "flora_mean_apparatus": float(np.mean(store.flora_apparatus[fl], dtype=np.float64)),
+            "flora_mean_seed_mass": float(np.mean(store.flora_seed_mass[fl], dtype=np.float64)),
         }
 
     def _flora_summary(self) -> dict[str, float]:

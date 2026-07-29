@@ -174,7 +174,8 @@ class OrganismStore:
     flora_repro_pool: np.ndarray = field(init=False)
     flora_temp_opt: np.ndarray = field(init=False)
     flora_temp_width: np.ndarray = field(init=False)
-    flora_dispersal_rate: np.ndarray = field(init=False)    
+    flora_apparatus: np.ndarray = field(init=False)
+    flora_seed_mass: np.ndarray = field(init=False)    
 
     # Tillfällig migrationsflagga: 0=djur/nuvarande agent, 1=flora
     kind: np.ndarray = field(init=False)
@@ -232,7 +233,8 @@ class OrganismStore:
         self.flora_repro_pool = np.zeros(cap, dtype=np.float64)
         self.flora_temp_opt = np.zeros(cap, dtype=np.float32)
         self.flora_temp_width = np.zeros(cap, dtype=np.float32)
-        self.flora_dispersal_rate = np.zeros(cap, dtype=np.float32)        
+        self.flora_apparatus = np.zeros(cap, dtype=np.float32)
+        self.flora_seed_mass = np.zeros(cap, dtype=np.float32)        
 
         self.kind = np.zeros(cap, dtype=np.int8)
 
@@ -446,7 +448,8 @@ class OrganismStore:
         self.flora_repro_pool[slot] = 0.0
         self.flora_temp_opt[slot] = 0.0
         self.flora_temp_width[slot] = 0.0
-        self.flora_dispersal_rate[slot] = 0.0
+        self.flora_apparatus[slot] = 0.0
+        self.flora_seed_mass[slot] = 0.0
     
         self.kind[slot] = 0
         

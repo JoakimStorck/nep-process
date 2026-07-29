@@ -6,6 +6,7 @@ import numpy as np
 
 from mlp import MLPGenome
 from phenotype import (
+    _T_SEED_MASS,
     _T_STRUCTURE,
     STRUCTURE_INIT_FLORA,
     STRUCTURE_INIT_FAUNA,
@@ -290,6 +291,10 @@ def init_organism_traits(
             u[_T_STRUCTURE] = rng.uniform(*STRUCTURE_INIT_FLORA)
         if n > _T_UPTAKE:
             u[_T_UPTAKE] = rng.uniform(*UPTAKE_INIT)
+        if n > _T_SEED_MASS:
+            # Brett, så att selektionen har hela fyra tiopotenser att gripa i
+            # från start i stället för att först behöva vänta ut mutationen.
+            u[_T_SEED_MASS] = rng.uniform(0.05, 0.95)
     else:
         if n > _T_STRUCTURE:
             u[_T_STRUCTURE] = rng.uniform(*STRUCTURE_INIT_FAUNA)

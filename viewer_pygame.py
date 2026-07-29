@@ -368,7 +368,7 @@ class WorldViewer:
                     u = max(0.0, min(1.0, (val + 5.0) / 40.0))
                 
                 elif color_by == "dispersal":
-                    val = float(store.flora_dispersal_rate[slot])
+                    val = float(store.flora_seed_mass[slot])
                     u = max(0.0, min(1.0, (val - 0.0002) / (0.0200 - 0.0002)))
                 
                 elif color_by == "adult_mass":
@@ -595,7 +595,7 @@ class WorldViewer:
                 f"M*={ft['flora_mean_adult_mass']:.4f}  "
                 f"Topt={ft['flora_mean_temp_opt']:.1f}  "
                 f"Tw={ft['flora_mean_temp_width']:.1f}  "
-                f"d={ft['flora_mean_dispersal_rate']:.4f}"
+                f"d={ft['flora_mean_apparatus']:.4f}"
             )
 
         mode = self.cfg.mode.upper()

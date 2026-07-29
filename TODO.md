@@ -308,7 +308,15 @@ Mätningen inför steget visade att flera mekanismer vi trodde var verksamma int
 - ~~**Inkomst skild från allokering.**~~ **Klart.** `flora_reserve` och `flora_repro_pool` i kg näring, float64 av bokföringsskäl. Allokeringsandelen tar över `_T_GROWTH`, som blev ledigt när tillväxten blev inkomstbegränsad.
 - ~~**Omsättning.**~~ **Klart.** Förnafall per tick i en takt som avtar med strukturandel, deponerat vektoriserat via `World.excrete_cells()`.
 - ~~**Härledd livslängd**~~ **Klart** ur strukturandel, 7 till 138 månader. Svältdöden är emergent: den som inte växer snabbare än sitt förnafall krymper under `flora_min_mass_frac · B_K`. `flora_mortality` och `flora_seedling_mort_mult` utgår.
-- **Fröet.** Propagulmassa som egen absolut axel, antal ur avsatt massa, etablering som sigmoid med tröskel, apparatandel på det frigjorda `_T_DISPERSAL`, spridning ur en kärna i kontinuerligt rum via `grid.cell_of()`.
+- ~~**Fröet.**~~ **Klart.** Propagulmassa som eget locus `_T_SEED_MASS` i absoluta tal, log-skalad över fyra tiopotenser; antalet ur poolen dividerad med den; etablering som Hillfunktion med exponent två på förrådet, halvmättnad växande med målcellens anspråkade area; apparatandel på det frigjorda `_T_DISPERSAL`; spridning ur en stretchad exponentialkärna i kontinuerligt rum via `grid.cell_of_many()`. Etableringsutfallet dras innan slots allokeras och förlorade frön blir förna i sin målcell.
+
+**Efter 0056:** fröaxeln differentierar och rör sig. Medianen går från 6,6 till 120 gram över 4 000 tick medan p10 stiger från 0,33 till 37 — fördelningen samlas kring etableringsoptimum, alltså precis den inre optimum Smith–Fretwell förutsäger. Det är den första trait i modellen som bevisligen selekteras mot ett *inre* värde i stället för mot en ände.
+
+Tre saker återstår att döma, och de kräver längre körningar än sandlådan bär:
+
+- **Apparatandelen driftar neutralt.** p10/median/p90 ligger på 0,095/0,246/0,417 mot initieringens 0,07/0,247/0,429. Antingen tar avståndsvinsten och etableringsförlusten ut varandra, eller är syskonkonkurrensen för svag för att avståndet ska betala. Axeln är alltså införd men ännu inte verksam.
+- **`structure` fortsätter mot taket**, 0,567 → 0,763 med p90 på 0,789. Oförändrat sedan 0055 och väntat: ljuset saknas.
+- **Faunan går ned till ensiffrigt** mot 256 efter 0055. Floran är nu ett bestånd av många små plantor — 63 154 individer på 62 221 kg, alltså ett kilo i medel — och en betare som tar 1,8 kg per tick raderar hela individer. Systemet är dessutom inte i vila vid tick 4 000: floran växer fortfarande brant. Det behöver 40 000 tick att döma.
 - ~~**Tillväxten begränsas av ett `min()` över resurser**~~ **Klart**, med näring som enda post, så att ljus kan läggas till utan att passet skrivs om. Temperaturgrinden sitter numera på upptaget i stället för på en logistisk term som ändå aldrig band.
 
 **Efter 0055:** floran samexisterar på riktigt — 4,06 plantor per bebodd cell i medel, median 3, mest 49, och 79,8 procent av de bebodda cellerna har fler än en. Allokeringsaxeln bär en verklig fördelning (p10 0,30, median 0,48, p90 0,67) i stället för att kollapsa. Faunan går inte längre under: den når `max_pop` på 256 och stannar där, mot en topp på 135 följd av utdöende före steget.

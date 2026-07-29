@@ -132,6 +132,12 @@ _T_UPTAKE          = 33
 # reserv, i joule per kilo kroppsmassa. Var konstanten AP.E_cap_per_M.
 _T_RESERVE         = 34
 
+# Propagulmassa i absoluta tal. Var tidigare en fast andel av moderns
+# vuxenmassa, vilket är både orimligt — ett träd på 44 kg gav ett frö på 4,4 —
+# och skalfritt, så att storleksaxeln bara kunde falla. Det här är det enda
+# locus som tillkommer i serien; `_T_DISPERSAL` och `_T_GROWTH` bytte jobb.
+_T_SEED_MASS       = 35
+
 @dataclass(frozen=True)
 class PhenoRanges:
     # maturity
@@ -381,6 +387,10 @@ def dispersal_from_traits(traits: np.ndarray | None, default: float = 0.0) -> fl
     return trait_unit(traits, _T_DISPERSAL, default=default)
 
 
+def seed_mass_from_traits(traits: np.ndarray | None, default: float = 0.5) -> float:
+    return trait_unit(traits, _T_SEED_MASS, default=default)
+
+
 def structure_from_traits(traits: np.ndarray | None, default: float = 0.0) -> float:
     return trait_unit(traits, _T_STRUCTURE, default=default)
 
@@ -586,11 +596,77 @@ class FloraRanges:
     temp_width_min: float = 4.0
     temp_width_max: float = 18.0
 
-    dispersal_rate_min: float = 0.0002
-    dispersal_rate_max: float = 0.020
-
     uptake_capacity_min: float = 0.25
     uptake_capacity_max: float = 1.0
+
+
+# ---------------------------------------------------------------------------
+# Fröet: storlek, apparat och etablering
+# ---------------------------------------------------------------------------
+# Propagulmassan spänner fyra tiopotenser och skalas logaritmiskt: verkliga
+# kvoter frö mot vuxen spänner sex, och en linjär skala skulle lägga nästan
+# hela intervallet i den grova änden.
+SEED_MASS_MIN = 1.0e-4
+SEED_MASS_MAX = 0.5
+
+# Apparatandel: den del av propagulen som ligger i vinge eller pappus i stället
+# för i näringsförrådet. Ökar avståndet, minskar etableringen.
+APPARATUS_MAX = 0.5
+
+# Etableringens halvmättnad i kg förråd, i en tom cell.
+#
+# Formen är inte fri. Fitness går som antal gånger etableringssannolikhet,
+# alltså f(m)/m, och en vanlig mättande funktion har inget inre optimum — då
+# vinner alltid det minsta fröet. Villkoret för inre optimum är f'(m) = f(m)/m,
+# vilket kräver inflexion. Med Hillexponent 2 hamnar optimum exakt på h.
+# Smith, C. C. & Fretwell, S. D. 1974. The optimal balance between size and
+# number of offspring. The American Naturalist 108: 499–506.
+ESTABLISH_HALF = 5.0e-2
+
+# Trängselns effekt på halvmättnaden. Utan den konvergerar fröaxeln mot ett
+# enda optimum i stället för att differentiera: stort frö ska vinna där det är
+# trångt, många små där det är öppet.
+ESTABLISH_CROWD = 1.0
+
+# Skalfaktor för spridningsavståndet i cellbredder. Formen är
+# L = L0 · M_vuxen^(1/3) · a^(1/3) / m_frö^(1/6): frigöringshöjd ur vuxenmassan,
+# och en apparat vars massa växer brantare än sin area.
+#
+# Den sista termen är svag, och den är svag i verkligheten också — att stora
+# frön faller nära är ett syndrom selektionen byggt, inte en fysisk
+# nödvändighet. Korrelationen kodas därför inte in.
+DISPERSAL_SCALE = 0.6
+
+
+def flora_seed_mass(traits: np.ndarray | None) -> float:
+    """Propagulmassa i kg, logaritmiskt skalad."""
+    u = seed_mass_from_traits(traits)
+    lo, hi = np.log(SEED_MASS_MIN), np.log(SEED_MASS_MAX)
+    return float(np.exp(lo + (hi - lo) * float(u)))
+
+
+def flora_apparatus(traits: np.ndarray | None) -> float:
+    """Andel av propagulen som är spridningsapparat. Tar över `_T_DISPERSAL`."""
+    return float(APPARATUS_MAX * dispersal_from_traits(traits, default=0.5))
+
+
+def establish_p(provision, crowd):
+    """
+    Etableringssannolikhet ur fröets förråd. Hillfunktion med exponent 2, så
+    att optimum finns och ligger på halvmättnaden. Skalär eller array.
+    """
+    h = ESTABLISH_HALF * (1.0 + ESTABLISH_CROWD * np.maximum(0.0, crowd))
+    pr = np.maximum(0.0, provision)
+    return (pr * pr) / (pr * pr + h * h)
+
+
+def dispersal_scale(adult_mass, apparatus, seed_mass):
+    """Avståndskärnans skala i cellbredder. Skalär eller array."""
+    a = np.maximum(1e-6, apparatus)
+    return (DISPERSAL_SCALE
+            * np.maximum(1e-9, adult_mass) ** (1.0 / 3.0)
+            * a ** (1.0 / 3.0)
+            / np.maximum(1e-9, seed_mass) ** (1.0 / 6.0))
 
 
 def flora_repro_alloc(traits: np.ndarray | None, R: FloraRanges = FloraRanges()) -> float:
@@ -621,10 +697,6 @@ def flora_temp_opt(traits: np.ndarray | None, R: FloraRanges = FloraRanges()) ->
 
 def flora_temp_width(traits: np.ndarray | None, R: FloraRanges = FloraRanges()) -> float:
     return _lerp(R.temp_width_min, R.temp_width_max, temp_width_from_traits(traits, default=0.5))
-
-
-def flora_dispersal_rate(traits: np.ndarray | None, R: FloraRanges = FloraRanges()) -> float:
-    return _lerp(R.dispersal_rate_min, R.dispersal_rate_max, dispersal_from_traits(traits, default=0.5))
 
 
 def flora_uptake_capacity(traits: np.ndarray | None, R: FloraRanges = FloraRanges()) -> float:

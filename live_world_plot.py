@@ -143,7 +143,7 @@ class WorldSeries:
 
         self.growth_rate.append(g("flora_mean_repro_alloc"))
         self.adult_mass.append(g("flora_mean_adult_mass"))
-        self.dispersal_rate.append(g("flora_mean_dispersal_rate"))
+        self.dispersal_rate.append(g("flora_mean_apparatus"))
         self.temp_opt.append(g("flora_mean_temp_opt"))
         self.temp_width.append(g("flora_mean_temp_width"))
 
