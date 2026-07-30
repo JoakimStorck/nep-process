@@ -342,6 +342,23 @@ Tre saker återstår att döma, och de kräver längre körningar än sandlådan
 
 **Bördighetstestet** är nu körbart och är den viktigaste enskilda mätningen i planen: `--nutrient-init 0.64` mot standardens 0,32 ska ge omkring dubbel stående biomassa medan dynamikens *form* är oförändrad. Håller det är taket ekologiskt; håller det inte sitter det någon annanstans.
 
+## Steg 4d — Prestanda i florapassen
+
+*Utlöst av att en 40 000-tickskörning tog en timme vid 344 000 plantor. Profilerat, inte gissat.*
+
+- ~~`_sigmoid` i ren python.~~ **Klart.** `np.clip` plus `np.exp` på en skalär kostade 4,42 µs mot 0,116 — trettioåtta gånger — och funktionen anropades tio gånger per floraetablering via `_init_flora_slot`. 422 510 anrop på 1 500 tick, 6,6 procent av ticken. Resultatet är bitidentiskt: båda vägar går till libm.
+- ~~`World.excrete_cells()` aggregerar med `bincount` i stället för `np.unique`.~~ **Klart.** Unique sorterar; bincount gör samma jobb med ett svep. 19,9 mot 1,66 ms på 300 000 rader.
+- ~~`_occupied_cells` likaså.~~ **Klart.** 13,3 mot 0,60 ms.
+- ~~Dödsloopen deponerar i ett svep.~~ **Klart.** Ett anrop per döende planta gav tolvtusen anrop på 1 500 tick, var och en med egen aggregering över en enda rad.
+
+**Uppmätt:** 27,13 → 23,71 ms per tick vid 3 000 tick, alltså 12,6 procent, och 25,56 → 21,36 vid 1 500. Banan är bitidentisk — samma antal, samma massor, samma detritus — så baslinjen är bevarad. Vinsten växer med beståndet, eftersom både unique-kostnaden och antalet etableringar gör det.
+
+**Kvar, och nu de tre största posterna:**
+
+- `rebuild_spatial_index` står för 3,79 s av 40 i profilen, nästan allt i `argsort` över levande organismer, och anropas två gånger per tick. En counting sort med `bincount` och `cumsum` vore O(n) i stället för O(n log n), men en *stabil* CSR kräver en löpande räknare per cell, alltså en Numba-kernel eller en icke-stabil ordning. Det senare ändrar vilken planta en betare äter först och därmed banan. Hör till Steg 8.
+- Att slopa det andra anropet per tick är nu värt betydligt mer än när frågan stängdes i Steg 5 — då kostade de två anropen 0,38 ms, nu 2,5 ms vid trettiotusen plantor och mer därefter. Det kräver dock att florapassen flyttas sist i ticken, vilket bryter manifestets passordning.
+- `grid.cell_of` anropas 495 500 gånger på 1 500 tick, praktiskt taget allt från `see_agent_first_hit` som slår upp en cell per stråle och agent. Det försvinner i Steg 6a, där strålbaserad sampling ersätts av aggregering över `cells_within()`.
+
 ## Steg 5 — Aktiva delmängder och vektoriserade florapass
 
 - ~~Delmängder byggs en gång per tick, immutabla under ticken.~~ **Klart** för `flora_slots` och `fauna_slots`. `sensing_slots` hör till Steg 6a, där `sense_rate` får en läsare.

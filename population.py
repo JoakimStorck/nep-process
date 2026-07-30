@@ -94,11 +94,20 @@ def _stats_1d(x: np.ndarray) -> dict[str, float]:
     }
 
 def _occupied_cells(store, fl) -> int:
-    """Antal celler med minst en levande planta. Billigt: en unique över fl."""
+    """
+    Antal celler med minst en levande planta.
+
+    Bincount och inte unique: unique sorterar, och vid trehundratusen plantor
+    kostar det 13,3 ms mot 0,60 ms — tjugotvå gånger. Funktionen anropas två
+    gånger per florasammanfattning.
+    """
     if fl.size == 0:
         return 0
     c = store.cell_idx[fl]
-    return int(np.unique(c[c >= 0]).size)
+    c = c[c >= 0]
+    if c.size == 0:
+        return 0
+    return int(np.count_nonzero(np.bincount(c, minlength=int(store.n_cells))))
 
 
 @dataclass
@@ -1501,15 +1510,16 @@ class Population:
         # Dödsfallen är få per tick och varje deponering blandar strukturandelar
         # massviktat, så de hanteras individuellt efter det vektoriserade urvalet.
         if dying.size:
-            for k in dying:
-                slot = int(fl[k])
-                mk = float(store.mass[slot])
-                if mk > 0.0:
-                    world.excrete_cells(
-                        np.array([cells[k]]), np.array([mk]), np.array([struct[k]])
-                    )
-                    died += mk
-                self._release_flora_slot(slot)
+            # Deponeringen görs i ett svep. Ett anrop per döende planta gav
+            # tolvtusen anrop på femtonhundra tick, var och en med en egen
+            # aggregering över en enda rad.
+            dm = store.mass[fl[dying]].astype(np.float64, copy=False)
+            keep = dm > 0.0
+            if np.any(keep):
+                world.excrete_cells(cells[dying][keep], dm[keep], struct[dying][keep])
+                died += float(dm[keep].sum())
+            for slot in fl[dying]:
+                self._release_flora_slot(int(slot))
 
         alive_mask = np.ones(fl.size, dtype=bool)
         alive_mask[dying] = False
