@@ -161,6 +161,18 @@ _T_SEED_MASS       = 35
 # Funktionell jämvikt: Brouwer 1963; Bloom, Chapin & Mooney 1985.
 _T_ROOT_ALLOC      = 36
 
+# Mognadströskel: vid vilken andel av sin vuxenmassa plantan börjar reproducera
+# sig. Den enda mekanism som kan uttrycka generationstid. Tidskostnaden faller
+# ut ur tillväxthastighet och målstorlek och kodas inte: örten når sin lilla
+# tröskel på månader, det vedartade sin stora på decennier.
+#
+# Evolverbar och inte konstant, av ett skäl utöver flexibilitet: en hårdkodad
+# tröskel kan sterilisera en population, vilket den gjorde i w1 där
+# medianplantan låg på en sjundedel av `0,20 · vuxenmassa`. En linje som inte
+# kan reproducera sig försvinner omedelbart, så felläget blir strukturellt
+# omöjligt.
+_T_MATURITY        = 37
+
 @dataclass(frozen=True)
 class PhenoRanges:
     # maturity
@@ -408,6 +420,10 @@ def sexual_mode_from_traits(traits: np.ndarray | None, default: float = 0.0) -> 
 
 def dispersal_from_traits(traits: np.ndarray | None, default: float = 0.0) -> float:
     return trait_unit(traits, _T_DISPERSAL, default=default)
+
+
+def maturity_from_traits(traits: np.ndarray | None, default: float = 0.3) -> float:
+    return trait_unit(traits, _T_MATURITY, default=default)
 
 
 def root_alloc_from_traits(traits: np.ndarray | None, default: float = 0.5) -> float:
@@ -700,6 +716,17 @@ SEED_STRUCTURE = 0.15
 # ändå vara dödliga, så att optimum är inre och inte en gräns.
 ROOT_ALLOC_MIN = 0.02
 ROOT_ALLOC_MAX = 0.98
+
+
+# Mognadströskelns intervall, som andel av vuxenmassan. Övre änden ska rymma en
+# strategi som växer färdigt först; nedre en som blommar nästan direkt.
+MATURITY_MIN = 0.01
+MATURITY_MAX = 0.50
+
+
+def flora_maturity_frac(traits: np.ndarray | None) -> float:
+    """Andel av vuxenmassan vid vilken plantan blir reproduktionsklar."""
+    return _lerp(MATURITY_MIN, MATURITY_MAX, maturity_from_traits(traits))
 
 
 def flora_root_alloc(traits: np.ndarray | None) -> float:

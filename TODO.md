@@ -342,6 +342,33 @@ Tre saker återstår att döma, och de kräver längre körningar än sandlådan
 
 **Bördighetstestet** är nu körbart och är den viktigaste enskilda mätningen i planen: `--nutrient-init 0.64` mot standardens 0,32 ska ge omkring dubbel stående biomassa medan dynamikens *form* är oförändrad. Håller det är taket ekologiskt; håller det inte sitter det någon annanstans.
 
+## Steg 4k — Mognadströskeln
+
+*Den andra halvan av r/K-axeln, utlovad sedan 0062 och skjuten två gånger.*
+
+- ~~`_T_MATURITY` som eget locus.~~ **Klart.** Reproduktion kräver `m >= mognadsandel · vuxenmassa`, utöver golvet `3 · propagulmassa`. Andelen spänner 0,01 till 0,50. Evolverbar och inte konstant: en hårdkodad tröskel kan sterilisera en population, vilket den gjorde i w1, medan ett locus inte kan det — en linje som inte reproducerar sig försvinner omedelbart.
+
+Tidskostnaden kodas inte. Den faller ut ur tillväxthastighet och målstorlek: örten når sin lilla tröskel på månader, det vedartade sin stora på decennier.
+
+**Utfall vid tick 6 000, mot samma tick utan tröskeln:**
+
+```
+                        utan       med
+vuxenmassa kg             30        23
+flora antal           41 998     7 902
+biomassa kg           45 513    11 526
+mognadsandel               —     0,120  (init 0,120)
+andel mogna                —     0,124
+```
+
+**Vuxenmassan slutade stiga.** Utan tröskeln gick den 23 → 30 och fortsatte; med den ligger den kvar på 23. Det är den avsedda effekten: stor målstorlek kostar nu tid, och tiden är den valuta strukturbygge faktiskt är dyrt i.
+
+**Men två saker oroar.** Beståndet drog ihop sig kraftigt, och bara tolv procent av plantorna är reproduktionsklara — sterilitetens signatur, mildare än w1 men samma form. Och **locuset rör sig inte**: 0,1207 vid start, 0,1195 efter sextusen tick, alltså exakt sin initieringsmedel. Ingen selektion syns.
+
+Sannolik orsak: poolgrinden binder oftare än massagrinden. Frön ligger på 366 per månad, reproduktionen är näringssvält, och då spelar det liten roll var mognadströskeln står. Locuset skulle i så fall vara nästan neutralt av samma skäl som rot–skott var det i 0063 — det har ingenting att svara på.
+
+Reglagen om det bekräftas är `MATURITY_MAX` och initieringsbandet i `genetics.py`. Men sextusen tick är före mättnad, och fyra gånger har en transient lästs som jämvikt. Ingen justering före en lång körning.
+
 ## Steg 4j — Ljusnivån och såddens fördelning
 
 *Två tal, ingen ny mekanism. Båda registrerade som förutsägelser i förväg.*

@@ -6,6 +6,7 @@ import numpy as np
 
 from mlp import MLPGenome
 from phenotype import (
+    _T_MATURITY,
     _T_ROOT_ALLOC,
     _T_SEED_MASS,
     _T_STRUCTURE,
@@ -301,6 +302,12 @@ def init_organism_traits(
             # närma sig optimum inifrån snarare än att först behöva överleva
             # en kohort utan rötter.
             u[_T_ROOT_ALLOC] = rng.uniform(0.25, 0.75)
+        if n > _T_MATURITY:
+            # Låg initiering. Vid mättnad står plantorna på några procent av sin
+            # vuxenmassa, så en tröskel från mitten av intervallet skulle göra
+            # nästan hela startpopulationen steril innan selektionen hunnit
+            # verka. Selektionen får utforska uppåt om det lönar sig.
+            u[_T_MATURITY] = rng.uniform(0.05, 0.40)
     else:
         if n > _T_STRUCTURE:
             u[_T_STRUCTURE] = rng.uniform(*STRUCTURE_INIT_FAUNA)

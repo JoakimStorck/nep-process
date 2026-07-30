@@ -218,6 +218,7 @@ class OrganismStore:
     flora_adult_mass: np.ndarray = field(init=False)
     flora_repro_alloc: np.ndarray = field(init=False)
     flora_root_alloc: np.ndarray = field(init=False)
+    flora_maturity: np.ndarray = field(init=False)
     # Rotmassa i kg. Kroppens sammansättning är integralen av tidigare
     # allokeringsbeslut, inte en andel som räknas om retroaktivt. Det gör
     # representationen redo för plasticitet utan att byta form.
@@ -286,6 +287,7 @@ class OrganismStore:
         self.flora_adult_mass = np.zeros(cap, dtype=np.float32)
         self.flora_repro_alloc = np.zeros(cap, dtype=np.float32)
         self.flora_root_alloc = np.zeros(cap, dtype=np.float32)
+        self.flora_maturity = np.zeros(cap, dtype=np.float32)
         self.flora_root_mass = np.zeros(cap, dtype=np.float32)
         self.flora_reserve = np.zeros(cap, dtype=np.float64)
         self.flora_repro_pool = np.zeros(cap, dtype=np.float64)
@@ -505,6 +507,7 @@ class OrganismStore:
         self.flora_adult_mass[slot] = 0.0
         self.flora_repro_alloc[slot] = 0.0
         self.flora_root_alloc[slot] = 0.0
+        self.flora_maturity[slot] = 0.0
         self.flora_root_mass[slot] = 0.0
         self.flora_reserve[slot] = 0.0
         self.flora_repro_pool[slot] = 0.0

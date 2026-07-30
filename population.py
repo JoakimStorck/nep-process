@@ -29,6 +29,7 @@ from phenotype import (
     flora_lifespan,
     flora_seed_mass,
     flora_repro_alloc,
+    flora_maturity_frac,
     flora_root_alloc,
     flora_turnover_rate,
     flora_repro_capacity,
@@ -158,7 +159,7 @@ class PopParams:
     store_growth_min_chunk: int = 256
     store_growth_factor: float = 2.0
     
-    n_traits: int = 37   # +1: _T_ROOT_ALLOC = 36, rot mot skott
+    n_traits: int = 38   # +1: _T_MATURITY = 37, mognadströskel
 
     spawn_jitter_r: float = 1.5
 
@@ -635,6 +636,8 @@ class Population:
                 "flora_pool_total": float(flora_info["flora_pool_total"]),
                 "flora_carbon_pool_total": float(flora_info["flora_carbon_pool_total"]),
                 "flora_mean_root_alloc": float(flora_info["flora_mean_root_alloc"]),
+                "flora_mean_maturity": float(flora_info["flora_mean_maturity"]),
+                "flora_mature_frac": float(flora_info["flora_mature_frac"]),
                 "flora_mean_root_frac": float(flora_info["flora_mean_root_frac"]),
                 "flora_mean_seed_mass": float(flora_info["flora_mean_seed_mass"]),
             })
@@ -1151,6 +1154,7 @@ class Population:
 
         r_alloc = np.float32(flora_repro_alloc(traits))
         rho = np.float32(flora_root_alloc(traits))
+        mat = np.float32(flora_maturity_frac(traits))
         a_mass = np.float32(flora_adult_mass(traits, mass_scale=float(self.WP.B_K)))
         t_opt = np.float32(flora_temp_opt(traits))
         t_width = np.float32(flora_temp_width(traits))
@@ -1174,6 +1178,7 @@ class Population:
     
         self.store.flora_repro_alloc[slot] = r_alloc
         self.store.flora_root_alloc[slot] = rho
+        self.store.flora_maturity[slot] = mat
         self.store.flora_root_mass[slot] = np.float32(float(mass) * float(rho))
         self.store.flora_adult_mass[slot] = a_mass
         self.store.flora_reserve[slot] = 0.0
@@ -1844,7 +1849,10 @@ class Population:
             store.alive[fl]
             & (pool_all >= seed_cost_all)
             & (carbon_all >= seed_all)
-            & (m_all >= FLORA_REPRO_MASS_MULT * seed_all)
+            & (m_all >= np.maximum(
+                FLORA_REPRO_MASS_MULT * seed_all,
+                store.flora_maturity[fl].astype(np.float64, copy=False) * cap_all,
+            ))
         )
         chosen = np.flatnonzero(eligible)
         if chosen.size == 0:
@@ -2097,6 +2105,8 @@ class Population:
                 "flora_pool_total": 0.0,
                 "flora_carbon_pool_total": 0.0,
                 "flora_mean_root_alloc": nan,
+                "flora_mean_maturity": nan,
+                "flora_mature_frac": nan,
                 "flora_mean_root_frac": nan,
                 "flora_mean_apparatus": nan,
                 "flora_mean_seed_mass": nan,
@@ -2119,6 +2129,12 @@ class Population:
             "flora_pool_total": float(np.sum(store.flora_repro_pool[fl], dtype=np.float64)),
             "flora_carbon_pool_total": float(np.sum(store.flora_carbon_pool[fl], dtype=np.float64)),
             "flora_mean_root_alloc": float(np.mean(store.flora_root_alloc[fl], dtype=np.float64)),
+            "flora_mean_maturity": float(np.mean(store.flora_maturity[fl], dtype=np.float64)),
+            "flora_mature_frac": float(np.mean(
+                store.mass[fl].astype(np.float64)
+                >= store.flora_maturity[fl].astype(np.float64)
+                * np.maximum(1e-12, store.flora_adult_mass[fl].astype(np.float64))
+            )),
             "flora_mean_root_frac": float(
                 np.sum(store.flora_root_mass[fl], dtype=np.float64)
                 / max(1e-12, np.sum(store.mass[fl], dtype=np.float64))
