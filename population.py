@@ -24,6 +24,7 @@ from phenotype import (
     dispersal_scale,
     establish_p,
     FLORA_REPRO_MASS_MULT,
+    SEED_STRUCTURE,
     flora_apparatus,
     flora_lifespan,
     flora_seed_mass,
@@ -631,6 +632,7 @@ class Population:
                 "flora_per_cell": float(flora_info["flora_per_cell"]),
                 "flora_reserve_total": float(flora_info["flora_reserve_total"]),
                 "flora_pool_total": float(flora_info["flora_pool_total"]),
+                "flora_carbon_pool_total": float(flora_info["flora_carbon_pool_total"]),
                 "flora_mean_seed_mass": float(flora_info["flora_mean_seed_mass"]),
             })
 
@@ -1170,6 +1172,7 @@ class Population:
         self.store.flora_adult_mass[slot] = a_mass
         self.store.flora_reserve[slot] = 0.0
         self.store.flora_repro_pool[slot] = 0.0
+        self.store.flora_carbon_pool[slot] = 0.0
         self.store.flora_temp_opt[slot] = t_opt
         self.store.flora_temp_width[slot] = t_width
         self.store.flora_apparatus[slot] = appar
@@ -1641,14 +1644,32 @@ class Population:
             0.0,
         )
 
+        # Allokeringen delar **båda** inkomsterna. Kolet gick tidigare enbart
+        # till kropp, så en bladrik planta kunde inte omsätta sin ljusfördel i
+        # frön — och eftersom fröet dessutom kostade näring efter moderns
+        # struktur betalade den snabba strategin 4,5 gånger mer per frö än den
+        # vedartade. Avvägningen var vänd bakochfram.
+        # Kolpoolen har tak. Utan det ackumulerar den obegränsat — uppmätt
+        # 8 310 kg mot näringspoolens 40 efter 8 000 tick — eftersom fröet är
+        # näringsrikt och därför nästan alltid näringsbegränsat. Kol som inte
+        # ryms går till kropp i stället för att gå förlorat, vilket är samma
+        # fel som den låsta näringspoolen var före 0059.
+        c_cap = float(self.PP.flora_max_seeds_per_tick) * store.flora_seed_mass[fl].astype(
+            np.float64, copy=False
+        )
+        head_c = np.maximum(0.0, c_cap - store.flora_carbon_pool[fl])
+        to_carbon = np.minimum(light * alloc, head_c)
+        store.flora_carbon_pool[fl] += to_carbon
+        light_growth = light - to_carbon
+
         # --- 7. tillväxt: min() över resurser ---------------------------------
         # Näring ur reserven, kol ur ljuset. Liebigs minimumlag: den knappaste
-        # sätter takten. Kolet lagras inte — fotosyntat som inte används i
-        # samma tick är borta, vilket är en förenkling värd att notera.
-        can_grow = holds & (m < m_adult) & (reserve > 0.0) & (light > 0.0)
+        # sätter takten. Kolet lagras bara i reproduktionspoolen — fotosyntat
+        # som varken byggs in eller avsätts samma tick är borta.
+        can_grow = holds & (m < m_adult) & (reserve > 0.0) & (light_growth > 0.0)
         room = np.where(can_grow, m_adult - m, 0.0)
         dm_nutrient = np.where(can_grow, reserve / np.maximum(cost, 1e-12), 0.0)
-        dm_want = np.minimum(room, np.minimum(dm_nutrient, np.where(can_grow, light, 0.0)))
+        dm_want = np.minimum(room, np.minimum(dm_nutrient, np.where(can_grow, light_growth, 0.0)))
 
         target = m + dm_want
         stored = target.astype(np.float32)
@@ -1673,7 +1694,7 @@ class Population:
             ).astype(np.float32)
 
         self._last_flora_light_limited = float(
-            np.mean(light[can_grow] < dm_nutrient[can_grow])
+            np.mean(light_growth[can_grow] < dm_nutrient[can_grow])
         ) if np.any(can_grow) else 0.0
 
         produced = float(dm[grew].sum()) if np.any(grew) else 0.0
@@ -1699,6 +1720,8 @@ class Population:
             self.world.add_nutrient(cell, held)
         self.store.flora_reserve[s] = 0.0
         self.store.flora_repro_pool[s] = 0.0
+        # Kolpoolen är inte näring och har ingen ledger att återföras till.
+        self.store.flora_carbon_pool[s] = 0.0
         self.store.alive[s] = False
         self.store.mass[s] = np.float32(0.0)
         self.store.energy[s] = np.float32(0.0)
@@ -1754,10 +1777,19 @@ class Population:
         appar_all = store.flora_apparatus[fl].astype(np.float64, copy=False)
         cost_all = nutrient_content_array(struct_all)
 
-        seed_cost_all = seed_all * cost_all
+        # Fröet kostar i båda valutorna. Näringen räknas ur fröets egen
+        # sammansättning och inte ur moderns: ett frö är näringsrikt förråd
+        # oavsett om föräldern är vedartad, och att använda moderns struktur gav
+        # den vedartade 4,5 gångers rabatt. Kolkostnaden är fröets massa, samma
+        # växelkurs som när ljus bygger kropp — ett frö är alltså exakt lika
+        # dyrt som lika mycket vävnad, vilket gör att samma resurs begränsar
+        # reproduktion som tillväxt.
+        carbon_all = store.flora_carbon_pool[fl]
+        seed_cost_all = seed_all * nutrient_content(SEED_STRUCTURE)
         eligible = (
             store.alive[fl]
             & (pool_all >= seed_cost_all)
+            & (carbon_all >= seed_all)
             & (m_all >= FLORA_REPRO_MASS_MULT * seed_all)
         )
         chosen = np.flatnonzero(eligible)
@@ -1784,7 +1816,10 @@ class Population:
         # delen är bara etableringarna, och de är få.
         n_seed = np.minimum(
             int(self.PP.flora_max_seeds_per_tick),
-            (pool_all[chosen] / np.maximum(1e-30, seed_cost_all[chosen])).astype(np.int64),
+            np.minimum(
+                (pool_all[chosen] / np.maximum(1e-30, seed_cost_all[chosen])).astype(np.int64),
+                (carbon_all[chosen] / np.maximum(1e-30, seed_all[chosen])).astype(np.int64),
+            ),
         )
         keep = n_seed > 0
         sel = chosen[keep]
@@ -1813,13 +1848,20 @@ class Population:
 
         # Poolen debiteras en gång per moder, oavsett utfall: fröna byggdes.
         store.flora_repro_pool[fl[sel]] -= n_seed * seed_cost_all[sel]
+        store.flora_carbon_pool[fl[sel]] -= n_seed * seed_all[sel]
         dispersed_mass = float(seed_m.sum())
         self._last_flora_seeds = int(midx.size)
 
         # Frön som inte etablerar sig blir förna där de landade.
         lost = ~wins
         if np.any(lost):
-            self.world.excrete_cells(targets[lost], seed_m[lost], struct_all[midx][lost])
+            # Förnan får fröets egen strukturandel, inte moderns. Poolen
+            # debiterades fröets sammansättning, så någon annan struktur här
+            # skapar eller förstör näring — uppmätt 89 kg på 1 500 tick innan
+            # det rättades.
+            self.world.excrete_cells(
+                targets[lost], seed_m[lost], np.full(int(lost.sum()), SEED_STRUCTURE)
+            )
 
         established = 0
         for j in np.flatnonzero(wins):
@@ -1997,6 +2039,7 @@ class Population:
                 "flora_per_cell": nan,
                 "flora_reserve_total": 0.0,
                 "flora_pool_total": 0.0,
+                "flora_carbon_pool_total": 0.0,
                 "flora_mean_apparatus": nan,
                 "flora_mean_seed_mass": nan,
             }
@@ -2016,6 +2059,7 @@ class Population:
             "flora_per_cell": float(fl.size / max(1.0, _occupied_cells(store, fl))),
             "flora_reserve_total": float(np.sum(store.flora_reserve[fl], dtype=np.float64)),
             "flora_pool_total": float(np.sum(store.flora_repro_pool[fl], dtype=np.float64)),
+            "flora_carbon_pool_total": float(np.sum(store.flora_carbon_pool[fl], dtype=np.float64)),
             "flora_mean_apparatus": float(np.mean(store.flora_apparatus[fl], dtype=np.float64)),
             "flora_mean_seed_mass": float(np.mean(store.flora_seed_mass[fl], dtype=np.float64)),
         }

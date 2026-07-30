@@ -342,6 +342,21 @@ Tre saker återstår att döma, och de kräver längre körningar än sandlådan
 
 **Bördighetstestet** är nu körbart och är den viktigaste enskilda mätningen i planen: `--nutrient-init 0.64` mot standardens 0,32 ska ge omkring dubbel stående biomassa medan dynamikens *form* är oförändrad. Håller det är taket ekologiskt; håller det inte sitter det någon annanstans.
 
+## Steg 4h — Tvåvalutareproduktion
+
+*Första halvan av r/K-axeln. Andra halvan är mognadslocuset.*
+
+- ~~Fröet kostar i båda valutorna.~~ **Klart.** Kolpool vid sidan av näringspoolen, matad ur ljusinkomsten med samma allokeringsandel. Ett frö kräver `seed_mass` kol och `seed_mass · nutrient_content(0,15)` näring.
+- ~~Fröets näringskostnad räknas ur fröets egen sammansättning.~~ **Klart.** Den räknades tidigare ur moderns strukturandel, vilket gav en vedartad mor 4,5 gångers rabatt per frö — den snabba strategin betalade alltså mest i just den valuta reproduktionen drogs ur.
+
+**Uppmätt vid tick 8 000:** `structure` 0,5696 → 0,6992, mot 0,7582 redan vid tick 6 000 med bara 0061. Första ändringen som bromsar axeln. Och `repro_alloc` ligger stilla på 0,433 mot 0,451 vid start, där den föll till 0,256 i w1 och 0,311 i w2 — reproduktionen lönar sig nu.
+
+**Men kolvalutan binder sällan.** Kolpoolen står på 8 111 kg mot näringspoolens 44: reproduktionen är näringsbegränsad medan tillväxten är ljusbegränsad för 77 procent av plantorna. Det följer av att fröet är näringsrikt, vilket är biologiskt riktigt — fröproduktion är i verkligheten ofta kväve- eller fosforbegränsad — men det betyder att den bladrika plantans kolfördel bara svagt omsätts i frön. Det som faktiskt flyttade talen var att den vedartade rabatten försvann, inte att kolet började betala.
+
+Kolpoolen har tak vid `flora_max_seeds_per_tick · seed_mass`; överskjutande kol går till kropp. Utan taket ackumulerade den obegränsat, vilket är samma fel som den låsta näringspoolen var före 0059.
+
+En näringsläcka rättades under arbetet: fröregnets förna deponerades med moderns strukturandel medan poolen debiterades fröets, vilket förstörde 89 kg näring på 1 500 tick. Invariantsviten fångade den direkt.
+
 ## Steg 4g — Ljus som andra begränsande resurs
 
 *Mekanismen är byggd. Kalibreringen är inte gjord, och strukturaxeln har ännu inte fått sin dom.*

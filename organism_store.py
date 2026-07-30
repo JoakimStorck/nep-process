@@ -222,6 +222,7 @@ class OrganismStore:
     # float32 skulle kräva samma nedåtavrundningsdans som massan.
     flora_reserve: np.ndarray = field(init=False)
     flora_repro_pool: np.ndarray = field(init=False)
+    flora_carbon_pool: np.ndarray = field(init=False)
     flora_temp_opt: np.ndarray = field(init=False)
     flora_temp_width: np.ndarray = field(init=False)
     flora_apparatus: np.ndarray = field(init=False)
@@ -281,6 +282,7 @@ class OrganismStore:
         self.flora_repro_alloc = np.zeros(cap, dtype=np.float32)
         self.flora_reserve = np.zeros(cap, dtype=np.float64)
         self.flora_repro_pool = np.zeros(cap, dtype=np.float64)
+        self.flora_carbon_pool = np.zeros(cap, dtype=np.float64)
         self.flora_temp_opt = np.zeros(cap, dtype=np.float32)
         self.flora_temp_width = np.zeros(cap, dtype=np.float32)
         self.flora_apparatus = np.zeros(cap, dtype=np.float32)
@@ -497,6 +499,7 @@ class OrganismStore:
         self.flora_repro_alloc[slot] = 0.0
         self.flora_reserve[slot] = 0.0
         self.flora_repro_pool[slot] = 0.0
+        self.flora_carbon_pool[slot] = 0.0
         self.flora_temp_opt[slot] = 0.0
         self.flora_temp_width[slot] = 0.0
         self.flora_apparatus[slot] = 0.0

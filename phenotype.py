@@ -675,6 +675,14 @@ FLORA_REPRO_MASS_MULT = 3.0
 DISPERSAL_SCALE = 0.6
 
 
+# Fröets egen strukturandel. Ett frö är inte gjort av moderns vävnad — det är
+# näringsrikt förråd oavsett om föräldern är vedartad. Att räkna kostnaden ur
+# moderns struktur gav en vedartad mor 4,5 gångers rabatt på varje frö, vilket
+# är precis fel håll: den snabba strategin betalade mest i just den valuta
+# reproduktionen drogs ur.
+SEED_STRUCTURE = 0.15
+
+
 def flora_seed_mass(traits: np.ndarray | None) -> float:
     """Propagulmassa i kg, logaritmiskt skalad."""
     u = seed_mass_from_traits(traits)
