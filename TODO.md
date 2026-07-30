@@ -342,6 +342,29 @@ Tre saker återstår att döma, och de kräver längre körningar än sandlådan
 
 **Bördighetstestet** är nu körbart och är den viktigaste enskilda mätningen i planen: `--nutrient-init 0.64` mot standardens 0,32 ska ge omkring dubbel stående biomassa medan dynamikens *form* är oförändrad. Håller det är taket ekologiskt; håller det inte sitter det någon annanstans.
 
+## Steg 4e — Reproduktionsgrinden, trängseln och tillförseln
+
+*Tre tal, ingen ny mekanism. Utlöst av att w1-körningen visade en steril flora.*
+
+- ~~Reproduktionsgrinden blir absolut.~~ **Klart.** `m >= 0,20 · vuxenmassa` var skalfri och därmed samma fälla som den 70-procentströskel 0056 tog bort. I det hämmade beståndet låg medianplantan på en sjundedel av tröskeln: 160 frön per månad från 344 000 individer, och 944 kg näring — sjutton procent av världens stock — låst i pooler som aldrig kunde tömmas. Villkoret är nu `m >= 3 · propagulmassa`, absolut i båda leden.
+- ~~Trängseltermen i etableringen görs exponentiell.~~ **Klart.** Den linjära formen med koefficient 1,0 var uppmätt verkningslös: vid ΣA = 1,44 etablerade sig ett frö med 0,163 kg förråd med 60 procents sannolikhet. Nu 3,2 procent. Formen är Beer–Lambert — ljuset som når marken avtar exponentiellt med arealindexet ovanför — vilket är samma mekanism ljussteget senare gör explicit.
+- ~~`nutrient_input` räknas om.~~ **Klart.** 7,1e-5 → 4,6e-5. Mätt över 40 000 tick gav tillförseln 930 kg mot förlustens 600, en kvot på 1,55, och stocken växte med 331 kg. Härledningen antog 24 månaders levandeomsättning; den verkliga blev längre.
+
+**Uppmätt mot w1-baslinjen, samma seed och tick:**
+
+```
+                 tick 8 000              tick 10 000
+              baslinje    0059         baslinje    0059
+flora          258 556  219 378         273 796  197 865
+biomassa (kg)  245 529  263 360         243 716  241 800
+medelmassa      0,95     1,20 kg         0,89     1,22 kg
+fauna              11       14              23       28
+```
+
+Antalet vänder nedåt mellan tick 8 000 och 10 000, vilket baslinjen aldrig gjorde annat än genom faunakollapsen. Medelmassan stiger 37 procent vid oförändrad biomassa: samma näring bärs av färre och större plantor. Det var precis vad hämningen krävde.
+
+**Kostnaden:** den lösare grinden gör att många fler plantor producerar frön, och med tre procents etablering i ett slutet bestånd genereras omkring trettio frön per etablering. Fröregn är verklig biologi, men det syns i profilen. Om posten dominerar kan antalet vinnare dras ur en binomial per moder i stället för per frö — det kräver att trängseln approximeras med moderns grannskap i stället för varje fröas målcell, alltså en approximation att motivera. Hör till Steg 8.
+
 ## Steg 4d — Prestanda i florapassen
 
 *Utlöst av att en 40 000-tickskörning tog en timme vid 344 000 plantor. Profilerat, inte gissat.*

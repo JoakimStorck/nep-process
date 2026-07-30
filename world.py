@@ -124,7 +124,12 @@ class WorldParams:
     # `nutrient_loss_frac` gånger hela primärproduktionen. Med stocken från
     # `nutrient_init`, två års omsättning av levande vävnad och 16 384 celler
     # ger det 7,1e-5. Se docs/vaxternas-livscykel.md.
-    nutrient_input: float = 7.1e-5
+    #
+    # Mätt över 40 000 tick: tillförseln gav 930 kg medan förlusten tog 600, en
+    # kvot på 1,55, och stocken växte med 331 kg. Talet härleddes ur en antagen
+    # levandeomsättning på 24 månader; den verkliga blev längre. 4,6e-5 är
+    # samma härledning med den uppmätta omsättningen.
+    nutrient_input: float = 4.6e-5
     # Näringsupptag per månad och **areaenhet** vid uptake_capacity = 1.
     #
     # Var ett tak per individ på 2,86e6, alltså sju till åtta tiopotenser för

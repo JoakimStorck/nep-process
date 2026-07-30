@@ -641,7 +641,29 @@ ESTABLISH_HALF = 5.0e-2
 # Trängselns effekt på halvmättnaden. Utan den konvergerar fröaxeln mot ett
 # enda optimum i stället för att differentiera: stort frö ska vinna där det är
 # trångt, många små där det är öppet.
-ESTABLISH_CROWD = 1.0
+#
+# Formen är exponentiell och inte linjär. Det är Beer–Lambert: ljuset som når
+# marken avtar exponentiellt med arealindexet ovanför, och förrådet måste
+# kompensera för underskottet. Den linjära termen med koefficient 1,0 var
+# uppmätt verkningslös — vid den observerade tätheten ΣA = 1,44 etablerade sig
+# ett frö med 0,15 kg förråd fortfarande med sextio procents sannolikhet, och
+# beståndet fylldes med plantor som ingen näring räckte till.
+#
+# Talet är kalibrerat, inte härlett: 2,0 ger fri etablering på öppen mark,
+# omkring hälften vid halvt sluten och några procent vid sluten.
+ESTABLISH_CROWD = 2.0
+
+# Hur många gånger sin egen propagulmassa en planta måste väga för att kunna
+# reproducera sig. Ersätter grinden `m >= 0,20 · vuxenmassa`, som var skalfri
+# och därför samma fälla som den 70-procentströskel 0056 tog bort: i ett hämmat
+# bestånd låg medianplantan på en sjundedel av tröskeln, floran blev steril —
+# 160 frön per månad från 344 000 individer — och 944 kg näring låstes i
+# reproduktionspooler som aldrig kunde tömmas.
+#
+# Villkoret är nu absolut i båda leden och biologiskt enkelt: man måste vara
+# flera gånger större än sin egen avkomma. Poolgrinden gör det mesta av
+# arbetet ändå, eftersom poolen fylls ur inkomsten och inkomsten följer arean.
+FLORA_REPRO_MASS_MULT = 3.0
 
 # Skalfaktor för spridningsavståndet i cellbredder. Formen är
 # L = L0 · M_vuxen^(1/3) · a^(1/3) / m_frö^(1/6): frigöringshöjd ur vuxenmassan,
@@ -670,7 +692,7 @@ def establish_p(provision, crowd):
     Etableringssannolikhet ur fröets förråd. Hillfunktion med exponent 2, så
     att optimum finns och ligger på halvmättnaden. Skalär eller array.
     """
-    h = ESTABLISH_HALF * (1.0 + ESTABLISH_CROWD * np.maximum(0.0, crowd))
+    h = ESTABLISH_HALF * np.exp(ESTABLISH_CROWD * np.maximum(0.0, crowd))
     pr = np.maximum(0.0, provision)
     return (pr * pr) / (pr * pr + h * h)
 

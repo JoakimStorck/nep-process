@@ -23,6 +23,7 @@ from phenotype import (
     flora_adult_mass,
     dispersal_scale,
     establish_p,
+    FLORA_REPRO_MASS_MULT,
     flora_apparatus,
     flora_lifespan,
     flora_seed_mass,
@@ -1708,7 +1709,7 @@ class Population:
         eligible = (
             store.alive[fl]
             & (pool_all >= seed_cost_all)
-            & (m_all >= 0.20 * cap_all)
+            & (m_all >= FLORA_REPRO_MASS_MULT * seed_all)
         )
         chosen = np.flatnonzero(eligible)
         if chosen.size == 0:
