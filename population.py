@@ -1224,10 +1224,19 @@ class Population:
         if BK <= 0.0:
             return 0
 
+        spread_mean = 0.0
         if target_mass is not None:
             want = max(0.0, float(target_mass))
-            mean_seed = BK * 0.5 * (float(init_mass_frac_lo) + float(init_mass_frac_hi))
-            n_flora = int(math.ceil(want / max(mean_seed, 1e-12))) if mean_seed > 0.0 else 0
+            # Sprid över **alla** celler och låt massan per individ falla ut,
+            # i stället för tvärtom. Med fast massandel 0,4–1,0 av B_K blev
+            # plantorna 7,7 kg och rymdes i 4 172 celler av 16 384: tre
+            # fjärdedelar av världen fångade inget ljus alls, medan varje sådd
+            # planta hade bladarea 3,0 i en cell som mättas vid 1,0 och därmed
+            # kastade bort två tredjedelar av sitt eget. Uppskattad
+            # ljusinfångning vid tick noll gick från omkring 25 procent till
+            # omkring 75 av samma biomassa.
+            n_flora = n_cells
+            spread_mean = want / max(1, n_cells)
         elif n_flora is None:
             n_flora = max(16, int(self.PP.max_pop) // 2)
 
@@ -1249,7 +1258,12 @@ class Population:
                 mode="flora",
             )
 
-            mass = BK * float(self.rng.uniform(init_mass_frac_lo, init_mass_frac_hi))
+            if spread_mean > 0.0:
+                # Spridning kring medelvärdet behålls, så att sådden inte är
+                # en klon av identiska individer.
+                mass = spread_mean * float(self.rng.uniform(0.7, 1.3))
+            else:
+                mass = BK * float(self.rng.uniform(init_mass_frac_lo, init_mass_frac_hi))
             self._init_flora_slot(int(slot), int(cell), float(mass), traits)
 
             # Sådden betalas ur marken. Tidigare myntade den näring: hela

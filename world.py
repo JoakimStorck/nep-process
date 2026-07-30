@@ -153,7 +153,14 @@ class WorldParams:
     # kring tre procent per månad är primärproduktionen omkring 0,46 kg per
     # cell och månad. Är talet mycket högre blir ljuset inert, mycket lägre
     # och näringen blir det.
-    light_input: float = 0.60
+    #
+    # 0,60 gav en ljusbegränsad värld: `flora_light_limited` låg på 0,886 vid
+    # mättnad och biomassan på 136 914 kg mot baslinjens 254 566. Och ju
+    # knappare ljuset är, desto mer är höjd värd — vilket ger strukturandelen
+    # en uppsida som förstärker just det ljuset skulle motverka. 1,5 är satt
+    # för att kväve och kol ska binda jämförbart; utfallet mäts som att
+    # `flora_light_limited` faller mot 0,5.
+    light_input: float = 1.5
 
     # Extinktionskoefficient i Beer–Lambert. Ljuset som når en planta avtar
     # exponentiellt med bladarean ovanför den. Λ i modellen är ett

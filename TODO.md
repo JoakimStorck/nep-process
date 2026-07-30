@@ -342,6 +342,32 @@ Tre saker återstår att döma, och de kräver längre körningar än sandlådan
 
 **Bördighetstestet** är nu körbart och är den viktigaste enskilda mätningen i planen: `--nutrient-init 0.64` mot standardens 0,32 ska ge omkring dubbel stående biomassa medan dynamikens *form* är oförändrad. Håller det är taket ekologiskt; håller det inte sitter det någon annanstans.
 
+## Steg 4j — Ljusnivån och såddens fördelning
+
+*Två tal, ingen ny mekanism. Båda registrerade som förutsägelser i förväg.*
+
+- ~~`light_input` 0,60 → 1,5.~~ **Klart.** Vid 0,60 låg `flora_light_limited` på 0,886 vid mättnad: ljuset band för nio plantor av tio och kvävet knappt alls. Och ju knappare ljuset är, desto mer är höjd värd — vilket ger strukturandelen en uppsida som förstärker just det ljuset skulle motverka.
+- ~~Sådden sprids över alla celler.~~ **Klart.** Massan per individ faller nu ut ur måltotalen och cellantalet i stället för tvärtom. Med fast massandel 0,4–1,0 av `B_K` blev plantorna 7,66 kg och rymdes i 4 172 celler av 16 384: tre fjärdedelar av världen fångade inget ljus, medan varje sådd planta hade bladarea 3,0 i en cell som mättas vid 1,0.
+
+**Utfall vid tick 6 000, mot samma tick före patchen:**
+
+```
+                       före      efter
+flora antal            4 745     41 998
+biomassa kg            3 157     45 513
+light_limited           0,65       0,43
+root_alloc              0,537      0,641
+structure               0,575      0,569
+```
+
+Tre saker som inte hänt förut. Relaxationssvackan är borta — biomassan faller inte under sitt startvärde. `flora_light_limited` kommer underifrån och lägger sig kring 0,43 i stället för att klättra mot 0,89. Och **rot–skott-axeln rör sig för första gången**, 0,50 → 0,64, alltså mot mer rot när ljuset blivit rikligare och kvävet relativt knappare. Det är den funktionella jämviktens respons, och axeln var död i alla tidigare körningar.
+
+`structure` ligger stilla på 0,569, samma som vid start.
+
+**Inget av detta är en dom.** Vid tick 6 000 är `per cell` 5,1 och stiger, biomassan stiger, fri näring sjunker. Mättnaden inträffade kring månad 600 i förra körningen. Fyra gånger har jag läst en transient som jämvikt; talen ovan är riktningar, inte jämviktsvärden.
+
+**Attributionen är medvetet offrad.** De två ändringarna verkar dock i olika tid — sådden på transienten, ljusnivån på jämvikten — så de går delvis att skilja i efterhand ändå.
+
 ## Steg 4i — Rot mot skott
 
 *Den axel som gör tvåresursbegränsning produktiv i stället för bara inskränkande.*
