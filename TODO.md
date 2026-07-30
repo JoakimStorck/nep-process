@@ -342,6 +342,32 @@ Tre saker återstår att döma, och de kräver längre körningar än sandlådan
 
 **Bördighetstestet** är nu körbart och är den viktigaste enskilda mätningen i planen: `--nutrient-init 0.64` mot standardens 0,32 ska ge omkring dubbel stående biomassa medan dynamikens *form* är oförändrad. Håller det är taket ekologiskt; håller det inte sitter det någon annanstans.
 
+## Steg 4l — Grindredovisning och fördelningar
+
+*Instrumentering. Svarade direkt på frågan den byggdes för, och svaret var att jag hade fel.*
+
+- ~~Varje reproduktionsgrind räknas för sig.~~ **Klart.** `gate_alive`, `gate_size`, `gate_nutrient`, `gate_carbon`, `gate_all`.
+- ~~Kvartiler i stället för summor.~~ **Klart.** `flora_pool_p25/median/p75`, `flora_carbon_median`, `flora_mass_median/p90`.
+
+Uppmätt vid tick 2 500:
+
+```
+levande            20 033
+passerar storlek    3 322   16,6 %
+passerar näring     7 288   36,4 %
+passerar kol       14 857   74,2 %
+passerar alla tre   1 233    6,2 %
+
+pool p25/median/p75   0,00016 / 0,00085 / 0,00336 kg   (ett frö kostar 0,005)
+massa median/p90       0,197 / 5,635 kg
+```
+
+**Ingen bugg.** Jag hävdade att fjortontusen mogna plantor med tillräcklig pool bara gav hundrasextio frön, och att det var tre tiopotenser fel. Talet byggde på **medelvärdet** av poolen, och fördelningen är kraftigt sned: medianen är en sjättedel av vad ett frö kostar, och medelvärdet åtta gånger medianen.
+
+Beståndet domineras av småplantor — median 0,197 kg mot p90 på 5,6. De flesta individer är långt från varje grind, och den bindande är storleken.
+
+Det är också en generell lärdom: **summor över en sned fördelning är vilseledande, och florans fördelningar är alltid sneda.** Alla `*_total`-fält i loggen bör läsas med den reservationen.
+
 ## Steg 4k — Mognadströskeln
 
 *Den andra halvan av r/K-axeln, utlovad sedan 0062 och skjuten två gånger.*

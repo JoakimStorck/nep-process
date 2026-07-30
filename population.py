@@ -259,6 +259,13 @@ class Population:
     # Andel växande plantor där ljuset är den knappare resursen. Är den nära
     # noll eller ett är den ena resursen inert och kalibreringen fel.
     _last_flora_light_limited: float = 0.0
+    # Hur många plantor som passerar varje reproduktionsgrind var för sig.
+    # Summan av poolen kan inte skilja en tom median från en annan flaskhals.
+    _last_gate_alive: int = 0
+    _last_gate_nutrient: int = 0
+    _last_gate_carbon: int = 0
+    _last_gate_size: int = 0
+    _last_gate_all: int = 0
     _flora_slots_cache: object = None
     _fauna_slots_cache: object = None
     
@@ -628,11 +635,22 @@ class Population:
                 "flora_died_age": int(getattr(self, "_last_flora_died_age", 0)),
                 "flora_died_starve": int(getattr(self, "_last_flora_died_starve", 0)),
                 "flora_seeds": int(getattr(self, "_last_flora_seeds", 0)),
+                "gate_alive": int(getattr(self, "_last_gate_alive", 0)),
+                "gate_nutrient": int(getattr(self, "_last_gate_nutrient", 0)),
+                "gate_carbon": int(getattr(self, "_last_gate_carbon", 0)),
+                "gate_size": int(getattr(self, "_last_gate_size", 0)),
+                "gate_all": int(getattr(self, "_last_gate_all", 0)),
                 "flora_light_limited": float(getattr(self, "_last_flora_light_limited", 0.0)),
                 "flora_mean_structure": float(flora_info["flora_mean_structure"]),
                 "flora_cells_occupied": float(flora_info["flora_cells_occupied"]),
                 "flora_per_cell": float(flora_info["flora_per_cell"]),
                 "flora_reserve_total": float(flora_info["flora_reserve_total"]),
+                "flora_pool_p25": float(flora_info["flora_pool_p25"]),
+                "flora_pool_median": float(flora_info["flora_pool_median"]),
+                "flora_pool_p75": float(flora_info["flora_pool_p75"]),
+                "flora_carbon_median": float(flora_info["flora_carbon_median"]),
+                "flora_mass_median": float(flora_info["flora_mass_median"]),
+                "flora_mass_p90": float(flora_info["flora_mass_p90"]),
                 "flora_pool_total": float(flora_info["flora_pool_total"]),
                 "flora_carbon_pool_total": float(flora_info["flora_carbon_pool_total"]),
                 "flora_mean_root_alloc": float(flora_info["flora_mean_root_alloc"]),
@@ -1854,6 +1872,23 @@ class Population:
                 store.flora_maturity[fl].astype(np.float64, copy=False) * cap_all,
             ))
         )
+        # Grindredovisning. Hundrasextio frön per månad från 92 590 plantor med
+        # i genomsnitt mer pool än ett frö kostar är tre tiopotenser fel, och
+        # summan kan inte skilja "poolen är tom hos de flesta" från "en annan
+        # grind stoppar dem". Här räknas varje villkor för sig.
+        g_alive = store.alive[fl]
+        g_nut = g_alive & (pool_all >= seed_cost_all)
+        g_carbon = g_alive & (carbon_all >= seed_all)
+        g_size = g_alive & (m_all >= np.maximum(
+            FLORA_REPRO_MASS_MULT * seed_all,
+            store.flora_maturity[fl].astype(np.float64, copy=False) * cap_all,
+        ))
+        self._last_gate_alive = int(np.count_nonzero(g_alive))
+        self._last_gate_nutrient = int(np.count_nonzero(g_nut))
+        self._last_gate_carbon = int(np.count_nonzero(g_carbon))
+        self._last_gate_size = int(np.count_nonzero(g_size))
+        self._last_gate_all = int(np.count_nonzero(g_nut & g_carbon & g_size))
+
         chosen = np.flatnonzero(eligible)
         if chosen.size == 0:
             return 0, 0.0
@@ -2102,6 +2137,12 @@ class Population:
                 "flora_cells_occupied": 0.0,
                 "flora_per_cell": nan,
                 "flora_reserve_total": 0.0,
+                "flora_pool_p25": 0.0,
+                "flora_pool_median": 0.0,
+                "flora_pool_p75": 0.0,
+                "flora_carbon_median": 0.0,
+                "flora_mass_median": 0.0,
+                "flora_mass_p90": 0.0,
                 "flora_pool_total": 0.0,
                 "flora_carbon_pool_total": 0.0,
                 "flora_mean_root_alloc": nan,
@@ -2127,6 +2168,15 @@ class Population:
             "flora_per_cell": float(fl.size / max(1.0, _occupied_cells(store, fl))),
             "flora_reserve_total": float(np.sum(store.flora_reserve[fl], dtype=np.float64)),
             "flora_pool_total": float(np.sum(store.flora_repro_pool[fl], dtype=np.float64)),
+            # Kvartiler och median, inte bara summan. En pool på 667 kg kan
+            # ligga jämnt hos alla eller samlad hos några få stora plantor, och
+            # skillnaden avgör om reproduktionen är strypt eller normal.
+            "flora_pool_p25": float(np.percentile(store.flora_repro_pool[fl], 25)),
+            "flora_pool_median": float(np.median(store.flora_repro_pool[fl])),
+            "flora_pool_p75": float(np.percentile(store.flora_repro_pool[fl], 75)),
+            "flora_carbon_median": float(np.median(store.flora_carbon_pool[fl])),
+            "flora_mass_median": float(np.median(store.mass[fl])),
+            "flora_mass_p90": float(np.percentile(store.mass[fl], 90)),
             "flora_carbon_pool_total": float(np.sum(store.flora_carbon_pool[fl], dtype=np.float64)),
             "flora_mean_root_alloc": float(np.mean(store.flora_root_alloc[fl], dtype=np.float64)),
             "flora_mean_maturity": float(np.mean(store.flora_maturity[fl], dtype=np.float64)),
