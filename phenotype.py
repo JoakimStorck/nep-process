@@ -153,6 +153,14 @@ _T_RESERVE         = 34
 # locus som tillkommer i serien; `_T_DISPERSAL` och `_T_GROWTH` bytte jobb.
 _T_SEED_MASS       = 35
 
+# Rotandel: hur stor del av tillväxten som går till rot i stället för skott.
+# Den enda mekanism som kan uttrycka balansen mellan två begränsande resurser,
+# och två begränsande resurser existerar först sedan 0061. Båda ändarna är
+# dödliga — ingen rot ger ingen kväveupptagning, inget skott ingen kolfixering
+# — så ett inre optimum följer av mekaniken och inte av parametrarna.
+# Funktionell jämvikt: Brouwer 1963; Bloom, Chapin & Mooney 1985.
+_T_ROOT_ALLOC      = 36
+
 @dataclass(frozen=True)
 class PhenoRanges:
     # maturity
@@ -400,6 +408,10 @@ def sexual_mode_from_traits(traits: np.ndarray | None, default: float = 0.0) -> 
 
 def dispersal_from_traits(traits: np.ndarray | None, default: float = 0.0) -> float:
     return trait_unit(traits, _T_DISPERSAL, default=default)
+
+
+def root_alloc_from_traits(traits: np.ndarray | None, default: float = 0.5) -> float:
+    return trait_unit(traits, _T_ROOT_ALLOC, default=default)
 
 
 def seed_mass_from_traits(traits: np.ndarray | None, default: float = 0.5) -> float:
@@ -681,6 +693,18 @@ DISPERSAL_SCALE = 0.6
 # är precis fel håll: den snabba strategin betalade mest i just den valuta
 # reproduktionen drogs ur.
 SEED_STRUCTURE = 0.15
+
+
+# Rotandelens intervall. Ändarna är inte nåbara i praktiken — mutationens clip
+# vid ±2,5 i logit-rymden ger 0,076 till 0,924 i normerad skala — men de ska
+# ändå vara dödliga, så att optimum är inre och inte en gräns.
+ROOT_ALLOC_MIN = 0.02
+ROOT_ALLOC_MAX = 0.98
+
+
+def flora_root_alloc(traits: np.ndarray | None) -> float:
+    """Andel av tillväxten som går till rot i stället för skott."""
+    return _lerp(ROOT_ALLOC_MIN, ROOT_ALLOC_MAX, root_alloc_from_traits(traits))
 
 
 def flora_seed_mass(traits: np.ndarray | None) -> float:

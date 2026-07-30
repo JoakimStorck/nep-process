@@ -168,7 +168,16 @@ class WorldParams:
     # förnafall och varje bestånd dör ut. Specifik bladarea är i verkligheten
     # den variabel som skiljer växtstrategier mest, och den är stor: ett kilo
     # blad täcker långt mer mark än ett kilo rot försörjer.
-    leaf_area_per_kg: float = 10.0
+    # Specifik bladarea, per kilo **skott**. Fördubblad från 10 när kroppen
+    # delades i rot och skott: vid rotandel 0,5 är bara halva massan skott, och
+    # talet är satt så att bladinkomsten vid ρ = 0,5 och strukturandel 0,70
+    # blir densamma som före uppdelningen. Den nya axeln startar därmed
+    # neutralt i stället för att smyga in en omkalibrering.
+    leaf_area_per_kg: float = 20.0
+
+    # Specifik rotarea, per kilo rot. Härledd på samma sätt: vid ρ = 0,5 och
+    # s = 0,70 ger 6,7 samma upptagsarea som den gamla regeln A = m / B_K.
+    root_area_per_kg: float = 6.7
 
     # Asymmetrins skärpa. Höjden är m · s — strukturmassan, alltså det som
     # håller organismen uppe, enligt docs/substratets-struktur.md. En planta

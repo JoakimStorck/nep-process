@@ -6,6 +6,7 @@ import numpy as np
 
 from mlp import MLPGenome
 from phenotype import (
+    _T_ROOT_ALLOC,
     _T_SEED_MASS,
     _T_STRUCTURE,
     STRUCTURE_INIT_FLORA,
@@ -295,6 +296,11 @@ def init_organism_traits(
             # Brett, så att selektionen har hela fyra tiopotenser att gripa i
             # från start i stället för att först behöva vänta ut mutationen.
             u[_T_SEED_MASS] = rng.uniform(0.05, 0.95)
+        if n > _T_ROOT_ALLOC:
+            # Brett kring mitten. Ändarna är dödliga, så selektionen ska få
+            # närma sig optimum inifrån snarare än att först behöva överleva
+            # en kohort utan rötter.
+            u[_T_ROOT_ALLOC] = rng.uniform(0.25, 0.75)
     else:
         if n > _T_STRUCTURE:
             u[_T_STRUCTURE] = rng.uniform(*STRUCTURE_INIT_FAUNA)

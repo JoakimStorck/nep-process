@@ -29,6 +29,7 @@ from phenotype import (
     flora_lifespan,
     flora_seed_mass,
     flora_repro_alloc,
+    flora_root_alloc,
     flora_turnover_rate,
     flora_repro_capacity,
     flora_temp_opt,
@@ -157,7 +158,7 @@ class PopParams:
     store_growth_min_chunk: int = 256
     store_growth_factor: float = 2.0
     
-    n_traits: int = 36   # +1: _T_SEED_MASS = 35, propagulmassa i absoluta tal
+    n_traits: int = 37   # +1: _T_ROOT_ALLOC = 36, rot mot skott
 
     spawn_jitter_r: float = 1.5
 
@@ -633,6 +634,8 @@ class Population:
                 "flora_reserve_total": float(flora_info["flora_reserve_total"]),
                 "flora_pool_total": float(flora_info["flora_pool_total"]),
                 "flora_carbon_pool_total": float(flora_info["flora_carbon_pool_total"]),
+                "flora_mean_root_alloc": float(flora_info["flora_mean_root_alloc"]),
+                "flora_mean_root_frac": float(flora_info["flora_mean_root_frac"]),
                 "flora_mean_seed_mass": float(flora_info["flora_mean_seed_mass"]),
             })
 
@@ -1147,6 +1150,7 @@ class Population:
         e_per_kg = energy_density(traits, float(self.WP.E_labile_J_per_kg))
 
         r_alloc = np.float32(flora_repro_alloc(traits))
+        rho = np.float32(flora_root_alloc(traits))
         a_mass = np.float32(flora_adult_mass(traits, mass_scale=float(self.WP.B_K)))
         t_opt = np.float32(flora_temp_opt(traits))
         t_width = np.float32(flora_temp_width(traits))
@@ -1169,6 +1173,8 @@ class Population:
         self.store.traits[slot, :] = np.asarray(traits, dtype=np.float32)
     
         self.store.flora_repro_alloc[slot] = r_alloc
+        self.store.flora_root_alloc[slot] = rho
+        self.store.flora_root_mass[slot] = np.float32(float(mass) * float(rho))
         self.store.flora_adult_mass[slot] = a_mass
         self.store.flora_reserve[slot] = 0.0
         self.store.flora_repro_pool[slot] = 0.0
@@ -1494,6 +1500,13 @@ class Population:
         if np.any(up):
             stored_left[up] = np.nextafter(stored_left[up], np.float32(0.0))
         shed = m - stored_left.astype(np.float64)
+        # Förnafallet fäller proportionellt ur båda facken, så sammansättningen
+        # är oförändrad. Fina rötter omsätts i verkligheten ungefär lika fort
+        # som blad, så förenklingen håller hyggligt.
+        keep_frac = np.where(m > 0.0, stored_left.astype(np.float64) / np.maximum(m, 1e-30), 1.0)
+        store.flora_root_mass[fl] = (
+            store.flora_root_mass[fl].astype(np.float64, copy=False) * keep_frac
+        ).astype(np.float32)
         shedding = shed > 0.0
         self._last_flora_shed = float(shed[shedding].sum()) if np.any(shedding) else 0.0
         if np.any(shedding):
@@ -1550,7 +1563,16 @@ class Population:
             return 0.0, 0.0, float(died)
 
         n_cells = int(world.nutrient.shape[0])
-        A = m[vi] / BK
+
+        # Kroppen har en sammansättning. Ytorna följer av vad den består av,
+        # och båda skalas med (1 − s): grov rot absorberar lika lite som ved
+        # fotosyntetiserar. Strukturandelen får därmed sin andra nedsida.
+        root = np.minimum(m, store.flora_root_mass[fl].astype(np.float64, copy=False))
+        shoot = np.maximum(0.0, m - root)
+        sra = float(self.WP.root_area_per_kg)
+        a_root = sra * root * (1.0 - struct) / BK
+
+        A = a_root[vi]
 
         row_plant = vi
         row_cell = cells[vi]
@@ -1579,7 +1601,7 @@ class Population:
         # och arbetet avstannar i kyla. Efterfrågan är vad reserven ännu har
         # plats för — en planta som redan står vid vuxenmassa med full reserv
         # tar inget, men den behåller sin mark.
-        A_full = m / BK
+        A_full = a_root
         reserve = store.flora_reserve[fl].copy()
         head = np.maximum(0.0, (m_adult - m) * cost - reserve)
         cap = (np.maximum(0.0, store.uptake_capacity[fl].astype(np.float64, copy=False))
@@ -1624,8 +1646,11 @@ class Population:
         L_cell = float(self.WP.light_input) * dt
 
         sla = float(self.WP.leaf_area_per_kg)
-        leaf = sla * m * (1.0 - struct) / BK
-        height = m * struct
+        leaf = sla * shoot * (1.0 - struct) / BK
+        # Höjden kommer ur stammen, inte ur hela kroppen: en planta blir inte
+        # längre av att bygga rot. Det var fel redan i 0061 men syns först när
+        # rot och skott skiljs åt.
+        height = shoot * struct
 
         lam = np.bincount(cells[vi], weights=leaf[vi], minlength=n_cells)[:n_cells]
         hsum = np.bincount(cells[vi], weights=leaf[vi] * height[vi], minlength=n_cells)[:n_cells]
@@ -1686,6 +1711,13 @@ class Population:
         if np.any(grew):
             g = np.flatnonzero(grew)
             g_slots = fl[g]
+            # Tillskottet fördelas enligt locuset; kroppens sammansättning är
+            # integralen av besluten. `ρ` gäller alltså tillväxten, inte
+            # kroppen retroaktivt — det är formen plasticitet senare kräver.
+            rho_g = store.flora_root_alloc[g_slots].astype(np.float64, copy=False)
+            store.flora_root_mass[g_slots] = (
+                root[g] + rho_g * dm[g]
+            ).astype(np.float32)
             store.mass[g_slots] = stored[g]
             store.energy[g_slots] = (
                 stored[g].astype(np.float64)
@@ -2040,6 +2072,8 @@ class Population:
                 "flora_reserve_total": 0.0,
                 "flora_pool_total": 0.0,
                 "flora_carbon_pool_total": 0.0,
+                "flora_mean_root_alloc": nan,
+                "flora_mean_root_frac": nan,
                 "flora_mean_apparatus": nan,
                 "flora_mean_seed_mass": nan,
             }
@@ -2060,6 +2094,11 @@ class Population:
             "flora_reserve_total": float(np.sum(store.flora_reserve[fl], dtype=np.float64)),
             "flora_pool_total": float(np.sum(store.flora_repro_pool[fl], dtype=np.float64)),
             "flora_carbon_pool_total": float(np.sum(store.flora_carbon_pool[fl], dtype=np.float64)),
+            "flora_mean_root_alloc": float(np.mean(store.flora_root_alloc[fl], dtype=np.float64)),
+            "flora_mean_root_frac": float(
+                np.sum(store.flora_root_mass[fl], dtype=np.float64)
+                / max(1e-12, np.sum(store.mass[fl], dtype=np.float64))
+            ),
             "flora_mean_apparatus": float(np.mean(store.flora_apparatus[fl], dtype=np.float64)),
             "flora_mean_seed_mass": float(np.mean(store.flora_seed_mass[fl], dtype=np.float64)),
         }

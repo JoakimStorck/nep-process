@@ -342,6 +342,22 @@ Tre saker återstår att döma, och de kräver längre körningar än sandlådan
 
 **Bördighetstestet** är nu körbart och är den viktigaste enskilda mätningen i planen: `--nutrient-init 0.64` mot standardens 0,32 ska ge omkring dubbel stående biomassa medan dynamikens *form* är oförändrad. Håller det är taket ekologiskt; håller det inte sitter det någon annanstans.
 
+## Steg 4i — Rot mot skott
+
+*Den axel som gör tvåresursbegränsning produktiv i stället för bara inskränkande.*
+
+- ~~`_T_ROOT_ALLOC` som eget locus.~~ **Klart.** Andelen av tillväxten som går till rot. Kroppens sammansättning är integralen av besluten, lagrad i `flora_root_mass`, inte en andel som räknas om retroaktivt — den formen är vad plasticitet senare kräver.
+- ~~Ytorna följer kroppens sammansättning.~~ **Klart.** `A_rot = SRA · rot · (1−s) / B_K`, `A_blad = SLA · skott · (1−s) / B_K`. Båda skalas med `(1−s)`: grov rot absorberar lika lite som ved fotosyntetiserar. Strukturandelen får därmed sin andra nedsida.
+- ~~Höjden ur stammen.~~ **Klart.** `skott · s` i stället för `m · s`. En planta blir inte längre av att bygga rot — fel redan i 0061, syns först när facken skiljs åt.
+
+`SRA = 6,7` och `SLA = 20` är satta så att inkomsterna vid ρ = 0,5 och s = 0,70 är desamma som före uppdelningen. Axeln startar neutralt.
+
+**Utfall vid tick 8 000:** `structure` 0,5689 → 0,6242 → **0,5757**. För första gången springer axeln inte mot mutationens clip — den vänder och återvänder. Mot 0,6992 med 0062, 0,7582 med 0061 och 0,78 i båda långkörningarna. Och `flora_light_limited` ligger kring 0,42–0,46 större delen av körningen, alltså nära den funktionella jämviktens 0,5.
+
+**Men produktionen föll kraftigt**, 6 440 kg mot 18 149 med 0062, med en djup svacka ned till 2 291 kg. Orsaken är inte svält och inte näring — dödsorsakerna är nästan uteslutande åldrande och fri näring ligger på 5 100 kg av 5 200. Den är att **förnafallet är kalibrerat för fel strukturandel**: `FLORA_TURNOVER_LABILE = 0,083` sattes när strukturandelen låg på 0,78, där omsättningen är 0,0247 per månad. Vid 0,57 är den 0,0406, alltså nästan dubbelt, och tillväxten hinner inte betala underhållet.
+
+Det är mekanismen som fungerar och kalibreringen som inte hängt med: när strukturaxeln äntligen slutade springa mot taket flyttade jämvikten dit talen inte gäller. Nästa steg är att räkna om förnafallet och `light_input` mot den nya jämvikten, inte att backa mekanismen.
+
 ## Steg 4h — Tvåvalutareproduktion
 
 *Första halvan av r/K-axeln. Andra halvan är mognadslocuset.*
