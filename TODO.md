@@ -342,6 +342,23 @@ Tre saker återstår att döma, och de kräver längre körningar än sandlådan
 
 **Bördighetstestet** är nu körbart och är den viktigaste enskilda mätningen i planen: `--nutrient-init 0.64` mot standardens 0,32 ska ge omkring dubbel stående biomassa medan dynamikens *form* är oförändrad. Håller det är taket ekologiskt; håller det inte sitter det någon annanstans.
 
+## Steg 4g — Ljus som andra begränsande resurs
+
+*Mekanismen är byggd. Kalibreringen är inte gjord, och strukturaxeln har ännu inte fått sin dom.*
+
+- ~~Ljusinkomst per cell och asymmetrisk delning.~~ **Klart.** Bladarean följer `SLA · m · (1 − s) / B_K` — bara labil vävnad fotosyntetiserar. Höjden är `m · s` enligt `docs/substratets-struktur.md`. Skuggan är Beer–Lambert i cellens bladarealindex, dämpad av hur hög plantan står mot cellens arealviktade medelhöjd, vilket ger asymmetrin utan en sortering per cell — två `bincount` räcker.
+- ~~`min()` över resurser blir verkligt.~~ **Klart.** Näring ur reserven, kol ur ljuset, Liebigs minimumlag. Formen låg färdig sedan 0054.
+- ~~Mätpunkt för att ingen resurs är inert.~~ **Klart.** `flora_light_limited` är andelen växande plantor där ljuset är det knappare. Nära noll eller ett betyder att den ena resursen inte gör något.
+
+**Kalibreringen tog två försök och är inte färdig.** Första ansatsen satte bladarean lika med rotarean; då täcker ett kilo blad en elftedels cell, en groddplanta växer långsammare än sitt eget förnafall, och världen dog ut — 11 741 plantor vid tick 1 000, 491 vid tick 8 000. Specifik bladarea är i verkligheten stor, och `leaf_area_per_kg = 10` löser det. Med den kommer `flora_light_limited` upp från 0,14 till 0,70 medan beståndet sluter sig, alltså ett verkligt tvåresursläge.
+
+**Vad som ännu inte är avgjort:**
+
+- `structure` stiger fortfarande, 0,5697 → 0,7582 vid tick 6 000. Men beståndet är då inte mättat — `flora_per_cell` är 10,8 och stiger — och lärdomen från 0059 är att täthetsberoende effekter har fel tecken före mättnad. Domen kräver 40 000 tick.
+- Ljuset ger strukturandelen en **ny uppsida**: höjd undgår skugga. Nedsidan är mindre bladarea per kilo. Vilken som väger tyngre är en kalibreringsfråga i `light_extinction` och `light_height_ref`, inte en avgjord sak.
+- Primärproduktionen sjönk — 31 691 kg vid tick 4 000 mot 81 083 utan ljus — och faunan dog tidigare. `light_input` är satt till 0,60 mot en uppmätt näringsbegränsad produktion på 0,46 kg per cell och månad, men bara en bråkdel av cellens ljus fångas upp av ett glest bestånd.
+- Kolet lagras inte. Fotosyntat som inte används samma tick är borta. Reproduktionen betalas fortfarande enbart ur näringspoolen.
+
 ## Steg 4f — Counting sort i spatialindexet
 
 *Enda posten i profilen som kunde accelereras utan att röra biologi. `rebuild_spatial_index` är oförändrad sedan Steg 5 och helt oberoende av modellen.*

@@ -141,6 +141,41 @@ class WorldParams:
     # på ungefär ett år.
     uptake_rate_per_area: float = 0.03
 
+    # --- Ljus som andra begränsande resurs ---------------------------------
+    #
+    # Tillförsel per cell och månad, uttryckt direkt i **kg vävnad** som
+    # cellens instrålning räcker till att bygga. Att välja den enheten i
+    # stället för joule sparar en omvandlingskonstant utan att förlora något:
+    # ingenting annat i modellen läser ljus.
+    #
+    # Nivån är satt så att ljus och näring är jämförbart begränsande vid den
+    # uppmätta jämvikten. Vid 254 000 kg stående biomassa och ett förnafall
+    # kring tre procent per månad är primärproduktionen omkring 0,46 kg per
+    # cell och månad. Är talet mycket högre blir ljuset inert, mycket lägre
+    # och näringen blir det.
+    light_input: float = 0.60
+
+    # Extinktionskoefficient i Beer–Lambert. Ljuset som når en planta avtar
+    # exponentiellt med bladarean ovanför den. Λ i modellen är ett
+    # markarealindex och inte ett bladarealindex, så koefficienten bär även
+    # omräkningen mellan dem. Vid Λ = 1,4 får en helt undertryckt planta
+    # omkring elva procent av full instrålning.
+    light_extinction: float = 0.5
+
+    # Bladarea per kilo labil vävnad, i cellareor per B_K. Utan den blir
+    # bladarean lika med rotarean, och då täcker ett kilo blad en elftedels
+    # cell — en groddplanta hinner då inte växa snabbare än sitt eget
+    # förnafall och varje bestånd dör ut. Specifik bladarea är i verkligheten
+    # den variabel som skiljer växtstrategier mest, och den är stor: ett kilo
+    # blad täcker långt mer mark än ett kilo rot försörjer.
+    leaf_area_per_kg: float = 10.0
+
+    # Asymmetrins skärpa. Höjden är m · s — strukturmassan, alltså det som
+    # håller organismen uppe, enligt docs/substratets-struktur.md. En planta
+    # som är dubbelt så hög som cellens medelhöjd får r = 0,67 och undgår två
+    # tredjedelar av skuggan.
+    light_height_ref: float = 1.0
+
     @property
     def uptake_rate_max(self) -> float:
         """Upptagstak i kg näring per månad och areaenhet."""

@@ -253,6 +253,9 @@ class Population:
     _last_flora_died_age: int = 0
     _last_flora_died_starve: int = 0
     _last_flora_seeds: int = 0
+    # Andel växande plantor där ljuset är den knappare resursen. Är den nära
+    # noll eller ett är den ena resursen inert och kalibreringen fel.
+    _last_flora_light_limited: float = 0.0
     _flora_slots_cache: object = None
     _fauna_slots_cache: object = None
     
@@ -622,6 +625,7 @@ class Population:
                 "flora_died_age": int(getattr(self, "_last_flora_died_age", 0)),
                 "flora_died_starve": int(getattr(self, "_last_flora_died_starve", 0)),
                 "flora_seeds": int(getattr(self, "_last_flora_seeds", 0)),
+                "flora_light_limited": float(getattr(self, "_last_flora_light_limited", 0.0)),
                 "flora_mean_structure": float(flora_info["flora_mean_structure"]),
                 "flora_cells_occupied": float(flora_info["flora_cells_occupied"]),
                 "flora_per_cell": float(flora_info["flora_per_cell"]),
@@ -1600,10 +1604,51 @@ class Population:
         reserve = reserve + (take - to_pool)
         store.flora_repro_pool[fl] += to_pool
 
-        # --- 6. tillväxt ur reserven ------------------------------------------
-        can_grow = holds & (m < m_adult) & (reserve > 0.0)
+        # --- 6. ljus som andra begränsande resurs -----------------------------
+        #
+        # Bara labil vävnad fotosyntetiserar, så bladarean följer m · (1 − s)
+        # medan rotarean följer hela massan. Det är strukturandelens motkraft,
+        # och den är mekanism och inte kostnadsparameter: en vedartad planta
+        # bygger billigt i näring men bär mindre blad per kilo.
+        #
+        # Höjden är m · s enligt docs/substratets-struktur.md — strukturmassan
+        # är det som håller organismen uppe. Skuggan är Beer–Lambert i cellens
+        # bladarealindex, dämpad av hur hög plantan står i förhållande till
+        # cellens arealviktade medelhöjd. Det ger asymmetrin utan att kräva en
+        # sortering per cell: två bincounts räcker.
+        k_ext = float(self.WP.light_extinction)
+        h_ref = max(1e-12, float(self.WP.light_height_ref))
+        L_cell = float(self.WP.light_input) * dt
+
+        sla = float(self.WP.leaf_area_per_kg)
+        leaf = sla * m * (1.0 - struct) / BK
+        height = m * struct
+
+        lam = np.bincount(cells[vi], weights=leaf[vi], minlength=n_cells)[:n_cells]
+        hsum = np.bincount(cells[vi], weights=leaf[vi] * height[vi], minlength=n_cells)[:n_cells]
+        hbar = np.zeros(n_cells, dtype=np.float64)
+        nz = lam > 0.0
+        hbar[nz] = hsum[nz] / lam[nz]
+
+        r_rel = height / (height + h_ref * np.maximum(hbar[cells], 1e-12))
+        shade = np.exp(-k_ext * lam[cells] * (1.0 - r_rel))
+        eff = np.where(holds, leaf * shade, 0.0)
+
+        eff_cell = np.bincount(cells[vi], weights=eff[vi], minlength=n_cells)[:n_cells]
+        light = np.where(
+            holds,
+            L_cell * eff / np.maximum(1.0, eff_cell)[cells] * (1.0 - 1e-12),
+            0.0,
+        )
+
+        # --- 7. tillväxt: min() över resurser ---------------------------------
+        # Näring ur reserven, kol ur ljuset. Liebigs minimumlag: den knappaste
+        # sätter takten. Kolet lagras inte — fotosyntat som inte används i
+        # samma tick är borta, vilket är en förenkling värd att notera.
+        can_grow = holds & (m < m_adult) & (reserve > 0.0) & (light > 0.0)
         room = np.where(can_grow, m_adult - m, 0.0)
-        dm_want = np.minimum(room, np.where(can_grow, reserve / np.maximum(cost, 1e-12), 0.0))
+        dm_nutrient = np.where(can_grow, reserve / np.maximum(cost, 1e-12), 0.0)
+        dm_want = np.minimum(room, np.minimum(dm_nutrient, np.where(can_grow, light, 0.0)))
 
         target = m + dm_want
         stored = target.astype(np.float32)
@@ -1626,6 +1671,10 @@ class Population:
                 * float(self.WP.E_labile_J_per_kg)
                 * (1.0 - struct[g])
             ).astype(np.float32)
+
+        self._last_flora_light_limited = float(
+            np.mean(light[can_grow] < dm_nutrient[can_grow])
+        ) if np.any(can_grow) else 0.0
 
         produced = float(dm[grew].sum()) if np.any(grew) else 0.0
         taken = float(spent.sum())
