@@ -265,7 +265,24 @@ class AgentParams:
     # Mål: W-systemet ska verka på MÅNGA generationers tidsskala.
     #   wear_a0=0.004 → W=0.4 vid t=100s, W=4 vid t=1000s (10 generationer)
     #   repair_W_decay=0.15 → mjukare degradering (var 0.3)
-    wear_a0: float = 0.008     # var 0.035 → sänkt: W=2.8 vid t=350s istf 12.25, reparation degraderas långsammare
+    # Slitagets åldersterm — den enda posten som tickar för ett oskadat djur.
+    #
+    # Var 0.008, ett tal från sekundskalan (kommentarerna ovan räknar i "t=100s"
+    # och "t=350s"). Uppmätt konsekvens: medianskadan i en matt population är
+    # exakt noll vid varje mätpunkt, och 97 procent av alla dödsfall är svält.
+    # Ett djur med repair_capacity 0,80 dog aldrig av ålder över 600 månader.
+    #
+    # Slitaget matar både reparationstaket, exp(-0,15·W), och verkningsgraden,
+    # exp(-0,10·W). Ett djur som aldrig skadas slits därför aldrig, och ett som
+    # aldrig slits reparerar för evigt — åldrandet fanns som inflöde men aldrig
+    # som ackumulation. Ålderstermen är det som bryter den loopen.
+    #
+    # 0,12 är härlett, inte fittat: det placerar åldersdöden på 121, 134 och
+    # 153 månader vid repair_capacity 0,15, 0,30 och 0,80. Ingen är odödlig,
+    # och axeln köper uppskjuten död i stället för ingenting — vilket är
+    # anledningen till att den selekterades nedåt, 0,554 till 0,312, i den
+    # uppmätta körningen.
+    wear_a0: float = 0.12
     wear_aE: float = 0.0
     wear_aR: float = 0.0
     wear_aD: float = 0.002

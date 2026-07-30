@@ -100,6 +100,8 @@ Varje kilo reservmassa som oxideras släpper `N_L` näring till cellen. Kolet l�
 
 Skada byggs upp från ansträngning, metabolisk stress, ålder, svält och köld, och reduceras av reparation som kostar energi. `D_max` nås och organismen dör.
 
+Reparationens tak och verkningsgrad avtar båda med **slitaget** `W`, och `W` är biologisk ålder: den tickar med `wear_a0` för varje individ oavsett hälsa, och ökar därutöver med skadetakten. Att ålderstermen är den bärande är avgörande. Byggs `W` enbart ur skada blir ett djur som aldrig skadas aldrig slitet, och ett djur som aldrig slits reparerar för evigt — åldrandet finns då som inflöde men aldrig som ackumulation.
+
 Två saker är värda att veta. **Katabolism är inte skada.** `dD_starve` mäter redan utmärgling som massa relativt förväntad massa för åldern, alltså utfallet; att också straffa mekanismen är dubbelräkning. `k_cat_dmg` står därför lågt. **Reparationen är en takt**, multiplicerad med `dt` som allt annat, och `repair_capacity` är en genetisk axel med en kostnad som biter — livshistorieteorins avvägning mellan underhåll och reproduktion.
 
 ---
@@ -112,7 +114,7 @@ vittring  ->  fri näring  ->  flora  ->  fauna  ->  detritus  ->  fri näring
                   +--- exkretion, förbränning ---+       nedbrytningsförlust
 ```
 
-Flora tar upp fri näring ur sin cell, delad **proportionellt mot efterfrågan** mellan alla individer i cellen och viktad med `uptake_capacity`. Kostnaden per byggt kilo är `nutrient_content(s)`, vilket sjunker med strukturandelen: strukturmaterial är kolrikt och näringsfattigt, och det är därför träd klarar mager mark där örter inte gör det.
+Flora tar upp fri näring ur sin cell, delad **proportionellt mot rotarea**: `A_i / max(1, ΣA)` över cellen, med överskjutande area fördelad på grannringen. Tidigare delades den mot tillväxtunderskottet, vilket gjorde att `uptake_capacity` band i noll av alla individer — se `docs/statusanalys-vaxtcykeln.md`. Kostnaden per byggt kilo är `nutrient_content(s)`, vilket sjunker med strukturandelen: strukturmaterial är kolrikt och näringsfattigt, och det är därför träd klarar mager mark där örter inte gör det.
 
 Fauna får näring med födan och utsöndrar den vid förbränning och vävnadsomsättning. Detritus bryts ner till fri näring; en andel `nutrient_loss_frac` lämnar systemet.
 
@@ -124,7 +126,7 @@ Den sista termen är en platshållare. Den verkliga sänkan är begravning som s
 
 ## Tidsskalan
 
-Tidsenheten är **månader**. Ett tick är `dt = 0,02` månader, alltså ungefär 14,4 timmar. En livslängd på omkring 47 månader är 2 350 tick.
+Tidsenheten är **månader**. Ett tick är `dt = 0,02` månader, alltså ungefär 14,4 timmar. En livslängd på omkring 47 månader är 2 350 tick. Talet är en kalibreringsreferens, inte ett utfall: uppmätt når individer 157 månader, och åldersdödens tak ligger på 121 till 153 beroende på `repair_capacity`.
 
 Enheten är inte godtycklig. Den valdes av att livstidsomsättningen — hur många gånger en organism omsätter sitt eget energiinnehåll under ett liv — ska hamna i det biologiska intervallet 30 till 100:
 
@@ -158,7 +160,7 @@ Det är just förhållandet mellan klass A och klass B som var trasigt: ämnesom
 
 ## Fällor
 
-Sex av dem har kostat oss mätbar tid. De är värda att känna igen.
+Åtta av dem har kostat oss mätbar tid. De är värda att känna igen.
 
 **En stock är inte en takt.** `E_cap_per_M` är en lagringskapacitet och skalar inte med dräneringarna. När dräneringarna växte men taket stod still räckte reserven inte en tick. Samma fel i `drain_rate_n`, som normerade en takt mot en stock — kvoten har då enheten 1/tid och ändrar värde vid enhetsbyte. Normera mot basalmetabolismen i stället; då blir måttet skalfritt.
 
@@ -169,6 +171,10 @@ Sex av dem har kostat oss mätbar tid. De är värda att känna igen.
 **Ett överskott måste ha någonstans att ta vägen.** En vuxen individ vid `M_target` kunde varken växa eller lagra, så allt över reservtaket exkreterades — medan varje svacka kostade massa. Ett tak uppåt utan golv nedåt ger en långsam nedgång oavsett hur god försörjningen är. Därför är reservkapaciteten evolverbar.
 
 **Aptit får inte mätas mot en kapacitet som krymper med underskottet.** `hunger = (Ecap − E)/Ecap` med `Ecap ∝ M` betyder att en utmärglad organism inte kan registrera sig som hungrig. Aptiten mäts nu även mot förväntad massa för åldern, och katabolism sätter den till fullt: den som bryter ner sin egen vävnad för att betala underhållet är hungrig, oavsett vad ögonblicksbilden säger.
+
+**Ett inflöde som repareras bort i samma tick syns inte alls.** `dD_age` tickade för varje individ, men medianskadan i en matt population mätte exakt noll vid varje mätpunkt och 97 procent av alla dödsfall var svält. Klockan fanns, den nollställdes bara varje tick. Felet låg i att slitaget byggdes ur skadetakten i stället för ur tiden, så degraderingen av reparationen var villkorad av att skada redan skett. Talet `wear_a0` var dessutom kvar från sekundskalan. Se `k_age1` nedan för samma sorts fel.
+
+**Ett klass B-tal som är 1/tid² är inte skalfritt.** Klassindelningen säger att livshistorietakter behåller sina tal vid enhetsbyte, eftersom `D_max` är en dimensionslös livstidsbudget. Det gäller storheter med dimensionen 1/tid. `k_age1` multiplicerar **åldern** och har därför dimensionen 1/tid², vilket gör att en livstidsintegral av den skalar med kvadraten på tidsenheten. Den bör härledas ur en målsatt livslängd i stället för att bäras över.
 
 **Ett handlingsantagande som håller vid korta tick kan bli falskt vid långa.** Betningen samplade en punkt, vilket var riktigt när organismen färdades fyra hundradels cell per tick och blev fel när den korsar två. Djuret gick förbi föda det inte åt.
 

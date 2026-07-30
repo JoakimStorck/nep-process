@@ -342,6 +342,22 @@ Tre saker återstår att döma, och de kräver längre körningar än sandlådan
 
 **Bördighetstestet** är nu körbart och är den viktigaste enskilda mätningen i planen: `--nutrient-init 0.64` mot standardens 0,32 ska ge omkring dubbel stående biomassa medan dynamikens *form* är oförändrad. Håller det är taket ekologiskt; håller det inte sitter det någon annanstans.
 
+## Steg 5a — Faunans åldrande
+
+*Första steget i faunaarbetet. Mekanismen fanns; talet var kvar från sekundskalan.*
+
+- ~~Slitagets åldersterm kalibreras.~~ **Klart.** `wear_a0` 0,008 → 0,12.
+
+Uppmätt före: medianskadan i en matt population var **exakt noll** vid varje mätpunkt, individer nådde 157 månader, och **97 procent av alla dödsfall var svält**. Ett djur med `repair_capacity = 0,80` dog aldrig av ålder över 600 månader.
+
+Orsaken var inte att åldersklockan saknades — `dD_age` tickar för alla — utan att slitaget byggdes ur *skadetakten* i stället för ur tiden. Ett djur som aldrig skadas slits aldrig, och ett som aldrig slits reparerar för evigt. Inflödet fanns, ackumulationen inte.
+
+Uppmätt efter: `W` går från 0,26 till 2,6–4,1, maximal ålder från 157 till 58–89 månader, och **andelen dödsfall av skada går från 2,9 till 69,7 procent**. Svälten är kvar som andra orsak, vilket är rätt — den ska finnas, men inte vara den enda.
+
+Och `repair_capacity` slutade selekteras nedåt. Den föll 0,554 → 0,312 i den gamla körningen därför att den kostade energi och köpte ingenting när skadan ändå var noll; nu ligger den stilla på 0,554. Axeln köper uppskjuten död, och avvägningen mot reproduktion är den klassiska.
+
+**Svälten är äkta.** Katabolism mot floramassa korrelerar −0,20, och under de månader floran låg över 50 000 kg inträffade katabolism i 1,7 procent av fallen — noll under den långa återhämtningsfasen. Aptit- och katabolismlogiken tippar alltså inte för lätt; djuren svälte för att maten faktiskt tog slut.
+
 ## Statusanalys efter växtcykeln
 
 `docs/statusanalys-vaxtcykeln.md` sammanfattar 0053–0067 och de fem 40 000-tickskörningarna: vad som fungerar, vilka förutsägelser som föll, vilka avsnitt i övriga dokument som är motsagda, och vad som återstår i vilken ordning.
