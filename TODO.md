@@ -342,6 +342,27 @@ Tre saker återstår att döma, och de kräver längre körningar än sandlådan
 
 **Bördighetstestet** är nu körbart och är den viktigaste enskilda mätningen i planen: `--nutrient-init 0.64` mot standardens 0,32 ska ge omkring dubbel stående biomassa medan dynamikens *form* är oförändrad. Håller det är taket ekologiskt; håller det inte sitter det någon annanstans.
 
+## Steg 4f — Counting sort i spatialindexet
+
+*Enda posten i profilen som kunde accelereras utan att röra biologi. `rebuild_spatial_index` är oförändrad sedan Steg 5 och helt oberoende av modellen.*
+
+- ~~`argsort` ersätts av en counting sort.~~ **Klart.** Cellindex är begränsade heltal, så grupperingen är O(n + n_cells) i stället för O(n log n): räkna, kumulera, strö ut. Elementen besöks i ursprunglig ordning, vilket gör den stabil, och permutationen är **bitidentisk** med `np.argsort(kind="stable")` — verifierat över fyra beståndsstorlekar.
+
+```
+plantor    counting sort   argsort stable    kvot
+ 47 000        0,311 ms        4,334 ms     13,9x
+200 000        1,660 ms       21,236 ms     12,8x
+350 000        2,452 ms       38,859 ms     15,8x
+```
+
+Vid en miljon celler och 350 000 plantor: 4,478 mot 38,765 ms, alltså 8,7 gånger. Kärnan återinför en O(n_cells)-term som Steg 5 tog bort ur indexet, men den kostar två linjära svep — 2,0 ms vid en miljon celler mot argsortens 39. Bufferten allokeras en gång och återanvänds.
+
+Numba är valfri: saknas den faller koden tillbaka på `argsort`, med samma bana och sämre tid. `numba` står redan i `requirements.txt`.
+
+**Uppmätt:** `rebuild_spatial_index` går från 5,55 till 1,98 ms vid 46 843 plantor, och ticken från 24,90 till 21,00 ms — femton procent vid den skalan. Vinsten växer superlinjärt med beståndet, eftersom argsorten gjorde det.
+
+**Kvar i profilen** är nu tillväxtpasset, 12,2 ms vid 46 843 plantor. Det är bandbreddsbundet snarare än beräkningsbundet: passet materialiserar omkring tjugofem temporära arrayer, och vid 350 000 plantor är varje 2,8 MB. En elementvis operation kostar 0,71 ms och en gather 1,90 vid den skalan — kärnorna väntar på minnet. En fusionerad kernel som läser in en gång är sannolikt värd tre till fem gånger, men den fryser kod vi ändrar varannan patch och hör därför till Steg 8, efter ljuset.
+
 ## Steg 4e — Reproduktionsgrinden, trängseln och tillförseln
 
 *Tre tal, ingen ny mekanism. Utlöst av att w1-körningen visade en steril flora.*
@@ -378,7 +399,7 @@ Antalet vänder nedåt mellan tick 8 000 och 10 000, vilket baslinjen aldrig gjo
 
 **Kvar, och nu de tre största posterna:**
 
-- `rebuild_spatial_index` står för 3,79 s av 40 i profilen, nästan allt i `argsort` över levande organismer, och anropas två gånger per tick. En counting sort med `bincount` och `cumsum` vore O(n) i stället för O(n log n), men en *stabil* CSR kräver en löpande räknare per cell, alltså en Numba-kernel eller en icke-stabil ordning. Det senare ändrar vilken planta en betare äter först och därmed banan. Hör till Steg 8.
+- ~~`rebuild_spatial_index` och dess `argsort`.~~ **Klart i Steg 4f.** Counting sort i en Numba-kernel; permutationen är bitidentisk med `np.argsort(kind="stable")`, så banan är oförändrad.
 - Att slopa det andra anropet per tick är nu värt betydligt mer än när frågan stängdes i Steg 5 — då kostade de två anropen 0,38 ms, nu 2,5 ms vid trettiotusen plantor och mer därefter. Det kräver dock att florapassen flyttas sist i ticken, vilket bryter manifestets passordning.
 - `grid.cell_of` anropas 495 500 gånger på 1 500 tick, praktiskt taget allt från `see_agent_first_hit` som slår upp en cell per stråle och agent. Det försvinner i Steg 6a, där strålbaserad sampling ersätts av aggregering över `cells_within()`.
 
