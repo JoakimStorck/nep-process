@@ -280,7 +280,12 @@ Två av dem har ännu ingen motkraft i koden: `uptake_capacity` får sin först 
 
 Värre: den enda term som bryter symmetrin drar åt fel håll. Byggkostnaden i näring sjunker med strukturandelen, från 0,0224 vid `s = 0,35` till 0,0036 vid `s = 0,95`. Under ren näringsbegränsning bygger den vedartade plantan alltså sex gånger fler kilo per kilo näring och växer sex gånger snabbare i relativa termer än den örtartade — precis omvänt mot bladekonomispektrumet. Skälet är att floran inte har någon bindande kolbudget; seg vävnad är billig i näring och dyr i kol, men kolet är gratis, så bara rabatten syns.
 
-Ljus löser båda med samma grepp: det gör struktur dyrt och storlek lönsamt. Formen, exponenten och litteraturen finns redan i `docs/substratets-struktur.md`, liksom skälet att vänta — två begränsande resurser samtidigt gör kalibreringen oattribuerbar. **Storleksaxeln får därför ingen rättvis dom förrän ljuset finns, och det ska inte tolkas som att den är kalibrerad.**
+Ljus löser båda med samma grepp: det gör struktur dyrt och storlek lönsamt.
+
+> **Falsifierat, 0061–0066.** Ljuset gav strukturandelen en *ny uppsida* i
+> stället: höjden är strukturmassa, och ju knappare ljuset är desto mer är höjd
+> värd. Axeln bromsades från 0,78 till 0,69 men vändes inte. Se
+> `docs/statusanalys-vaxtcykeln.md`, Del B. Formen, exponenten och litteraturen finns redan i `docs/substratets-struktur.md`, liksom skälet att vänta — två begränsande resurser samtidigt gör kalibreringen oattribuerbar. **Storleksaxeln får därför ingen rättvis dom förrän ljuset finns, och det ska inte tolkas som att den är kalibrerad.**
 
 **Humus.** Modellen har tre näringspooler — fri, förna, levande — men saknar den fjärde och i verkligheten största: en långsam markpool som binder mycket och släpper lite. Utan den svänger näringen lika snabbt som förnan bryts ner.
 

@@ -342,6 +342,12 @@ Tre saker återstår att döma, och de kräver längre körningar än sandlådan
 
 **Bördighetstestet** är nu körbart och är den viktigaste enskilda mätningen i planen: `--nutrient-init 0.64` mot standardens 0,32 ska ge omkring dubbel stående biomassa medan dynamikens *form* är oförändrad. Håller det är taket ekologiskt; håller det inte sitter det någon annanstans.
 
+## Statusanalys efter växtcykeln
+
+`docs/statusanalys-vaxtcykeln.md` sammanfattar 0053–0067 och de fem 40 000-tickskörningarna: vad som fungerar, vilka förutsägelser som föll, vilka avsnitt i övriga dokument som är motsagda, och vad som återstår i vilken ordning.
+
+Del D i den — de metodiska lärdomarna — är det som är värt att behålla längst. Särskilt att ingenting bedöms före mättnad, och att summor över florans sneda fördelningar är vilseledande.
+
 ## Steg 4l — Grindredovisning och fördelningar
 
 *Instrumentering. Svarade direkt på frågan den byggdes för, och svaret var att jag hade fel.*

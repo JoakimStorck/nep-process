@@ -114,7 +114,7 @@ Vid `θ = 1` är konkurrensen perfekt symmetrisk — en individ dubbelt så stor
 
 Litteraturen stöder också uppdelningen mellan resurserna, vilket är relevant för att modellen redan gör den: ovanjordisk konkurrens är asymmetrisk eftersom ljus kan förekommas och större individer skuggar mindre men inte tvärtom, medan underjordisk konkurrens typiskt är symmetrisk eftersom markresurser är fläckvis fördelade och upptaget skalar ungefär linjärt med storlek.
 
-Näringskonkurrensen i Steg 4 ska alltså vara symmetrisk, vilket den är — upptaget begränsas proportionellt av `uptake_capacity`. Asymmetrin hör till ljuset.
+**Rättad efter 0054, se `docs/statusanalys-vaxtcykeln.md`.** Påståendet nedan höll inte: fördelningen skedde mot tillväxtunderskottet och `uptake_capacity` band i noll av alla individer. Upptaget delas numera efter rotarea. Ursprunglig text: näringskonkurrensen i Steg 4 ska alltså vara symmetrisk, vilket den är — upptaget begränsas proportionellt av `uptake_capacity`. Asymmetrin hör till ljuset.
 
 ### Den egna substitutionen
 
