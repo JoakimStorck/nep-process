@@ -1347,6 +1347,26 @@ class Population:
                 seen.add(c)
                 ordered_cells.append(c)
     
+        # Funktionell respons av Hollings typ II, härledd ur att betandet tar
+        # tid. Tillgänglig massa inom räckhåll räknas först; efterfrågan kapas
+        # sedan av vad söktid och hanteringstid medger under en tick. Se
+        # AgentParams.graze_handle_h för härledningen av talen.
+        B = 0.0
+        for cell in ordered_cells:
+            for slot in self.store.slots_in_cell(cell):
+                s = int(slot)
+                if bool(self.store.alive[s]) and int(self.store.kind[s]) == 1:
+                    B += float(self.store.mass[s])
+        if B > 0.0:
+            AP = self.AP
+            a_s = float(AP.graze_search_a)
+            h_t = float(AP.graze_handle_h)
+            cap = float(self.WP.dt) * a_s * B / (1.0 + a_s * h_t * B)
+            if cap < amt:
+                amt = cap
+        if amt <= 1e-12:
+            return 0.0, 0.0
+
         for cell in ordered_cells:
             for slot in self.store.slots_in_cell(cell):
                 s = int(slot)

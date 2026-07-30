@@ -342,6 +342,29 @@ Tre saker återstår att döma, och de kräver längre körningar än sandlådan
 
 **Bördighetstestet** är nu körbart och är den viktigaste enskilda mätningen i planen: `--nutrient-init 0.64` mot standardens 0,32 ska ge omkring dubbel stående biomassa medan dynamikens *form* är oförändrad. Håller det är taket ekologiskt; håller det inte sitter det någon annanstans.
 
+## Steg 5b — Betningens funktionella respons
+
+*Härledd ur att betandet tar tid, inte påsatt som kurva.*
+
+- ~~Hollings typ II i `_consume_flora_from_store`.~~ **Klart.** `intag = dt · a · B / (1 + a·h·B)`, där `B` är växtmassa inom räckhåll, `a` sökeffektivitet och `h` hanteringstid per kilo.
+
+Tidigare: `take = min(m, amt)` utan söktid och utan hanteringstid. Den sista plantan i grannskapet var lika lätt att hitta och äta som den första, och intaget föll inte förrän den lokala massan understeg aptiten — då tvärt till noll. **Bytet hade ingen lågtäthetsrefug.**
+
+Talen är härledda: `h = dt / 1,8` ger samma tak som den uppmätta maximala aptiten, och `a` sätter halvmättnaden vid 20 kg inom räckhåll — mellan mättnadslägets ~76 kg och kollapslägets ~6.
+
+```
+B inom räckhåll   intag/tick   andel av taket
+        2 kg        0,164          9 %
+        6 kg        0,416         23 %
+       20 kg        0,901         50 %
+       76 kg        1,426         79 %
+      200 kg        1,638         91 %
+```
+
+**Inte testat i en lång körning.** Typ II är dessutom klassiskt *destabiliserande* i sig — den ger en refug men ingen tröskeleffekt. Typ III, som stabiliserar, kräver byte av föda eller en fysisk refug, och den senare hör till terrängen.
+
+Kostnad: ett extra svep över slots i räckvidden per betningshändelse, omkring 8 procent på ticken.
+
 ## Steg 5a — Faunans åldrande
 
 *Första steget i faunaarbetet. Mekanismen fanns; talet var kvar från sekundskalan.*

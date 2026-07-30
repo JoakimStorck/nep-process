@@ -282,6 +282,32 @@ class AgentParams:
     # och axeln köper uppskjuten död i stället för ingenting — vilket är
     # anledningen till att den selekterades nedåt, 0,554 till 0,312, i den
     # uppmätta körningen.
+    # --- Betningens funktionella respons -----------------------------------
+    #
+    # Betaren tog tidigare exakt sin efterfrågan ur cellerna inom räckhåll,
+    # utan söktid och utan hanteringstid: `take = min(m, amt)`. Den sista
+    # plantan i grannskapet var därmed lika lätt att hitta och äta som den
+    # första, och intaget föll inte förrän den lokala biomassan understeg
+    # aptiten — då tvärt till noll. Bytet hade ingen lågtäthetsrefug.
+    #
+    # Hollings typ II följer av att betandet tar tid. Under en tick fördelas
+    # tiden mellan att söka och att beta:
+    #
+    #     intag = dt · a · B / (1 + a · h · B)
+    #
+    # där B är tillgänglig växtmassa inom räckhåll, `a` är sökeffektiviteten
+    # och `h` hanteringstiden per kilo. Vid stor B går intaget mot dt/h, alltså
+    # samma tak som förut; vid liten B faller det proportionellt mot B i
+    # stället för att ligga kvar på aptiten.
+    #
+    # h är satt så att taket blir 1,8 kg per tick, vilket är den uppmätta
+    # maximala aptiten: h = dt / 1,8. `a` är satt så att halvmättnaden ligger
+    # vid 20 kg inom räckhåll — mellan mättnadslägets omkring 76 kg och
+    # kollapslägets omkring 6, så att responsen biter under en nedgång utan att
+    # märkas under normala förhållanden.
+    graze_handle_h: float = 0.0111   # månader per kg
+    graze_search_a: float = 4.5      # 1 / (h · B_halv)
+
     wear_a0: float = 0.12
     wear_aE: float = 0.0
     wear_aR: float = 0.0
