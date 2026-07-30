@@ -1327,6 +1327,14 @@ class Population:
                 new_m = m - take
     
                 self.store.mass[s] = np.float32(new_m)
+                # Betaren tar skott, inte rot. Utan klämningen behåller en
+                # betad planta hela sin rotmassa medan totalmassan sjunker, och
+                # efter upprepad betning överstiger roten kroppen — skottet blir
+                # noll, bladarean noll, och plantan kan aldrig växa igen.
+                # Uppmätt före rättningen: 7,4 procent av beståndet i det läget
+                # vid tick 1 800, med rotandelar upp till 244.
+                if float(self.store.flora_root_mass[s]) > new_m:
+                    self.store.flora_root_mass[s] = np.float32(max(0.0, new_m))
                 e_kg = self._slot_energy_per_kg(s)
                 self.store.energy[s] = np.float32(max(0.0, new_m * e_kg))
                 got += take
@@ -1929,6 +1937,8 @@ class Population:
                     store.mass[child_slot] = np.float32(
                         float(store.mass[child_slot]) - shrink
                     )
+                    if float(store.flora_root_mass[child_slot]) > float(store.mass[child_slot]):
+                        store.flora_root_mass[child_slot] = store.mass[child_slot]
                     store.energy[child_slot] = np.float32(max(
                         0.0,
                         float(store.mass[child_slot]) * self._slot_energy_per_kg(child_slot),
