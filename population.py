@@ -1545,10 +1545,12 @@ class Population:
         dt = float(self.WP.dt)
         BK = float(self.WP.B_K)
         if BK <= 0.0 or dt <= 0.0:
+            self.store.clear_flora_claims()
             return 0.0, 0.0, 0.0
 
         fl = self._flora_slots(rebuild=True)
         if fl.size == 0:
+            self.store.clear_flora_claims()
             return 0.0, 0.0, 0.0
 
         world = self.world
@@ -1640,6 +1642,7 @@ class Population:
         holds = alive_mask & (cells >= 0) & (m > 0.0)
         vi = np.flatnonzero(holds)
         if vi.size == 0:
+            store.clear_flora_claims()
             if died > 0.0:
                 self._flora_summary_cache = None
             return 0.0, 0.0, float(died)
@@ -1675,6 +1678,12 @@ class Population:
         # Marginalen på en ulp håller summan strikt under det som finns, så att
         # poolen aldrig kan bli negativ av avrundning.
         share_row = row_claim / np.maximum(1.0, claimed)[row_cell] * (1.0 - 1e-12)
+
+        # Ytfördelningen behålls i stället för att kastas. `claimed` säger var
+        # marken är full och `share_row` vad varje planta faktiskt håller —
+        # samma tal som näringsandelen räknas ur nedan. Ingen annan kod ska
+        # härleda dem på nytt; se OrganismStore.set_flora_claims.
+        store.set_flora_claims(claimed, fl[row_plant], row_cell, share_row)
         avail_row = share_row * world.nutrient[row_cell]
         access = np.bincount(row_plant, weights=avail_row, minlength=fl.size)[:fl.size]
 

@@ -531,6 +531,100 @@ def check_nutrient_balance(pop, rel_tol: float = 1e-6) -> list[Violation]:
     return []
 
 
+def check_flora_claims(pop) -> list[Violation]:
+    """
+    Ytfördelningen ska vara en giltig fördelning av cellens area.
+
+    Cellarean är 1. En plantas andel av en cell kan aldrig vara negativ, och
+    summan av andelarna i en cell kan aldrig överstiga 1 — då hade marken
+    delats ut två gånger. Där anspråket når eller överstiger 1 ska summan
+    dessutom vara 1: marken är slut, och det finns ingen bar mark kvar att
+    fördela. Under 1 ska summan vara lika med anspråket, eftersom ingen
+    konkurrens skett.
+
+    Invarianten är billig och skyddar det som viewern kommer att rita som
+    bar mark. Blir den falsk visar bilden en yta som inte finns.
+    """
+    store = pop.store
+    out: list[Violation] = []
+
+    slots = np.asarray(store.flora_claim_slot)
+    cells = np.asarray(store.flora_claim_cell)
+    share = np.asarray(store.flora_claim_share, dtype=np.float64)
+    claimed = np.asarray(store.flora_cell_claimed, dtype=np.float64)
+
+    if slots.size == 0:
+        if np.any(claimed > 0.0):
+            out.append(Violation(
+                "flora_claims",
+                f"tom anspråkstabell men {int(np.count_nonzero(claimed > 0.0))} "
+                f"celler har anspråk kvar",
+            ))
+        return out
+
+    if not np.all(np.isfinite(share)) or not np.all(np.isfinite(claimed)):
+        out.append(Violation("flora_claims", "icke-ändliga andelar eller anspråk"))
+        return out
+
+    if np.any(share < 0.0):
+        out.append(Violation(
+            "flora_claims",
+            f"{int(np.count_nonzero(share < 0.0))} rader har negativ andel "
+            f"(minst {float(share.min()):.3e})",
+        ))
+
+    n_cells = int(claimed.shape[0])
+    bad_cell = (cells < 0) | (cells >= n_cells)
+    if np.any(bad_cell):
+        out.append(Violation(
+            "flora_claims",
+            f"{int(np.count_nonzero(bad_cell))} rader pekar på cell utanför världen",
+        ))
+        return out
+
+    used = np.bincount(cells.astype(np.int64), weights=share, minlength=n_cells)[:n_cells]
+
+    # Toleransen bär float32-lagringen av andelarna. Passet räknar i float64
+    # och lagrar i float32; felet växer med antalet rader i cellen.
+    tol = 1e-5
+    over = used > 1.0 + tol
+    if np.any(over):
+        out.append(Violation(
+            "flora_claims",
+            f"{int(np.count_nonzero(over))} celler har utdelad andel > 1 "
+            f"(max {float(used.max()):.6f}) — marken delades ut två gånger",
+        ))
+
+    full = claimed >= 1.0
+    if np.any(full):
+        short = np.abs(used[full] - 1.0) > tol
+        if np.any(short):
+            out.append(Violation(
+                "flora_claims",
+                f"{int(np.count_nonzero(short))} översökta celler delar inte ut "
+                f"hela arean (störst avvikelse {float(np.abs(used[full] - 1.0).max()):.3e})",
+            ))
+
+    open_ = ~full
+    if np.any(open_):
+        drift = np.abs(used[open_] - claimed[open_])
+        if np.any(drift > tol):
+            out.append(Violation(
+                "flora_claims",
+                f"{int(np.count_nonzero(drift > tol))} celler under mättnad har "
+                f"utdelad andel skild från anspråket (störst {float(drift.max()):.3e})",
+            ))
+
+    bad_slot = (slots < 0) | (slots >= int(store.n))
+    if np.any(bad_slot):
+        out.append(Violation(
+            "flora_claims",
+            f"{int(np.count_nonzero(bad_slot))} rader pekar på slot utanför store:n",
+        ))
+
+    return out
+
+
 ALL_CHECKS = (
     check_sparse_fields,
     check_nutrient_balance,
@@ -543,6 +637,7 @@ ALL_CHECKS = (
     check_finite_and_nonnegative,
     check_spatial_index,
     check_agent_store_binding,
+    check_flora_claims,
 )
 
 

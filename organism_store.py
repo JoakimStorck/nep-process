@@ -56,6 +56,10 @@ _NON_SLOT_ARRAYS = frozenset({
     "idx_starts",
     "flora_cell_mass",
     "flora_cell_structure",
+    "flora_cell_claimed",
+    "flora_claim_slot",
+    "flora_claim_cell",
+    "flora_claim_share",
     "_flora_cells_prev",
     "_csr_cursor",
 })
@@ -167,6 +171,20 @@ class OrganismStore:
     # se *att* det finns föda men inte värdera den, och värdet är hela
     # skillnaden mellan seg ved och färskt blad.
     flora_cell_structure: np.ndarray = field(init=False)
+    # Cellens anspråkade rotarea, summerad över de plantor som når in i den.
+    # Cellarean är 1, så värdet är direkt jämförbart med 1: under betyder
+    # bar mark, över betyder att marken är översökt och att varje planta
+    # bara får en andel av det den gör anspråk på.
+    flora_cell_claimed: np.ndarray = field(init=False)
+
+    # Anspråkstabellen: en rad per (planta, berörd cell). En planta med
+    # rotarea över 1 når in i sina sex grannar och har därför flera rader.
+    # `flora_claim_share` är plantans faktiska andel av cellen efter
+    # konkurrensen — summan över en cell är cellens utnyttjade andel, och
+    # resten är bar mark. Tabellen är ragged och byggs om varje tick.
+    flora_claim_slot: np.ndarray = field(init=False)
+    flora_claim_cell: np.ndarray = field(init=False)
+    flora_claim_share: np.ndarray = field(init=False)
     _flora_cells_prev: np.ndarray = field(init=False)
     _csr_cursor: np.ndarray = field(init=False)
     cell_slots: np.ndarray = field(init=False)
@@ -302,6 +320,10 @@ class OrganismStore:
         self.idx_cells = np.zeros(0, dtype=np.int64)
         self.idx_starts = np.zeros(1, dtype=np.int64)
         self.flora_cell_structure = np.zeros(n_cells, dtype=np.float32)
+        self.flora_cell_claimed = np.zeros(n_cells, dtype=np.float32)
+        self.flora_claim_slot = np.zeros(0, dtype=np.int32)
+        self.flora_claim_cell = np.zeros(0, dtype=np.int32)
+        self.flora_claim_share = np.zeros(0, dtype=np.float32)
         self._flora_cells_prev = np.zeros(0, dtype=np.int64)
         self._csr_cursor = np.zeros(n_cells, dtype=np.int64)
         self.cell_slots = np.zeros(cap, dtype=np.int32)
@@ -386,7 +408,7 @@ class OrganismStore:
         cap = int(self.capacity)
         n_cells = int(self.n_cells)
 
-        for _name in ("flora_cell_mass", "flora_cell_structure"):
+        for _name in ("flora_cell_mass", "flora_cell_structure", "flora_cell_claimed"):
             _got = int(getattr(self, _name).shape[0])
             if _got != n_cells:
                 raise AssertionError(
@@ -396,6 +418,17 @@ class OrganismStore:
         # Det glesa indexet har inte n_cells som längd — dess arrayer är lika
         # långa som antalet bebodda celler. Det som ska hålla är relationen
         # mellan dem.
+        # Anspråkstabellens tre kolumner hör till samma rader och måste
+        # därför vara lika långa. Längden i sig är fri.
+        _cl = (int(self.flora_claim_slot.shape[0]),
+               int(self.flora_claim_cell.shape[0]),
+               int(self.flora_claim_share.shape[0]))
+        if len(set(_cl)) != 1:
+            raise AssertionError(
+                f"anspråkstabellens kolumner har olika längd: "
+                f"slot={_cl[0]}, cell={_cl[1]}, share={_cl[2]}"
+            )
+
         if int(self.idx_starts.shape[0]) != int(self.idx_cells.shape[0]) + 1:
             raise AssertionError(
                 f"idx_starts har längd {int(self.idx_starts.shape[0])}, "
@@ -519,6 +552,33 @@ class OrganismStore:
     
         self.kind[slot] = 0
         
+    def set_flora_claims(self, claimed, slots, cells, share) -> None:
+        """
+        Skriv upptagspassets ytfördelning som härlett tillstånd.
+
+        Passet räknar redan ut både cellens totala anspråk och varje plantas
+        andel av den — det är så konkurrensen om marken avgörs. Att behålla
+        resultatet i stället för att kasta det gör fördelningen läsbar för
+        viewern och för diagnostik utan att någon annan kod behöver räkna om
+        formeln. En andra implementation av samma semantik är precis den
+        divergens som `_flora_*` i population.py redan orsakat mot
+        phenotype.py.
+
+        Ägarskapet är entydigt: `_growth_system_flora` är enda skrivare, och
+        fälten är giltiga från upptagspassets slut till nästa tick.
+        """
+        self.flora_cell_claimed[:] = np.asarray(claimed, dtype=np.float32)
+        self.flora_claim_slot = np.asarray(slots, dtype=np.int32)
+        self.flora_claim_cell = np.asarray(cells, dtype=np.int32)
+        self.flora_claim_share = np.asarray(share, dtype=np.float32)
+
+    def clear_flora_claims(self) -> None:
+        """Nolla ytfördelningen. Anropas när upptagspasset inte gör anspråk."""
+        self.flora_cell_claimed.fill(np.float32(0.0))
+        self.flora_claim_slot = np.zeros(0, dtype=np.int32)
+        self.flora_claim_cell = np.zeros(0, dtype=np.int32)
+        self.flora_claim_share = np.zeros(0, dtype=np.float32)
+
     def rebuild_spatial_index(self) -> None:
         """
         Bygg gemensamt spatialindex för alla levande organismer.
