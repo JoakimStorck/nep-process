@@ -57,7 +57,9 @@ class FrameReceiver:
         self.host, self.port = host, int(port)
         self.retry_s = float(retry_s)
         self._frame: ViewFrame | None = None
+        self._sock: socket.socket | None = None
         self._lock = threading.Lock()
+        self._send_lock = threading.Lock()
         self._running = True
         self.status = "startar"
         self.connected = False
@@ -70,6 +72,23 @@ class FrameReceiver:
     def latest(self) -> ViewFrame | None:
         with self._lock:
             return self._frame
+
+    def send_command(self, cmd: str) -> bool:
+        """
+        Skicka ett kommando till servern. Tyst nej om ingen anslutning finns.
+
+        Skrivningen låses för sig: läsartråden äger socketens läsände, men
+        kommandon kommer från renderingstråden.
+        """
+        with self._send_lock:
+            sock = self._sock
+            if sock is None:
+                return False
+            try:
+                sock.sendall((json.dumps({"cmd": cmd}) + "\n").encode("utf-8"))
+                return True
+            except OSError:
+                return False
 
     def close(self) -> None:
         self._running = False
@@ -103,6 +122,8 @@ class FrameReceiver:
                 continue
 
             self.connected = True
+            with self._send_lock:
+                self._sock = sock
             self.status = f"ansluten till {self.host}:{self.port}"
             try:
                 sock.settimeout(30.0)
@@ -119,6 +140,8 @@ class FrameReceiver:
                 self.status = f"anslutningen bröts: {exc.__class__.__name__} — försöker igen"
             finally:
                 self.connected = False
+                with self._send_lock:
+                    self._sock = None
                 try:
                     sock.close()
                 except OSError:
@@ -197,6 +220,7 @@ def main() -> int:
         )
     )
     viewer._screen = screen
+    viewer.on_command = rx.send_command
 
     clock = pg.time.Clock()
     running = True
@@ -217,6 +241,7 @@ def main() -> int:
                         rx.status,
                         "",
                         f"protokoll {PROTOCOL_VERSION}   återförsök var {a.retry:.0f} s",
+                        "Mellanslag pausar körningen om servern startats med --serve-control.",
                         "Q eller Esc avslutar.",
                     ],
                 )

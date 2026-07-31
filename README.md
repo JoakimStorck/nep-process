@@ -40,8 +40,13 @@ hoppar över bildrutor i stället för att bromsa simuleringen.
 På maskinen som räknar:
 
 ```bash
-python run_headless.py --ticks 100000 --seed 1 --serve 8765
+python run_headless.py --ticks 100000 --seed 1 --serve 8765 --serve-control
 ```
+
+`--serve-control` låter anslutna viewers pausa körningen med mellanslag. Utan
+flaggan är strömmen enkelriktad och tangenten svarar med ett nej i
+serverloggen. Varje ansluten klient får styra när flaggan är på, och vem som
+pausade visas i HUD:en — förtroendegränsen är redan tunneln.
 
 På maskinen som tittar:
 
@@ -80,7 +85,7 @@ anslutning och säger ifrån om de skiljer sig.
 | `T` | florans färgaxel |
 | `A` / `H` | djur av och på, HUD av och på |
 | `+` / `-` | gamma |
-| mellanslag | paus (endast lokalt fönster) |
+| mellanslag | paus (kräver `--serve-control` vid fjärrkörning) |
 | `Q` / `Esc` | avsluta |
 
 ---

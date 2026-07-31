@@ -38,16 +38,21 @@ from viewframe import PROTOCOL_VERSION, ViewFrame, pack
 
 
 class _Client:
-    __slots__ = ("sock", "addr", "wake", "thread", "alive", "sent", "dropped")
+    __slots__ = ("sock", "addr", "wake", "thread", "reader", "alive", "sent", "dropped")
 
     def __init__(self, sock: socket.socket, addr) -> None:
         self.sock = sock
         self.addr = addr
         self.wake = threading.Event()
         self.thread: threading.Thread | None = None
+        self.reader: threading.Thread | None = None
         self.alive = True
         self.sent = 0
         self.dropped = 0
+
+    @property
+    def name(self) -> str:
+        return f"{self.addr[0]}:{self.addr[1]}"
 
 
 class ViewerServer:
@@ -58,6 +63,7 @@ class ViewerServer:
         fps: float = 10.0,
         compress: bool = True,
         verbose: bool = True,
+        control: bool = False,
     ) -> None:
         self.host = str(host)
         self.port = int(port)
@@ -65,7 +71,15 @@ class ViewerServer:
         self.compress = bool(compress)
         self.verbose = bool(verbose)
 
+        self.control = bool(control)
+        self.paused = False
+        self.paused_by = ""
+        self.paused_seconds = 0.0
+        self._resume = threading.Event()
+        self._resume.set()
+
         self._latest: bytes | None = None
+        self._latest_frame: ViewFrame | None = None
         self._lock = threading.Lock()
         self._clients: list[_Client] = []
         self._running = True
@@ -80,26 +94,38 @@ class ViewerServer:
 
         self._acceptor = threading.Thread(target=self._accept_loop, daemon=True)
         self._acceptor.start()
-        self._log(f"lyssnar på {self.host}:{self.port} (protokoll {PROTOCOL_VERSION})")
+        self._log(
+            f"lyssnar på {self.host}:{self.port} (protokoll {PROTOCOL_VERSION}, "
+            f"styrning {'på' if self.control else 'av'})"
+        )
 
     # ---------- publikt ----------
+    def wants_frame(self) -> bool:
+        """
+        Är det dags att bygga en bildruta?
+
+        Fråga *före* `frame_from_pop`, inte efter. Att bygga bildrutan och
+        sedan låta `publish` kasta den kostar ett par millisekunder per tick
+        även när ingen tittar — argumentet beräknas ju innan anropet sker.
+        """
+        if not self._clients:
+            return False
+        return (time.monotonic() - self._last_publish) >= self.min_interval
+
     def publish(self, frame: ViewFrame) -> bool:
         """
         Erbjud en bildruta. Returnerar True om den faktiskt packades.
 
-        Anropa varje tick — funktionen avgör själv om det är dags. Utan
-        anslutna klienter kostar den ett låsfritt tomhetstest.
+        Kontrollerar samma villkor som `wants_frame` en gång till, så att ett
+        anrop utan föregående fråga inte kan slå ut kadensen.
         """
-        if not self._clients:
+        if not self.wants_frame():
             return False
-        now = time.monotonic()
-        if now - self._last_publish < self.min_interval:
-            return False
-        self._last_publish = now
+        self._last_publish = time.monotonic()
 
-        blob = pack(frame, compress=self.compress)
-        self.frames_packed += 1
+        blob = self._stamp_and_pack(frame)
         with self._lock:
+            self._latest_frame = frame
             self._latest = blob
             clients = list(self._clients)
         for c in clients:
@@ -108,6 +134,39 @@ class ViewerServer:
             else:
                 c.dropped += 1
         return True
+
+    def wait_while_paused(self) -> float:
+        """
+        Blockera så länge körningen är pausad. Returnerar väntad tid.
+
+        Anropas överst i tickloopen, före steget, så att pausen aldrig
+        träffar mitt i en tick. Den returnerade tiden ska dras av från den
+        förflutna tiden: väggklockan går under paus, och utan avdraget blir
+        varje ms/tick-siffra från en session där någon pausat obrukbar —
+        och den ser inte fel ut, den ser bara långsam ut.
+        """
+        if not self.paused:
+            return 0.0
+        t0 = time.monotonic()
+        while self.paused and self._running:
+            self._resume.wait(timeout=0.1)
+        dt = time.monotonic() - t0
+        self.paused_seconds += dt
+        return dt
+
+    def set_paused(self, paused: bool, who: str = "") -> None:
+        """Sätt pausläget och underrätta alla klienter omedelbart."""
+        paused = bool(paused)
+        if paused == self.paused:
+            return
+        self.paused = paused
+        self.paused_by = who if paused else ""
+        if paused:
+            self._resume.clear()
+        else:
+            self._resume.set()
+        self._log(("pausad av " if paused else "återupptagen av ") + (who or "okänd"))
+        self._republish()
 
     @property
     def n_clients(self) -> int:
@@ -128,6 +187,32 @@ class ViewerServer:
                 pass
 
     # ---------- internt ----------
+    def _stamp_and_pack(self, frame: ViewFrame) -> bytes:
+        frame.paused = self.paused
+        frame.paused_by = self.paused_by
+        frame.control_enabled = self.control
+        self.frames_packed += 1
+        return pack(frame, compress=self.compress)
+
+    def _republish(self) -> None:
+        """
+        Packa om den senaste bildrutan och skicka den.
+
+        Under paus ändras inte världen, så ingen ny bildruta produceras.
+        Utan omstämpling skulle klienten fortsätta visa `paused=False` tills
+        någon återupptog körningen — alltså precis tvärtom mot vad som gäller.
+        """
+        with self._lock:
+            frame = self._latest_frame
+        if frame is None:
+            return
+        blob = self._stamp_and_pack(frame)
+        with self._lock:
+            self._latest = blob
+            clients = list(self._clients)
+        for c in clients:
+            c.wake.set()
+
     def _log(self, msg: str) -> None:
         if self.verbose:
             print(f"[viewer-server] {msg}", flush=True)
@@ -169,10 +254,27 @@ class ViewerServer:
 
             c = _Client(sock, addr)
             c.thread = threading.Thread(target=self._send_loop, args=(c,), daemon=True)
+            c.reader = threading.Thread(target=self._recv_loop, args=(c,), daemon=True)
             with self._lock:
                 self._clients.append(c)
+                has_frame = self._latest is not None
+                has_stale = self._latest_frame is not None
             c.thread.start()
-            self._log(f"klient ansluten: {addr}  (totalt {len(self._clients)})")
+            c.reader.start()
+
+            # Väck den nya klienten om det redan finns en bildruta. Utan det
+            # får den vänta till nästa publicering — och står körningen still,
+            # pausad eller slut, kommer den aldrig. En ansluten klient som
+            # visar tom skärm ser ut som ett fel i klienten.
+            if has_frame:
+                c.wake.set()
+            elif has_stale:
+                # Det finns en bildruta men ingen packad — den byggdes medan
+                # ingen var ansluten, eller körningen har tagit slut. Packa om
+                # den så att den första klienten får se världen ändå.
+                self._republish()
+
+            self._log(f"klient ansluten: {c.name}  (totalt {len(self._clients)})")
 
     @staticmethod
     def _read_line(sock: socket.socket, limit: int = 4096) -> str:
@@ -185,6 +287,59 @@ class ViewerServer:
             if len(buf) > limit:
                 raise ValueError("handskakningen är för lång")
         return buf.split(b"\n", 1)[0].decode("utf-8")
+
+    def _recv_loop(self, c: _Client) -> None:
+        """
+        Ta emot kommandon från en klient. En rad JSON per kommando.
+
+        Styrningen är opt-in på servern. Är den avslagen läses raderna ändå
+        och besvaras med ett tydligt nej — annars ser klienten bara en
+        tangent som inte gör något.
+
+        Varje ansluten klient får styra. Förtroendegränsen är redan
+        socketen: servern binder till localhost och nås utifrån genom en
+        SSH-tunnel, så finkornig behörighet innanför den vore teater. Men
+        vem som gjorde vad följer med i bildrutan, så att en paus aldrig ser
+        ut som en hängning för den andra tittaren.
+        """
+        buf = b""
+        try:
+            while self._running and c.alive:
+                try:
+                    chunk = c.sock.recv(4096)
+                except socket.timeout:
+                    continue
+                if not chunk:
+                    break
+                buf += chunk
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    if line.strip():
+                        self._handle_command(c, line.decode("utf-8", "replace"))
+        except Exception:
+            pass
+        c.alive = False
+        c.wake.set()
+
+    def _handle_command(self, c: _Client, line: str) -> None:
+        try:
+            msg = json.loads(line)
+            cmd = str(msg.get("cmd", ""))
+        except Exception:
+            return
+
+        if not self.control:
+            self._log(f"{c.name} bad om {cmd!r} men styrning är avslagen (--serve-control)")
+            return
+
+        if cmd == "pause":
+            self.set_paused(True, c.name)
+        elif cmd == "resume":
+            self.set_paused(False, c.name)
+        elif cmd == "toggle_pause":
+            self.set_paused(not self.paused, c.name)
+        else:
+            self._log(f"okänt kommando från {c.name}: {cmd!r}")
 
     def _send_loop(self, c: _Client) -> None:
         while self._running and c.alive:
@@ -210,6 +365,6 @@ class ViewerServer:
         except OSError:
             pass
         self._log(
-            f"klient bortkopplad: {c.addr}  (skickade {c.sent}, hoppade över "
+            f"klient bortkopplad: {c.name}  (skickade {c.sent}, hoppade över "
             f"{c.dropped}, kvar {len(self._clients)})"
         )

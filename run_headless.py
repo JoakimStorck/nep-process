@@ -130,6 +130,8 @@ def parse_args() -> argparse.Namespace:
                     help="sänd bildrutor till viewerklienter på denna port (0 = av)")
     ap.add_argument("--serve-host", type=str, default="127.0.0.1",
                     help="adress att binda till; 127.0.0.1 kräver SSH-tunnel utifrån")
+    ap.add_argument("--serve-control", action="store_true",
+                    help="låt anslutna viewers pausa körningen")
     ap.add_argument("--serve-fps", type=float, default=10.0,
                     help="högsta antal bildrutor per sekund att packa")
     ap.add_argument("--snapshot-every", type=int, default=0,
@@ -364,7 +366,12 @@ def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
         from viewer_server import ViewerServer
         from viewframe import frame_from_pop as _frame_from_pop
 
-        server = ViewerServer(host=str(a.serve_host), port=int(a.serve), fps=float(a.serve_fps))
+        server = ViewerServer(
+            host=str(a.serve_host),
+            port=int(a.serve),
+            fps=float(a.serve_fps),
+            control=bool(a.serve_control),
+        )
 
     snapshot_every = max(0, int(a.snapshot_every))
     _snap = {"viewer": None, "pygame": None}
@@ -431,6 +438,12 @@ def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
     tick = 0
 
     for tick in range(1, int(a.ticks) + 1):
+        if server is not None:
+            # Före steget, aldrig mitt i en tick. Den pausade tiden räknas
+            # bort ur den förflutna, annars blir varje ms/tick-siffra från
+            # en pausad session tyst felaktig.
+            server.wait_while_paused()
+
         try:
             pop.step()
         except Exception as exc:  # noqa: BLE001 — vi vill se vilket tick som small
@@ -450,10 +463,10 @@ def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
                 if a.fail_fast:
                     return 1
 
-        if server is not None:
-            # Kostar ett tomhetstest utan anslutna klienter, och packar bara
-            # när väggklockan säger att det är dags. Simuleringen väntar
-            # aldrig på nätet.
+        # Fråga innan bildrutan byggs. Argumentet beräknas före anropet, så
+        # ett publish() som ändå kastar bildrutan skulle kosta ett par
+        # millisekunder per tick även när ingen tittar.
+        if server is not None and server.wants_frame():
             server.publish(
                 _frame_from_pop(
                     pop,
@@ -466,7 +479,7 @@ def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
             write_snapshot(tick)
 
         if report_every and tick % report_every == 0 and not a.quiet:
-            el = time.perf_counter() - t0
+            el = time.perf_counter() - t0 - (server.paused_seconds if server else 0.0)
             if a.stats:
                 nb = nutrient_balance(pop)
                 worst_drift = max(
@@ -476,7 +489,7 @@ def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
             else:
                 print(format_diagnostics(diagnostics(pop), tick, el), flush=True)
 
-    elapsed = time.perf_counter() - t0
+    elapsed = time.perf_counter() - t0 - (server.paused_seconds if server else 0.0)
 
     report = check_all(pop, tick=tick)
     if not report.ok:

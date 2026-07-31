@@ -35,7 +35,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import numpy as np
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 
 # Traitaxlarna floran kan färgkodas på. Ordningen är bindande: den är
 # kolumnordningen i `claim_trait` och den ordning tangenten T stegar i.
@@ -71,6 +71,15 @@ class ViewFrame:
     t: float = 0.0
     births_total: int = 0
     deaths_total: int = 0
+
+    # --- körningens läge ---
+    #
+    # Bildrutan bär det, inte en sidokanal, så att en klient som ansluter
+    # mitt i en paus ser rätt tillstånd på sin allra första bild. Servern
+    # stämplar fälten vid packning.
+    paused: bool = False
+    paused_by: str = ""
+    control_enabled: bool = False
 
     # --- cellindexerade fält, längd n_cells ---
     # Normerade till [0, 1] här, inte i viewern: skalorna B_K och C_K är

@@ -93,6 +93,12 @@ class WorldViewer:
         pygame.font.init()
         pygame.display.set_caption(cfg.title)
 
+        # Sätts av en fjärrklient. Är den satt går mellanslag till servern
+        # i stället för att pausa den lokala renderingen: i fjärrläget finns
+        # ingen lokal simulering att pausa, och en tangent som ser ut att
+        # göra något men inte gör det är värre än ingen tangent.
+        self.on_command = None
+
         self._screen = None
         self._clock = pygame.time.Clock()
         self._font = pygame.font.SysFont("Menlo", 14)
@@ -107,7 +113,10 @@ class WorldViewer:
                 if ev.key == pygame.K_ESCAPE or ev.key == pygame.K_q:
                     return False
                 if ev.key == pygame.K_SPACE:
-                    self._paused = not self._paused
+                    if self.on_command is not None:
+                        self.on_command("toggle_pause")
+                    else:
+                        self._paused = not self._paused
 
                 if ev.key == pygame.K_1:
                     self.cfg.mode = "CB"
@@ -447,7 +456,7 @@ class WorldViewer:
         lines = [
             f"t={frame.t:8.2f}  pop={frame.fauna_n:4d}  born={frame.births_total:6d}  "
             f"dead={frame.deaths_total:6d}  mode={self.cfg.mode.upper()}  "
-            f"gamma={self.cfg.gamma:.2f}  {'PAUSED' if self._paused else ''}"
+            f"gamma={self.cfg.gamma:.2f}  {self._pause_text(frame)}"
         ]
         if math.isfinite(tmean):
             l2 = f"T(mean/min/max)={tmean:5.1f}/{tmin:5.1f}/{tmax:5.1f}"
@@ -464,6 +473,7 @@ class WorldViewer:
         lines.append(
             f"grön=frisk→röd=döende  ljus=energi  gul ring=parningsredo  "
             f"[yta {self.cfg.flora_fill} F]  [trait {self.cfg.flora_color_by} T]"
+            + ("  [paus mellanslag]" if getattr(frame, "control_enabled", False) else "")
         )
 
         ft = frame.flora_summary
@@ -480,6 +490,19 @@ class WorldViewer:
             y = 5 + i * 18
             self._screen.blit(self._font.render(text, True, (0, 0, 0)), (6, y + 1))
             self._screen.blit(self._font.render(text, True, (255, 255, 255)), (5, y))
+
+    def _pause_text(self, frame) -> str:
+        """
+        Vad HUD:en säger om körningens läge.
+
+        Två pauser kan råda. Den lokala stoppar bara renderingsloopen i
+        run_population; den fjärrstyrda stoppar simuleringen och gäller alla
+        anslutna tittare. De ska inte se likadana ut i HUD:en.
+        """
+        if getattr(frame, "paused", False):
+            who = getattr(frame, "paused_by", "")
+            return f"PAUSAD{' av ' + who if who else ''}"
+        return "PAUSAD (lokalt)" if self._paused else ""
 
     def update(self, frame, grid=None) -> bool:
         """
