@@ -52,7 +52,7 @@ På maskinen som tittar:
 
 ```bash
 pip install -r requirements-viewer.txt
-python viewer_client.py --host arbetsstationen --scale 6
+python viewer_client.py --host arbetsstationen
 ```
 
 Servern binder till `127.0.0.1` som förval. Det är en säkerhetsposition, inte
@@ -70,8 +70,14 @@ nätet se världen.
 
 Klienten kan startas före simuleringen. Den öppnar sitt fönster direkt,
 väntar, och ansluter av sig själv när servern dyker upp — och återansluter om
-servern startas om. Läge, färgaxel, ytfördelning och gamma är lokala val och
-kostar ingen rundtur.
+servern startas om. Läge, färgaxel, ytfördelning, gamma och zoom är lokala val
+och kostar ingen rundtur.
+
+Fönstret får världens form vid första bildrutan, nedskalad så att den ryms på
+skärmen. En värld på 64×256 celler är nästan fyra gånger högre än den är bred,
+och `--screen-frac` styr hur stor del av skärmen den får ta. `--window 400x900`
+sätter måtten explicit i stället. Fönstret går att ändra storlek på under
+körning.
 
 Kör samma commit i båda ändar. Klient och server jämför protokollversion vid
 anslutning och säger ifrån om de skiljer sig.
@@ -84,6 +90,9 @@ anslutning och säger ifrån om de skiljer sig.
 | `F` | ytfördelning: vinkelkilar eller stippling |
 | `T` | florans färgaxel |
 | `A` / `H` | djur av och på, HUD av och på |
+| hjul, `.` / `,` | zooma in och ut |
+| dra, piltangenter | panorera |
+| `0` | visa hela världen igen |
 | `+` / `-` | gamma |
 | mellanslag | paus (kräver `--serve-control` vid fjärrkörning) |
 | `Q` / `Esc` | avsluta |

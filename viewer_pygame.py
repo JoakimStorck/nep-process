@@ -99,6 +99,15 @@ class WorldViewer:
         # göra något men inte gör det är värre än ingen tangent.
         self.on_command = None
 
+        # Utsnitt. Av som förval: fönstret är då hela världen gånger `scale`,
+        # vilket ögonblicksbilderna förlitar sig på.
+        self._viewport = False
+        self._win_size = (0, 0)
+        self._ppu_view = None
+        self._view_cx = 0.0
+        self._view_cy = 0.0
+        self._drag = None
+
         self._screen = None
         self._clock = pygame.time.Clock()
         self._font = pygame.font.SysFont("Menlo", 14)
@@ -106,12 +115,45 @@ class WorldViewer:
     # ---------- input ----------
     def _handle_events(self) -> bool:
         pygame = self.pg
+        grid = getattr(self, "_grid", None)
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT:
                 return False
+
+            if ev.type == pygame.VIDEORESIZE and self._viewport:
+                self._win_size = (max(160, ev.w), max(120, ev.h))
+                self._screen = pygame.display.set_mode(self._win_size, pygame.RESIZABLE)
+                self._screen_size = self._win_size
+
+            if self._viewport and grid is not None:
+                if ev.type == pygame.MOUSEWHEEL:
+                    mx, my = pygame.mouse.get_pos()
+                    self.zoom_at(mx, my, 1.15 ** ev.y, grid)
+                elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
+                    self._drag = ev.pos
+                elif ev.type == pygame.MOUSEBUTTONUP and ev.button == 1:
+                    self._drag = None
+                elif ev.type == pygame.MOUSEMOTION and self._drag is not None:
+                    self.pan_px(ev.rel[0], ev.rel[1], grid)
             if ev.type == pygame.KEYDOWN:
                 if ev.key == pygame.K_ESCAPE or ev.key == pygame.K_q:
                     return False
+                if self._viewport and grid is not None:
+                    step = max(8, int(0.1 * self._win_size[1]))
+                    if ev.key == pygame.K_LEFT:
+                        self.pan_px(step, 0, grid)
+                    if ev.key == pygame.K_RIGHT:
+                        self.pan_px(-step, 0, grid)
+                    if ev.key == pygame.K_UP:
+                        self.pan_px(0, step, grid)
+                    if ev.key == pygame.K_DOWN:
+                        self.pan_px(0, -step, grid)
+                    if ev.key == pygame.K_0:
+                        self.fit_to_world(grid)
+                    if ev.key in (pygame.K_PERIOD, pygame.K_COMMA):
+                        c = (self._win_size[0] // 2, self._win_size[1] // 2)
+                        self.zoom_at(c[0], c[1], 1.3 if ev.key == pygame.K_PERIOD else 1 / 1.3, grid)
+
                 if ev.key == pygame.K_SPACE:
                     if self.on_command is not None:
                         self.on_command("toggle_pause")
@@ -160,6 +202,67 @@ class WorldViewer:
             self._clock.tick(cap)
 
     # ---------- rendering ----------
+    # ---------- utsnitt ----------
+    def fit_to_world(self, grid) -> None:
+        """Ställ utsnittet så att hela världen ryms i fönstret."""
+        ww, wh = self._win_size
+        self._ppu_view = min(ww / float(grid.extent_x), wh / float(grid.extent_y))
+        self._view_cx = 0.5 * float(grid.extent_x)
+        self._view_cy = 0.5 * float(grid.extent_y)
+
+    def enable_viewport(self, win_w: int, win_h: int) -> None:
+        """
+        Frikoppla fönstret från världen.
+
+        Utan detta är fönstret alltid världen gånger `scale`, vilket är rätt
+        för ögonblicksbilder — de ska vara jämförbara mellan körningar — men
+        oanvändbart interaktivt: en 64x256-värld blir högre än skärmen långt
+        innan cellerna blir läsbara.
+        """
+        self._viewport = True
+        self._win_size = (int(win_w), int(win_h))
+        self._ppu_view = None      # sätts av fit_to_world vid första bildrutan
+
+    def zoom_at(self, px: int, py: int, factor: float, grid) -> None:
+        """
+        Zooma kring en punkt i fönstret.
+
+        Punkten under pekaren ska ligga still. Utan det glider bilden undan
+        medan man zoomar och man tappar det man siktade på.
+        """
+        if not self._viewport or self._ppu_view is None:
+            return
+        ww, wh = self._win_size
+        wx, wy = self._px_to_world(px, py)
+        lo = 0.25 * min(ww / float(grid.extent_x), wh / float(grid.extent_y))
+        self._ppu_view = float(np.clip(self._ppu_view * factor, lo, 400.0))
+        wx2, wy2 = self._px_to_world(px, py)
+        self._view_cx += wx - wx2
+        self._view_cy += wy - wy2
+        self._wrap_view(grid)
+
+    def pan_px(self, dx: int, dy: int, grid) -> None:
+        if not self._viewport or self._ppu_view is None:
+            return
+        self._view_cx -= dx / self._ppu_view
+        self._view_cy -= dy / self._ppu_view
+        self._wrap_view(grid)
+
+    def _wrap_view(self, grid) -> None:
+        # Världen är toroidal, så utsnittet får wrappa fritt. cell_of_many
+        # hanterar redan randen, men centrum hålls i intervallet för att
+        # flyttalen inte ska vandra iväg under lång panorering.
+        self._view_cx %= float(grid.extent_x)
+        self._view_cy %= float(grid.extent_y)
+
+    def _px_to_world(self, px: int, py: int) -> tuple[float, float]:
+        ww, wh = self._win_size
+        return (
+            self._view_cx + (px - 0.5 * ww) / self._ppu_view,
+            self._view_cy + (py - 0.5 * wh) / self._ppu_view,
+        )
+
+    # ---------- rendering ----------
     def _ensure_projection(self, grid) -> None:
         """
         Bygg avbildningen mellan värld, pixlar och celler.
@@ -167,19 +270,36 @@ class WorldViewer:
         Varje pixel slås upp mot den cell den faller i via grid.cell_of_many().
         Det gör renderingen geometriagnostisk: hexceller ritas korrekt utan att
         viewern känner till hexagoner, och en framtida geometri fungerar utan
-        ändring här. Uppslaget beräknas en gång och är sedan en gather per bild.
+        ändring här. Uppslaget beräknas en gång per utsnitt och är sedan en
+        gather per bild.
+
+        Två lägen delar samma kod. Utan utsnitt är fönstret hela världen gånger
+        `scale` — det är ögonblicksbildernas läge och ger bit för bit samma
+        resultat som förut. Med utsnitt bestämmer fönstret storleken och
+        `_ppu_view` hur mycket av världen som ryms.
         """
-        key = (int(grid.n_cells), int(grid.width), int(grid.height), int(self.cfg.scale))
+        if self._viewport:
+            if self._ppu_view is None:
+                self.fit_to_world(grid)
+            w_px, h_px = self._win_size
+            ppu = float(self._ppu_view)
+            x0 = self._view_cx - 0.5 * w_px / ppu
+            y0 = self._view_cy - 0.5 * h_px / ppu
+            key = (int(grid.n_cells), int(grid.width), int(grid.height),
+                   w_px, h_px, round(ppu, 6), round(x0, 6), round(y0, 6))
+        else:
+            cell_w = float(grid.extent_x) / float(grid.width)
+            ppu = float(self.cfg.scale) / cell_w
+            w_px = max(1, int(round(float(grid.extent_x) * ppu)))
+            h_px = max(1, int(round(float(grid.extent_y) * ppu)))
+            x0 = y0 = 0.0
+            key = (int(grid.n_cells), int(grid.width), int(grid.height), int(self.cfg.scale))
+
         if getattr(self, "_proj_key", None) == key:
             return
 
-        cell_w = float(grid.extent_x) / float(grid.width)
-        ppu = float(self.cfg.scale) / cell_w          # pixlar per världsenhet
-        w_px = max(1, int(round(float(grid.extent_x) * ppu)))
-        h_px = max(1, int(round(float(grid.extent_y) * ppu)))
-
-        xs = (np.arange(w_px, dtype=np.float64) + 0.5) / ppu
-        ys = (np.arange(h_px, dtype=np.float64) + 0.5) / ppu
+        xs = x0 + (np.arange(w_px, dtype=np.float64) + 0.5) / ppu
+        ys = y0 + (np.arange(h_px, dtype=np.float64) + 0.5) / ppu
         XX, YY = np.meshgrid(xs, ys)
         self._pixel_cell = np.asarray(
             grid.cell_of_many(XX.ravel(), YY.ravel()), dtype=np.int64
@@ -191,28 +311,53 @@ class WorldViewer:
         self._proj_key = key
 
         # Ytfördelningen inom cellen avgörs av ett tal u i [0, 1) per pixel.
-        # Båda lägena är statiska för en given projektion och beräknas därför
-        # en gång: per bildruta återstår ett searchsorted och en gather.
-        cx = np.asarray(grid.cell_center_x, dtype=np.float64)[self._pixel_cell]
-        cy = np.asarray(grid.cell_center_y, dtype=np.float64)[self._pixel_cell]
-        ex, ey = float(grid.extent_x), float(grid.extent_y)
-        # Cellen kan ligga på andra sidan världsranden än pixeln, eftersom
-        # cell_of_many wrappar. Deltat måste därför tas kortaste vägen.
-        dx = (XX - cx + 0.5 * ex) % ex - 0.5 * ex
-        dy = (YY - cy + 0.5 * ey) % ey - 0.5 * ey
-        self._u_wedge = (np.arctan2(dy, dx) / (2.0 * math.pi)) % 1.0
+        # Fälten byggs inte här utan vid första användningen: tillsammans
+        # kostar de 21 ms av projektionens 56 vid ett fönster på 360x1000,
+        # och i alla lägen utom FLORA används inget av dem alls. Under en
+        # dragning byggs projektionen om varje bildruta, så det är skillnaden
+        # mellan att kunna panorera och att inte kunna det.
+        self._u_cache = {}
+        self._proj_x0 = x0
+        self._proj_y0 = y0
 
-        # Stipplingen behöver ett stabilt men rumsligt okorrelerat värde per
-        # pixel. En heltalshash ger samma bild varje bildruta — brus som
-        # flimrar mellan rutorna är oläsbart.
-        iy, ix = np.meshgrid(
-            np.arange(h_px, dtype=np.uint64), np.arange(w_px, dtype=np.uint64), indexing="ij"
-        )
-        hsh = (ix * np.uint64(73856093)) ^ (iy * np.uint64(19349663))
-        hsh = (hsh ^ (hsh >> np.uint64(13))) * np.uint64(1274126177)
-        self._u_stipple = ((hsh >> np.uint64(11)) & np.uint64(0xFFFFF)).astype(np.float64) / float(1 << 20)
+    def _pixel_world(self) -> tuple[np.ndarray, np.ndarray]:
+        xs = self._proj_x0 + (np.arange(self._w_px, dtype=np.float64) + 0.5) / self._ppu
+        ys = self._proj_y0 + (np.arange(self._h_px, dtype=np.float64) + 0.5) / self._ppu
+        return np.meshgrid(xs, ys)
 
-        self._probe_cache = {}
+    def _u_field(self, kind: str, grid) -> np.ndarray:
+        """Pixelns plats i cellens andelsordning. Byggs en gång per projektion."""
+        cached = self._u_cache.get(kind)
+        if cached is not None:
+            return cached
+
+        if kind == "wedge":
+            XX, YY = self._pixel_world()
+            cx = np.asarray(grid.cell_center_x, dtype=np.float64)[self._pixel_cell]
+            cy = np.asarray(grid.cell_center_y, dtype=np.float64)[self._pixel_cell]
+            ex, ey = float(grid.extent_x), float(grid.extent_y)
+            # Cellen kan ligga på andra sidan världsranden än pixeln, eftersom
+            # cell_of_many wrappar. Deltat måste tas kortaste vägen.
+            dx = (XX - cx + 0.5 * ex) % ex - 0.5 * ex
+            dy = (YY - cy + 0.5 * ey) % ey - 0.5 * ey
+            u = (np.arctan2(dy, dx) / (2.0 * math.pi)) % 1.0
+        else:
+            # Hashen tar pixelns läge i världen och inte i fönstret, så att
+            # mönstret sitter fast i marken under panorering — ett brus som
+            # glider med kameran läses som rörelse i beståndet.
+            iy, ix = np.meshgrid(
+                np.arange(self._h_px, dtype=np.int64),
+                np.arange(self._w_px, dtype=np.int64),
+                indexing="ij",
+            )
+            ix = (ix + int(round(self._proj_x0 * self._ppu))).astype(np.uint64)
+            iy = (iy + int(round(self._proj_y0 * self._ppu))).astype(np.uint64)
+            h = (ix * np.uint64(73856093)) ^ (iy * np.uint64(19349663))
+            h = (h ^ (h >> np.uint64(13))) * np.uint64(1274126177)
+            u = ((h >> np.uint64(11)) & np.uint64(0xFFFFF)).astype(np.float64) / float(1 << 20)
+
+        self._u_cache[kind] = u
+        return u
 
     def _ensure_screen(self) -> None:
         """
@@ -225,7 +370,8 @@ class WorldViewer:
         want = (int(self._w_px), int(self._h_px))
         if self._screen is not None and getattr(self, "_screen_size", None) == want:
             return
-        self._screen = self.pg.display.set_mode(want)
+        flags = self.pg.RESIZABLE if self._viewport else 0
+        self._screen = self.pg.display.set_mode(want, flags)
         self._screen_size = want
 
     def _gamma(self, x01: np.ndarray) -> np.ndarray:
@@ -351,8 +497,8 @@ class WorldViewer:
             keys[~is_sent] = cell_of_row + np.minimum(cum, 1.0)
             row_at[~is_sent] = np.arange(n_rows, dtype=np.int64)
 
-        u = self._u_stipple if self.cfg.flora_fill == "stipple" else self._u_wedge
-        probe = self._pixel_cell.astype(np.float64) + u
+        kind = "stipple" if self.cfg.flora_fill == "stipple" else "wedge"
+        probe = self._pixel_cell.astype(np.float64) + self._u_field(kind, self._grid)
         sel = np.searchsorted(keys, probe, side="left")
         np.clip(sel, 0, keys.shape[0] - 1, out=sel)
         row = row_at[sel]
@@ -474,6 +620,8 @@ class WorldViewer:
             f"grön=frisk→röd=döende  ljus=energi  gul ring=parningsredo  "
             f"[yta {self.cfg.flora_fill} F]  [trait {self.cfg.flora_color_by} T]"
             + ("  [paus mellanslag]" if getattr(frame, "control_enabled", False) else "")
+            + (f"  [{self._ppu / max(1e-9, self._cell_w(frame)):.1f} px/cell  0 = hela världen]"
+               if self._viewport else "")
         )
 
         ft = frame.flora_summary
@@ -490,6 +638,10 @@ class WorldViewer:
             y = 5 + i * 18
             self._screen.blit(self._font.render(text, True, (0, 0, 0)), (6, y + 1))
             self._screen.blit(self._font.render(text, True, (255, 255, 255)), (5, y))
+
+    def _cell_w(self, frame) -> float:
+        g = getattr(self, "_grid", None)
+        return float(g.extent_x) / float(g.width) if g is not None else 1.0
 
     def _pause_text(self, frame) -> str:
         """
@@ -523,6 +675,7 @@ class WorldViewer:
 
         if grid is None:
             grid = self._grid_for(frame)
+        self._grid = grid
         self._ensure_projection(grid)
         self._ensure_screen()
 

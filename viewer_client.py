@@ -177,6 +177,31 @@ class FrameReceiver:
         return buf.split(b"\n", 1)[0].decode("utf-8")
 
 
+def _window_size(pg, grid, explicit: str, frac: float) -> tuple[int, int]:
+    """
+    Fönstrets mått: världens form, nedskalad så att den ryms på skärmen.
+
+    Förhållandet tas ur `Grid.extent_x/extent_y` och inte ur cellantalet.
+    Hexrader överlappar, så en värld på 64x256 celler är inte 1:4 utan
+    ungefär 1:3,5 — och det är extent som vet det.
+    """
+    if explicit:
+        w, h = explicit.lower().split("x")
+        return max(160, int(w)), max(120, int(h))
+
+    info = pg.display.Info()
+    avail_w = max(320, int(info.current_w * frac))
+    avail_h = max(240, int(info.current_h * frac))
+    ratio = float(grid.extent_x) / float(grid.extent_y)
+
+    h = avail_h
+    w = int(round(h * ratio))
+    if w > avail_w:
+        w = avail_w
+        h = int(round(w / ratio))
+    return max(160, w), max(120, h)
+
+
 def _draw_waiting(pg, screen, font, lines: list[str]) -> None:
     screen.fill((14, 18, 22))
     for i, text in enumerate(lines):
@@ -189,7 +214,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="PyGame-viewer mot en fjärrsimulering.")
     ap.add_argument("--host", default="127.0.0.1", help="serverns adress (förval: localhost)")
     ap.add_argument("--port", type=int, default=8765)
-    ap.add_argument("--scale", type=int, default=6, help="pixlar per cell")
+    ap.add_argument("--window", type=str, default="",
+                    help="fönsterstorlek BREDDxHÖJD; utan den formas fönstret "
+                         "efter världen och anpassas till skärmen")
+    ap.add_argument("--screen-frac", type=float, default=0.85,
+                    help="hur stor del av skärmen fönstret får ta vid automatisk form")
     ap.add_argument("--mode", default="FLORA", help="CB | B | C | TEMP | FLORA | CLAIM")
     ap.add_argument("--fill", default="wedge", choices=("wedge", "stipple"))
     ap.add_argument("--color-by", default="temp_opt")
@@ -210,7 +239,6 @@ def main() -> int:
     rx = FrameReceiver(a.host, a.port, retry_s=a.retry)
     viewer = WorldViewer(
         ViewerConfig(
-            scale=int(a.scale),
             mode=str(a.mode),
             flora_fill=str(a.fill),
             flora_color_by=str(a.color_by),
@@ -219,7 +247,6 @@ def main() -> int:
             title=f"NEP viewer — {a.host}:{a.port}",
         )
     )
-    viewer._screen = screen
     viewer.on_command = rx.send_command
 
     clock = pg.time.Clock()
@@ -228,6 +255,21 @@ def main() -> int:
     try:
         while running:
             frame = rx.latest()
+
+            if frame is not None and not viewer._viewport:
+                # Första bildrutan bär världens mått. Fönstret formas efter
+                # dem och anpassas till skärmen: en 64x256-värld är nästan
+                # fyra gånger högre än den är bred, och ett fönster som
+                # ignorerar det blir antingen avskuret eller nästan tomt.
+                from grid import Grid
+
+                g = Grid(width=int(frame.grid_width), height=int(frame.grid_height))
+                win = _window_size(pg, g, a.window, float(a.screen_frac))
+                viewer.enable_viewport(*win)
+                screen = pg.display.set_mode(win, pg.RESIZABLE)
+                viewer._screen = screen
+                viewer._screen_size = win
+
             if frame is None:
                 for ev in pg.event.get():
                     if ev.type == pg.QUIT or (ev.type == pg.KEYDOWN and ev.key in (pg.K_ESCAPE, pg.K_q)):
@@ -241,7 +283,8 @@ def main() -> int:
                         rx.status,
                         "",
                         f"protokoll {PROTOCOL_VERSION}   återförsök var {a.retry:.0f} s",
-                        "Mellanslag pausar körningen om servern startats med --serve-control.",
+                        "Mellanslag pausar om servern startats med --serve-control.",
+                        "Hjul zoomar, dra för att panorera, 0 visar hela världen.",
                         "Q eller Esc avslutar.",
                     ],
                 )
