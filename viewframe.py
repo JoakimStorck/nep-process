@@ -308,3 +308,129 @@ def frame_from_pop(pop, births_total: int = 0, deaths_total: int = 0) -> ViewFra
         flora_mass=flora_mass,
         flora_summary=summary,
     )
+
+
+# ---------------------------------------------------------------------------
+# Trådformat
+# ---------------------------------------------------------------------------
+#
+# En bildruta på nätet är en JSON-header följd av råa buffertar. Ingen ny
+# dependency: klienten ska klara sig på numpy och pygame, och varje extra
+# paket är ett hinder till vid uppsättningen.
+#
+# Formatet är avsiktligt förlustbehäftat för de fält som bara ska ritas.
+# Viewern normerar ändå allt till [0, 1] och landar i en 8-bitars färgkanal,
+# så uint8 över ett känt intervall är visuellt likvärdigt med float32 och
+# fjärdedelar storleken. En bildruta som packas och packas upp är därför
+# inte bitidentisk med originalet — den är identisk på skärmen. Fält som
+# HUD:en visar som tal (T_band, skalärer) skickas orörda.
+
+import json
+import struct
+import zlib
+
+_MAGIC = b"NEPV"
+
+# Fält som kvantiseras till uint8, med det intervall de normeras över.
+_WIRE_U8: dict[str, tuple[float, float]] = {
+    "detritus01": (0.0, 1.0),
+    "flora_shoot01": (0.0, 1.0),
+    "claim_share": (0.0, 1.0),
+    "claim_fill": (0.0, 1.0),
+    "claim_trait": (0.0, 1.0),
+    # Anspråket kan överstiga 1 — det är hela poängen med det. Taket 4 rymmer
+    # den uppmätta spridningen med marginal; över det är cellen ändå mättad.
+    "claimed": (0.0, 4.0),
+    "temperature": TEMP_RANGE,
+}
+
+# Fält som byter till en smalare heltalstyp utan att tappa något.
+_WIRE_CAST: dict[str, str] = {"claim_starts": "int32"}
+
+
+def pack(frame: ViewFrame, compress: bool = True) -> bytes:
+    """Serialisera en bildruta. Returnerar ett komplett ramat meddelande."""
+    from dataclasses import fields as _fields
+
+    scalars: dict[str, object] = {}
+    arrays: list[dict] = []
+    bufs: list[bytes] = []
+
+    for f in _fields(frame):
+        v = getattr(frame, f.name)
+        if isinstance(v, np.ndarray):
+            q = None
+            if f.name in _WIRE_U8:
+                lo, hi = _WIRE_U8[f.name]
+                a = np.clip((v.astype(np.float64) - lo) / max(hi - lo, 1e-12), 0.0, 1.0)
+                # Ett positivt värde får aldrig rundas till noll: nollan
+                # betyder frånvaro i ritkoden, och en groddplanta som
+                # försvinner ur bilden är inte avrundning utan en utplåning.
+                a = np.where(v > 0, np.maximum(1.0, np.rint(a * 255.0)), np.rint(a * 255.0))
+                a = a.astype(np.uint8)
+                q = [float(lo), float(hi)]
+            elif f.name in _WIRE_CAST:
+                a = v.astype(_WIRE_CAST[f.name], copy=False)
+            else:
+                a = np.ascontiguousarray(v)
+            arrays.append({"n": f.name, "d": a.dtype.str, "s": list(a.shape), "q": q})
+            bufs.append(np.ascontiguousarray(a).tobytes())
+        elif isinstance(v, dict):
+            scalars[f.name] = {str(k): float(x) for k, x in v.items()}
+        else:
+            scalars[f.name] = v
+
+    header = json.dumps(
+        {"protocol": PROTOCOL_VERSION, "scalars": scalars, "arrays": arrays},
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+    payload = struct.pack("<I", len(header)) + header + b"".join(bufs)
+    flags = 0
+    if compress:
+        payload = zlib.compress(payload, 1)
+        flags = 1
+    return _MAGIC + struct.pack("<BI", flags, len(payload)) + payload
+
+
+HEADER_SIZE = len(_MAGIC) + 5
+
+
+def payload_size(head: bytes) -> int:
+    """Läs nyttolastens längd ur de första HEADER_SIZE byten."""
+    if len(head) < HEADER_SIZE or head[:4] != _MAGIC:
+        raise ValueError("inte en ViewFrame — fel magiskt tal")
+    _flags, n = struct.unpack("<BI", head[4:HEADER_SIZE])
+    return int(n)
+
+
+def unpack(head: bytes, payload: bytes) -> ViewFrame:
+    """Återskapa en bildruta ur ram och nyttolast."""
+    flags, _n = struct.unpack("<BI", head[4:HEADER_SIZE])
+    if flags & 1:
+        payload = zlib.decompress(payload)
+
+    (hlen,) = struct.unpack("<I", payload[:4])
+    header = json.loads(payload[4 : 4 + hlen].decode("utf-8"))
+
+    got = int(header.get("protocol", -1))
+    if got != PROTOCOL_VERSION:
+        raise ValueError(
+            f"protokollversion {got} från servern, klienten talar "
+            f"{PROTOCOL_VERSION} — kör samma commit i båda ändar"
+        )
+
+    frame = ViewFrame(**header["scalars"])
+    off = 4 + hlen
+    for spec in header["arrays"]:
+        dt = np.dtype(spec["d"])
+        shape = tuple(spec["s"])
+        n = int(np.prod(shape)) if shape else 0
+        raw = np.frombuffer(payload, dtype=dt, count=n, offset=off).reshape(shape)
+        off += n * dt.itemsize
+        q = spec["q"]
+        if q is not None:
+            lo, hi = float(q[0]), float(q[1])
+            raw = (raw.astype(np.float32) / np.float32(255.0)) * np.float32(hi - lo) + np.float32(lo)
+        setattr(frame, spec["n"], np.array(raw, copy=True))
+    return frame

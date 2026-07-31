@@ -206,9 +206,18 @@ class WorldViewer:
         self._probe_cache = {}
 
     def _ensure_screen(self) -> None:
-        if self._screen is not None:
+        """
+        Se till att fönstret har världens mått.
+
+        Storleken följer projektionen och kan därför ändras under körning —
+        klienten öppnar ett litet väntefönster innan den vet något om
+        världen, och får sina mått först med den första bildrutan.
+        """
+        want = (int(self._w_px), int(self._h_px))
+        if self._screen is not None and getattr(self, "_screen_size", None) == want:
             return
-        self._screen = self.pg.display.set_mode((self._w_px, self._h_px))
+        self._screen = self.pg.display.set_mode(want)
+        self._screen_size = want
 
     def _gamma(self, x01: np.ndarray) -> np.ndarray:
         g = float(self.cfg.gamma)

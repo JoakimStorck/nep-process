@@ -1,0 +1,4 @@
+# Allt en viewerklient behöver. Simuleringens requirements.txt drar in
+# numba, scipy, pandas och matplotlib — inget av det rörs av klienten.
+numpy
+pygame

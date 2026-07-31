@@ -126,6 +126,12 @@ def parse_args() -> argparse.Namespace:
                     help="WorldParams.nutrient_loss_frac, andel som lämnar systemet vid nedbrytning")
     ap.add_argument("--uptake-rate", type=float, default=None,
                     help="WorldParams.uptake_rate_per_area, kg näring per månad och areaenhet")
+    ap.add_argument("--serve", type=int, default=0,
+                    help="sänd bildrutor till viewerklienter på denna port (0 = av)")
+    ap.add_argument("--serve-host", type=str, default="127.0.0.1",
+                    help="adress att binda till; 127.0.0.1 kräver SSH-tunnel utifrån")
+    ap.add_argument("--serve-fps", type=float, default=10.0,
+                    help="högsta antal bildrutor per sekund att packa")
     ap.add_argument("--snapshot-every", type=int, default=0,
                     help="skriv en PNG av världen var N:te tick (0 = av)")
     ap.add_argument("--snapshot-dir", type=str, default="snapshots",
@@ -352,6 +358,14 @@ def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
     # rumslig fördelning granskbar över ssh, där ett fönster inte går att
     # öppna. Pygame importeras först när första bildrutan begärs, så en
     # körning utan --snapshot-every rör aldrig biblioteket.
+    # --- bildruteserver ---------------------------------------------------
+    server = None
+    if int(a.serve or 0) > 0:
+        from viewer_server import ViewerServer
+        from viewframe import frame_from_pop as _frame_from_pop
+
+        server = ViewerServer(host=str(a.serve_host), port=int(a.serve), fps=float(a.serve_fps))
+
     snapshot_every = max(0, int(a.snapshot_every))
     _snap = {"viewer": None, "pygame": None}
 
@@ -435,6 +449,18 @@ def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
                 print(report.summary(), file=sys.stderr, flush=True)
                 if a.fail_fast:
                     return 1
+
+        if server is not None:
+            # Kostar ett tomhetstest utan anslutna klienter, och packar bara
+            # när väggklockan säger att det är dags. Simuleringen väntar
+            # aldrig på nätet.
+            server.publish(
+                _frame_from_pop(
+                    pop,
+                    births_total=int(pop._births_total),
+                    deaths_total=int(pop._deaths_total),
+                )
+            )
 
         if snapshot_every and tick % snapshot_every == 0:
             write_snapshot(tick)
