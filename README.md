@@ -4,6 +4,87 @@
 
 ---
 
+## Köra
+
+Simuleringen behöver `requirements.txt`. En viewerklient behöver bara
+`requirements-viewer.txt` — numpy och pygame — eftersom `viewer_pygame.py`,
+`viewframe.py` och `grid.py` inte importerar simuleringen.
+
+**Lokalt, med fönster:**
+
+```bash
+pip install -r requirements.txt
+python run_population.py --size 64 --T 2000
+```
+
+**Huvudlöst, utan fönster.** Det vanliga sättet att köra längre experiment.
+`--check-every` kör invariantsviten och ger exitkod skild från noll om något
+brister; `--snapshot-every` skriver PNG-bilder av världen.
+
+```bash
+mkdir -p runs/exp1
+python run_headless.py --ticks 40000 --seed 1 --stats \
+    --check-every 1000 --snapshot-every 5000 --snapshot-dir runs/exp1
+```
+
+Kör aldrig två samtidiga körningar mot samma katalog — de skriver över
+varandras loggar.
+
+### Viewer på en annan maskin
+
+Simuleringen kan sända bildrutor till en eller flera viewers över nätet.
+Servern packar en gång per bildruta oavsett hur många som tittar, väntar
+aldrig på nätet och packar inte alls om ingen är ansluten. En långsam klient
+hoppar över bildrutor i stället för att bromsa simuleringen.
+
+På maskinen som räknar:
+
+```bash
+python run_headless.py --ticks 100000 --seed 1 --serve 8765
+```
+
+På maskinen som tittar:
+
+```bash
+pip install -r requirements-viewer.txt
+python viewer_client.py --host arbetsstationen --scale 6
+```
+
+Servern binder till `127.0.0.1` som förval. Det är en säkerhetsposition, inte
+en begränsning: nå den utifrån genom en SSH-tunnel, så sköter SSH
+autentisering och kryptering och simuleringen behöver varken lösenord eller
+certifikat.
+
+```bash
+ssh -N -L 8765:localhost:8765 arbetsstationen   # i ett eget skal
+python viewer_client.py                         # förvalet är localhost
+```
+
+`--serve-host 0.0.0.0` binder brett i stället, men då kan vem som helst på
+nätet se världen.
+
+Klienten kan startas före simuleringen. Den öppnar sitt fönster direkt,
+väntar, och ansluter av sig själv när servern dyker upp — och återansluter om
+servern startas om. Läge, färgaxel, ytfördelning och gamma är lokala val och
+kostar ingen rundtur.
+
+Kör samma commit i båda ändar. Klient och server jämför protokollversion vid
+anslutning och säger ifrån om de skiljer sig.
+
+**Tangenter i viewern**
+
+| Tangent | Verkan |
+|---|---|
+| `1`–`6` | läge: CB, B, C, FLORA, TEMP, CLAIM |
+| `F` | ytfördelning: vinkelkilar eller stippling |
+| `T` | florans färgaxel |
+| `A` / `H` | djur av och på, HUD av och på |
+| `+` / `-` | gamma |
+| mellanslag | paus (endast lokalt fönster) |
+| `Q` / `Esc` | avsluta |
+
+---
+
 ## Vision
 
 Det här projektet simulerar liv som process — emergent, evolverbar och ekologiskt sammankopplad.
