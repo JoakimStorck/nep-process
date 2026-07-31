@@ -1351,12 +1351,15 @@ class Population:
         # tid. Tillgänglig massa inom räckhåll räknas först; efterfrågan kapas
         # sedan av vad söktid och hanteringstid medger under en tick. Se
         # AgentParams.graze_handle_h för härledningen av talen.
+        # Endast skottet är ätbart. Roten ligger under betningshorisonten, så
+        # den funktionella responsen ska se den verkliga resursen och inte hela
+        # kroppen.
         B = 0.0
         for cell in ordered_cells:
             for slot in self.store.slots_in_cell(cell):
                 s = int(slot)
                 if bool(self.store.alive[s]) and int(self.store.kind[s]) == 1:
-                    B += float(self.store.mass[s])
+                    B += max(0.0, float(self.store.mass[s]) - float(self.store.flora_root_mass[s]))
         if B > 0.0:
             AP = self.AP
             a_s = float(AP.graze_search_a)
@@ -1380,18 +1383,33 @@ class Population:
                 if m <= 1e-12:
                     continue
     
-                take = m if m < amt else amt
+                # Betningshorisonten. Betaren tar skott och lämnar roten, precis
+                # som en verklig betare tar blad och lämnar meristem. Plantan
+                # överlever varje passage och skjuter igen ur sin reserv.
+                #
+                # Skälet är mätt. Betaren tömmer inte ett grannskap — den lämnar
+                # det två till sex gånger snabbare än den hinner: 18 tick att
+                # passera mot 44 att beta ner ett mediangrannskap. Men den tar
+                # `min(m, amt)` per *planta*, och medianplantan väger 0,197 kg
+                # mot en tugga på 0,907. Varje tugga svepte därför upp flera
+                # hela småplantor, och i p70 föll floran från 37 324 till 5 396
+                # individer under en betningstopp — antalet i takt med massan,
+                # vilket bara sker om hela växter försvinner.
+                #
+                # Refugen som saknades var alltså inte att lämna plantor i
+                # cellen, utan att lämna en del av varje planta. Det ger
+                # tröskeleffekten typ II saknar, ur en fysisk begränsning i
+                # stället för en postulerad kurva — och det ger `root_alloc` en
+                # ny konsekvens: rot är betesskydd, och den som satsat på skott
+                # betalar för det när trycket kommer.
+                edible = m - float(self.store.flora_root_mass[s])
+                if edible <= 1e-12:
+                    continue
+    
+                take = edible if edible < amt else amt
                 new_m = m - take
     
                 self.store.mass[s] = np.float32(new_m)
-                # Betaren tar skott, inte rot. Utan klämningen behåller en
-                # betad planta hela sin rotmassa medan totalmassan sjunker, och
-                # efter upprepad betning överstiger roten kroppen — skottet blir
-                # noll, bladarean noll, och plantan kan aldrig växa igen.
-                # Uppmätt före rättningen: 7,4 procent av beståndet i det läget
-                # vid tick 1 800, med rotandelar upp till 244.
-                if float(self.store.flora_root_mass[s]) > new_m:
-                    self.store.flora_root_mass[s] = np.float32(max(0.0, new_m))
                 e_kg = self._slot_energy_per_kg(s)
                 self.store.energy[s] = np.float32(max(0.0, new_m * e_kg))
                 got += take
@@ -1399,10 +1417,9 @@ class Population:
                 amt -= take
     
                 if new_m <= 1e-12:
-                    # Gå via _release_flora_slot: reserven och poolen är näring
-                    # som annars försvinner ur balansen när betaren tömmer en
-                    # planta. Betaren äter vävnad, inte lagrad näring — den
-                    # senare hamnar i marken.
+                    # Nås numera bara av plantor utan rotmassa alls. Betning kan
+                    # inte längre döda en planta med rot; svältdöden i
+                    # tillväxtpasset tar den som betats under sitt golv.
                     self._release_flora_slot(s)
     
             if amt <= 1e-12:

@@ -342,6 +342,34 @@ Tre saker återstår att döma, och de kräver längre körningar än sandlådan
 
 **Bördighetstestet** är nu körbart och är den viktigaste enskilda mätningen i planen: `--nutrient-init 0.64` mot standardens 0,32 ska ge omkring dubbel stående biomassa medan dynamikens *form* är oförändrad. Håller det är taket ekologiskt; håller det inte sitter det någon annanstans.
 
+## Steg 5c — Betningshorisonten
+
+*Betaren tar skott och lämnar rot. Ingen ny parameter, inget nytt locus — bara en åtskillnad modellen redan hade.*
+
+- ~~`take = min(m − rot, amt)` i stället för `min(m, amt)`.~~ **Klart.** Den funktionella responsen räknar också bara skottmassa som tillgänglig resurs.
+
+**Mätningen som ledde hit.** Betaren tömmer inte ett grannskap — den lämnar det två till sex gånger snabbare än den hinner: 18 tick att passera mot 44 att beta ner ett mediangrannskap på 20,8 kg. Men den tar `min(m, amt)` per *planta*, och medianplantan väger 0,197 kg mot en tugga på 0,907. Varje tugga svepte därför upp flera hela småplantor.
+
+Det syns i p70: floran föll från 37 324 till 5 396 individer under betningstoppen, alltså antalet i takt med massan. Det sker bara om hela växter försvinner.
+
+Refugen som saknades var alltså inte att lämna plantor i cellen — det gjorde betaren redan — utan att **lämna en del av varje planta**.
+
+**Utfall, 14 000 tick:**
+
+```
+tick    fauna   flora antal   flora kg
+ 2000      22        27 671     42 178
+ 4000      41        29 437     37 050
+ 6000      28        21 598     24 877
+ 8000       8        22 254     28 101
+10000      13        52 819     71 061
+12000      19        74 567    100 820
+```
+
+Faunan toppar på 41 mot p70:s 58 och 100, bottnar på 8 och **återhämtar sig**. Och floran tappar 27 procent av individerna mot p70:s 86 vid andra toppen — antalet håller sig medan massan svänger, vilket var hela avsikten: plantor betas ner men dör inte.
+
+`root_alloc` får dessutom en ny konsekvens. Rot är betesskydd, så den som satsat på skott betalar när trycket kommer. Axeln var redan tvåsidig; nu är den det på tre sätt.
+
 ## Steg 5b — Betningens funktionella respons
 
 *Härledd ur att betandet tar tid, inte påsatt som kurva.*
