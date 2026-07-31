@@ -6,6 +6,8 @@ from typing import Tuple
 
 import numpy as np
 
+from viewframe import FLORA_TRAITS, TEMP_RANGE
+
 
 # ---------- Utilities ----------
 def _clip01(x: np.ndarray) -> np.ndarray:
@@ -17,34 +19,7 @@ def _as_u8_rgb(img01: np.ndarray) -> np.ndarray:
     return (255.0 * _clip01(img01)).astype(np.uint8, copy=False)
 
 
-def _try_get_body(agent):
-    return getattr(agent, "body", agent)
 
-
-def _get_xy_heading(agent) -> Tuple[float, float, float]:
-    b = _try_get_body(agent)
-
-    x = getattr(b, "x", getattr(agent, "x", 0.0))
-    y = getattr(b, "y", getattr(agent, "y", 0.0))
-
-    heading = (
-        getattr(b, "heading", None)
-        or getattr(b, "theta", None)
-        or getattr(b, "h", None)
-        or getattr(agent, "heading", 0.0)
-    )
-    try:
-        heading = float(heading)
-    except Exception:
-        heading = 0.0
-
-    return float(x), float(y), heading
-
-
-def _is_alive(agent) -> bool:
-    b = _try_get_body(agent)
-    alive = getattr(b, "alive", getattr(agent, "alive", True))
-    return bool(alive)
 
 
 def _hsv_to_rgb(h: float, s: float, v: float) -> Tuple[int, int, int]:
@@ -65,71 +40,7 @@ def _hsv_to_rgb(h: float, s: float, v: float) -> Tuple[int, int, int]:
     return int(r * 255), int(g * 255), int(b * 255)
 
 
-def _agent_visuals(agent) -> Tuple[Tuple[int, int, int], int]:
-    """
-    Returnerar (rgb_color, radius_px) baserat på agentens fysiologi:
-      - Färg (hue): skada D  → grön (frisk/ung) till röd (döende)
-      - Ljusstyrka (value):  energireserv → mörk (svält) till ljus (välmådd)
-      - Storlek (radius):    massa M → liten (nyfödd) till stor (vuxen)
-    """
-    body = getattr(agent, "body", None)
-    if body is None:
-        return (200, 200, 200), 3
 
-    D = float(getattr(body, "D", 0.0))
-    D_max = float(getattr(getattr(agent, "AP", None), "D_max", 1.0) or 1.0)
-    d_norm = max(0.0, min(1.0, D / max(D_max, 1e-9)))
-    hue = 0.33 * (1.0 - d_norm)
-
-    try:
-        Et = float(body.E_total())
-        Ecap = float(body.E_cap())
-        e_frac = max(0.0, min(1.0, Et / max(Ecap, 1e-9)))
-    except Exception:
-        e_frac = 0.5
-    value = 0.35 + 0.65 * e_frac
-
-    saturation = 0.85
-    rgb = _hsv_to_rgb(hue, saturation, value)
-
-    M = float(getattr(body, "M", 0.2))
-    M0 = float(getattr(getattr(agent, "AP", None), "M0", 1.0) or 1.0)
-    m_n = max(0.0, min(1.0, M / max(M0, 1e-9)))
-    radius = max(2, min(8, int(2 + 6 * m_n)))
-
-    return rgb, radius
-
-
-def _iter_live_flora_slots(pop):
-    store = getattr(pop, "store", None)
-    if store is None:
-        return
-    n = int(getattr(store, "n", 0))
-    for slot in range(n):
-        if not bool(store.alive[slot]):
-            continue
-        if int(store.kind[slot]) != 1:
-            continue
-        yield slot
-
-def _flora_mass_field(pop) -> np.ndarray:
-    """Floramassa per cell, platt array med längd n_cells."""
-    grid = getattr(pop, "grid", None)
-    store = getattr(pop, "store", None)
-    if grid is None or store is None:
-        return np.zeros(1, dtype=np.float32)
-
-    n_cells = int(grid.n_cells)
-    cached = getattr(store, "flora_cell_mass", None)
-    if cached is not None and int(np.shape(cached)[0]) == n_cells:
-        return np.asarray(cached, dtype=np.float32)
-
-    B = np.zeros(n_cells, dtype=np.float32)
-    for slot in _iter_live_flora_slots(pop):
-        cell = int(store.cell_idx[slot])
-        if 0 <= cell < n_cells:
-            B[cell] += float(store.mass[slot])
-    return B
 
 
 @dataclass
@@ -151,13 +62,19 @@ class ViewerConfig:
     #   CB    : RGB=(C,B,0)
     #   B/C   : grayscale single field
     #   TEMP  : grayscale temperature
-    #   FLORA : diskret flora-overlay ovanpå neutral bakgrund
+    #   FLORA : ytfördelningen ovanpå neutral bakgrund
+    #   CLAIM : anspråket per cell, bar mark mot översökt mark
     mode: str = "FLORA"
     gamma: float = 1.0
 
     # Hur flora färgkodas i FLORA-läget:
     #   temp_opt | dispersal | adult_mass | growth
     flora_color_by: str = "temp_opt"
+
+    # Hur cellens yta fördelas mellan plantorna:
+    #   wedge   : vinkelkilar kring cellcentrum, rena kanter
+    #   stipple : stabil per-pixel-hash, exakt proportionella areor
+    flora_fill: str = "wedge"
 
 
 class WorldViewer:
@@ -202,20 +119,19 @@ class WorldViewer:
                     self.cfg.mode = "FLORA"
                 if ev.key == pygame.K_5:
                     self.cfg.mode = "TEMP"
+                if ev.key == pygame.K_6:
+                    self.cfg.mode = "CLAIM"
                     
                 if ev.key == pygame.K_a:
                     self.cfg.draw_agents = not self.cfg.draw_agents
-                if ev.key == pygame.K_r:
-                    self.cfg.draw_rays = not self.cfg.draw_rays
+                if ev.key == pygame.K_f:
+                    self.cfg.flora_fill = "stipple" if self.cfg.flora_fill == "wedge" else "wedge"
                 if ev.key == pygame.K_h:
                     self.cfg.show_hud = not self.cfg.show_hud
                 if ev.key == pygame.K_t:
-                    order = ["temp_opt", "dispersal", "adult_mass", "growth"]
-                    cur = str(getattr(self.cfg, "flora_color_by", "temp_opt"))
-                    try:
-                        i = order.index(cur)
-                    except ValueError:
-                        i = 0
+                    order = list(FLORA_TRAITS)
+                    cur = str(getattr(self.cfg, "flora_color_by", order[0]))
+                    i = order.index(cur) if cur in order else 0
                     self.cfg.flora_color_by = order[(i + 1) % len(order)]
 
                 if ev.key == pygame.K_EQUALS or ev.key == pygame.K_PLUS:
@@ -265,6 +181,30 @@ class WorldViewer:
         self._h_px = h_px
         self._proj_key = key
 
+        # Ytfördelningen inom cellen avgörs av ett tal u i [0, 1) per pixel.
+        # Båda lägena är statiska för en given projektion och beräknas därför
+        # en gång: per bildruta återstår ett searchsorted och en gather.
+        cx = np.asarray(grid.cell_center_x, dtype=np.float64)[self._pixel_cell]
+        cy = np.asarray(grid.cell_center_y, dtype=np.float64)[self._pixel_cell]
+        ex, ey = float(grid.extent_x), float(grid.extent_y)
+        # Cellen kan ligga på andra sidan världsranden än pixeln, eftersom
+        # cell_of_many wrappar. Deltat måste därför tas kortaste vägen.
+        dx = (XX - cx + 0.5 * ex) % ex - 0.5 * ex
+        dy = (YY - cy + 0.5 * ey) % ey - 0.5 * ey
+        self._u_wedge = (np.arctan2(dy, dx) / (2.0 * math.pi)) % 1.0
+
+        # Stipplingen behöver ett stabilt men rumsligt okorrelerat värde per
+        # pixel. En heltalshash ger samma bild varje bildruta — brus som
+        # flimrar mellan rutorna är oläsbart.
+        iy, ix = np.meshgrid(
+            np.arange(h_px, dtype=np.uint64), np.arange(w_px, dtype=np.uint64), indexing="ij"
+        )
+        hsh = (ix * np.uint64(73856093)) ^ (iy * np.uint64(19349663))
+        hsh = (hsh ^ (hsh >> np.uint64(13))) * np.uint64(1274126177)
+        self._u_stipple = ((hsh >> np.uint64(11)) & np.uint64(0xFFFFF)).astype(np.float64) / float(1 << 20)
+
+        self._probe_cache = {}
+
     def _ensure_screen(self) -> None:
         if self._screen is not None:
             return
@@ -283,393 +223,299 @@ class WorldViewer:
             return np.zeros_like(like, dtype=np.float32)
         return np.asarray(world.temperature_field(), dtype=np.float32)
 
-    def _make_rgb(self, pop) -> np.ndarray:
-        """Färg per cell, (n_cells, 3) uint8."""
-        world = pop.world
-    
-        B = _flora_mass_field(pop)
-        C = np.asarray(world.detritus, dtype=np.float32)
-    
-        WP = getattr(world, "WP", None)
-        BK = float(getattr(WP, "B_K", 1.0)) if WP is not None else 1.0
-        CK = float(getattr(WP, "C_K", 1.0)) if WP is not None else 1.0
-    
-        B01 = np.clip(B / max(BK, 1e-12), 0.0, 1.0).astype(np.float32, copy=False)
-        C01 = np.clip(C / max(CK, 1e-12), 0.0, 1.0).astype(np.float32, copy=False)
-        C01 = np.sqrt(C01, dtype=np.float32)
-    
+    def _make_rgb(self, frame) -> np.ndarray:
+        """Bakgrundsfärg per cell, (n_cells, 3) float32 i [0, 1]."""
+        B01 = np.asarray(frame.flora_shoot01, dtype=np.float32)
+        C01 = np.asarray(frame.detritus01, dtype=np.float32)
+
         mode = self.cfg.mode.upper().strip()
-    
+
         if mode == "B":
             img = np.stack([B01, B01, B01], axis=-1)
-    
+
         elif mode == "C":
             img = np.stack([C01, C01, C01], axis=-1)
-    
-        elif mode == "TEMP":
-            T = self._temp_field(world, C)
-            Tmin, Tmax = -10.0, 40.0
-            t01 = np.clip((T - Tmin) / (Tmax - Tmin), 0.0, 1.0).astype(np.float32, copy=False)
-            img = np.stack([t01, t01, t01], axis=-1)
-    
-        elif mode == "FLORA":
-            T = self._temp_field(world, C)
-            Tmin, Tmax = -10.0, 40.0
-            t01 = np.clip((T - Tmin) / (Tmax - Tmin), 0.0, 1.0).astype(np.float32, copy=False)
-    
-            base = 0.08 + 0.10 * t01
-            img = np.stack([0.10 * base, 0.18 * base, 0.22 * base], axis=-1).astype(np.float32, copy=False)
-    
+
+        elif mode in ("TEMP", "FLORA", "CLAIM"):
+            lo, hi = TEMP_RANGE
+            t01 = np.clip(
+                (np.asarray(frame.temperature, dtype=np.float32) - lo) / (hi - lo), 0.0, 1.0
+            ).astype(np.float32, copy=False)
+
+            if mode == "TEMP":
+                img = np.stack([t01, t01, t01], axis=-1)
+            elif mode == "CLAIM":
+                # Anspråket som eget fält. Under 1 är marken ledig och visas
+                # mörkt grön; över 1 är den översökt och visas i rött. Det är
+                # samma tal som konkurrensen avgörs med.
+                cl = np.asarray(frame.claimed, dtype=np.float32)
+                free = np.clip(cl, 0.0, 1.0)
+                over = np.clip(cl - 1.0, 0.0, 2.0) * 0.5
+                img = np.stack([over, free * 0.75, free * 0.25 + 0.05 * t01], axis=-1)
+            else:
+                base = 0.08 + 0.10 * t01
+                img = np.stack([0.10 * base, 0.18 * base, 0.22 * base], axis=-1)
+            img = img.astype(np.float32, copy=False)
+
         else:  # "CB"
             Z = np.zeros_like(B01, dtype=np.float32)
             img = np.stack([C01, B01, Z], axis=-1)
-    
-        img = self._gamma(img)
-        return _as_u8_rgb(img)
 
-    def _blit_field(self, cell_rgb_u8: np.ndarray) -> None:
-        """Måla cellfärgerna genom den förberäknade pixel-till-cell-avbildningen."""
+        return self._gamma(img).astype(np.float32, copy=False)
+
+    def _blit_rgb01(self, img01: np.ndarray) -> None:
+        """Måla en färdig pixelbild i [0, 1]."""
         pygame = self.pg
         self._ensure_screen()
-        img = cell_rgb_u8[self._pixel_cell]                    # (h_px, w_px, 3)
+        img = _as_u8_rgb(img01)
         surf = pygame.surfarray.make_surface(np.transpose(img, (1, 0, 2)))
         self._screen.blit(surf, (0, 0))
 
-    def _draw_flora(self, pop) -> None:
-        store = getattr(pop, "store", None)
-        grid = getattr(pop, "grid", None)
-        if store is None or grid is None:
-            return
-    
-        pygame = self.pg
-        scale = int(self.cfg.scale)
-        ppu = float(self._ppu)
-        color_by = str(getattr(self.cfg, "flora_color_by", "temp_opt")).lower()
-    
-        for slot in _iter_live_flora_slots(pop):
-            cell = int(store.cell_idx[slot])
-            if cell < 0:
-                continue
-    
-            # Cellcentrum i världskoordinater; geometrin ägs av Grid.
-            x = int(float(grid.cell_center_x[cell]) * ppu) - scale // 2
-            y = int(float(grid.cell_center_y[cell]) * ppu) - scale // 2
-    
-            m = float(store.mass[slot])
-    
-            try:
-                m_cap = float(store.flora_adult_mass[slot])
-            except Exception:
-                m_cap = max(m, 1e-9)
-            frac = max(0.0, min(1.0, m / max(m_cap, 1e-9)))
-            a = int(80 + 175 * frac)
-    
-            # default
-            u = 0.5
-    
-            try:
-                if color_by == "temp_opt":
-                    val = float(store.flora_temp_opt[slot])
-                    u = max(0.0, min(1.0, (val + 5.0) / 40.0))
-                
-                elif color_by == "dispersal":
-                    val = float(store.flora_seed_mass[slot])
-                    u = max(0.0, min(1.0, (val - 0.0002) / (0.0200 - 0.0002)))
-                
-                elif color_by == "adult_mass":
-                    val = float(store.flora_adult_mass[slot])
-                    lo = 0.25 * float(pop.WP.B_K)
-                    hi = 4.0 * float(pop.WP.B_K)
-                    u = max(0.0, min(1.0, (val - lo) / max(hi - lo, 1e-9)))
-                
-                elif color_by == "growth":
-                    val = float(store.flora_repro_alloc[slot])
-                    u = max(0.0, min(1.0, (val - 0.005) / (0.050 - 0.005)))
-    
-            except Exception:
-                u = 0.5
-    
-            # kall/låg -> blå/cyan, varm/hög -> gul/röd
-            r = int(40 + 180 * u)
-            g = int(80 + 140 * (1.0 - abs(u - 0.5) * 2.0))
-            b = int(40 + 180 * (1.0 - u))
-    
-            color = (r, g, b, a)
-    
-            flora_surf = pygame.Surface((scale, scale), pygame.SRCALPHA)
-            flora_surf.fill(color)
-            self._screen.blit(flora_surf, (x, y))
+    def _compose_flora(self, frame, base01: np.ndarray) -> np.ndarray:
+        """
+        Lägg ytfördelningen ovanpå bakgrunden.
 
-    def _draw_rays(self, pop) -> None:
-        pygame = self.pg
-        ppu = float(self._ppu)
-        W_px = int(self._w_px)
-        H_px = int(self._h_px)
+        Plantorna har ingen position i cellen — modellen ger dem cellcentrum,
+        och det är ärligt, för rötterna konkurrerar om cellens area och inte
+        om en punkt i den. Viewern fördelar därför arean i stället för att
+        hitta på koordinater: varje pixel får ett tal u i [0, 1) och slås upp
+        i cellens kumulativa andelar. En planta som håller 30 % av cellen får
+        30 % av dess pixlar, och den obesatta andelen 1 − claimed blir bar
+        mark. Grannspillet följer med av sig självt, eftersom en planta med
+        rotarea över 1 redan har en rad i varje granncell.
 
-        ray_surf = pygame.Surface((W_px, H_px), pygame.SRCALPHA)
+        Två sätt att välja u, båda samma gather:
 
-        for a in pop.agents:
-            if not _is_alive(a):
-                continue
+          KILAR      pixelns vinkel kring cellcentrum. Rena kanter, läsbart
+                     utzoomat, men areorna störs av hexagonens hörn.
+          STIPPLING  en stabil hash av pixelindex. Areorna blir exakt
+                     proportionella och bilden visar blandning i stället för
+                     gränser som inte finns.
 
-            sensors = getattr(a, "sensors", None)
-            if sensors is None:
-                continue
+        Uppslaget görs med ett enda searchsorted över hela pixelfältet. Det
+        fungerar för att nycklarna görs globalt växande: rad j i cell c får
+        nyckeln c + (kumulativ andel), och varje cell avslutas med en
+        vaktpost på c + 1 som representerar bar mark. Sonden c + u kan då
+        aldrig hamna utanför sin egen cell.
 
-            n = int(getattr(sensors, "_n", 0))
-            m = int(getattr(sensors, "_m", 0))
-            if n <= 0 or m <= 0:
-                continue
+        Det som försvinner med detta är per-planta-loopen. Den allokerade en
+        pygame-yta per levande planta — vid 29 000 plantor blev det 29 000
+        ytor per bildruta, och den ritade dessutom en axelriktad kvadrat på
+        ett hexgrid.
+        """
+        starts = np.asarray(frame.claim_starts, dtype=np.int64)
+        share = np.asarray(frame.claim_share, dtype=np.float64)
+        n_cells = starts.shape[0] - 1
+        if n_cells <= 0:
+            return base01
 
-            accB = getattr(sensors, "_accB", None)
-            accC = getattr(sensors, "_accC", None)
-            ang = getattr(sensors, "_ang_base", None)
-            d = getattr(sensors, "_d", None)
-            ray_m = getattr(sensors, "_ray_m", None)
-            if ang is None or d is None:
-                continue
+        counts = np.diff(starts)
+        n_rows = int(share.shape[0])
 
-            ax, ay, heading = _get_xy_heading(a)
-            px = int(ax * ppu) % W_px
-            py = int(ay * ppu) % H_px
+        # Kumulativ andel inom varje cell.
+        cum = np.cumsum(share)
+        if n_rows:
+            # Kumulativ summa inom cellen: dra bort summan fram till cellens
+            # start. Prefixet med en nolla gör att start = 0 faller ut rätt.
+            before = np.concatenate(([0.0], cum))[starts[:-1]]
+            cum = cum - np.repeat(before, counts)
 
-            for i in range(n):
-                if ray_m is not None and i < len(ray_m):
-                    depth = max(1, min(int(ray_m[i]), m))
-                else:
-                    depth = m
-                ray_len_px = float(d[depth - 1]) * ppu
+        # Nycklar: cellindex + kumulativ andel, plus en vaktpost per cell.
+        cell_of_row = np.repeat(np.arange(n_cells, dtype=np.int64), counts)
+        keys = np.empty(n_rows + n_cells, dtype=np.float64)
+        row_at = np.empty(n_rows + n_cells, dtype=np.int64)
+        sentinel_at = starts[1:] + np.arange(1, n_cells + 1, dtype=np.int64) - 1
+        is_sent = np.zeros(n_rows + n_cells, dtype=bool)
+        is_sent[sentinel_at] = True
+        keys[sentinel_at] = np.arange(n_cells, dtype=np.float64) + 1.0
+        row_at[sentinel_at] = -1
+        if n_rows:
+            keys[~is_sent] = cell_of_row + np.minimum(cum, 1.0)
+            row_at[~is_sent] = np.arange(n_rows, dtype=np.int64)
 
-                angle = float(ang[i]) + heading
-                ex = px + ray_len_px * math.cos(angle)
-                ey = py + ray_len_px * math.sin(angle)
+        u = self._u_stipple if self.cfg.flora_fill == "stipple" else self._u_wedge
+        probe = self._pixel_cell.astype(np.float64) + u
+        sel = np.searchsorted(keys, probe, side="left")
+        np.clip(sel, 0, keys.shape[0] - 1, out=sel)
+        row = row_at[sel]
 
-                if ex < 0 or ex >= W_px or ey < 0 or ey >= W_px:
-                    continue
+        img = np.array(base01[self._pixel_cell], dtype=np.float32, copy=True)
+        hit = row >= 0
+        if not np.any(hit):
+            return img
 
-                sig_B = float(accB[i]) if accB is not None else 0.0
-                sig_C = float(accC[i]) if accC is not None else 0.0
+        r = row[hit]
+        axis = FLORA_TRAITS.index(self.cfg.flora_color_by) \
+            if self.cfg.flora_color_by in FLORA_TRAITS else 0
+        t = np.asarray(frame.claim_trait[:, axis], dtype=np.float32)[r]
+        fill = np.asarray(frame.claim_fill, dtype=np.float32)[r]
 
-                if not math.isfinite(sig_B):
-                    sig_B = 0.0
-                if not math.isfinite(sig_C):
-                    sig_C = 0.0
+        # Kall/låg -> blå, varm/hög -> röd. Samma axel som förut.
+        col = np.stack([
+            0.16 + 0.70 * t,
+            0.31 + 0.55 * (1.0 - np.abs(t - 0.5) * 2.0),
+            0.16 + 0.70 * (1.0 - t),
+        ], axis=-1).astype(np.float32)
 
-                sig = max(sig_B, sig_C)
+        # Fyllnadsgraden mot vuxenmassa styr opaciteten: en groddplanta håller
+        # sin mark men syns knappt, en fullvuxen dominerar sin yta.
+        alpha = (0.31 + 0.69 * fill).astype(np.float32)[:, None]
+        img[hit] = img[hit] * (1.0 - alpha) + col * alpha
+        return img
 
-                if sig < 0.02:
-                    color = (60, 80, 60, 25)
-                else:
-                    sig_clamped = max(0.0, min(sig, 1.0))
-                    alpha = int(40 + 160 * sig_clamped)
-                    if sig_B >= sig_C:
-                        g = int(80 + 175 * max(0.0, min(sig_B, 1.0)))
-                        color = (20, min(255, g), 30, alpha)
-                    else:
-                        gb = int(80 + 175 * max(0.0, min(sig_C, 1.0)))
-                        color = (20, min(255, gb), min(255, gb), alpha)
-
-                pygame.draw.line(ray_surf, color, (px, py), (int(ex), int(ey)), 1)
-
-        pop.world._viewer_ray_surf = ray_surf
-
-    def _draw_agents(self, pop) -> None:
+    def _draw_agents(self, frame) -> None:
         if not self.cfg.draw_agents:
             return
 
         pygame = self.pg
         ppu = float(self._ppu)
-        W_px = int(self._w_px)
-        H_px = int(self._h_px)
+        W_px, H_px = int(self._w_px), int(self._h_px)
         hl = int(self.cfg.agent_heading_len_px)
+        r0 = int(self.cfg.agent_radius_px)
 
-        agents = getattr(pop, "agents", None)
-        if agents is None:
-            return
+        px_all = (np.asarray(frame.fauna_x, dtype=np.float64) * ppu).astype(np.int64) % W_px
+        py_all = (np.asarray(frame.fauna_y, dtype=np.float64) * ppu).astype(np.int64) % H_px
 
-        if self.cfg.draw_rays:
-            self._draw_rays(pop)
-            ray_surf = getattr(getattr(pop, "world", None), "_viewer_ray_surf", None)
-            if ray_surf is not None:
-                self._screen.blit(ray_surf, (0, 0))
+        for i in range(frame.fauna_n):
+            px, py = int(px_all[i]), int(py_all[i])
+            dmg = float(frame.fauna_damage_frac[i])
+            e = float(frame.fauna_energy_frac[i])
 
-        for a in agents:
-            if not _is_alive(a):
-                continue
-            x, y, h = _get_xy_heading(a)
+            # Grön frisk -> röd döende, ljusstyrkan bär energin.
+            v = 0.45 + 0.55 * max(0.0, min(1.0, e))
+            col = _hsv_to_rgb((1.0 - max(0.0, min(1.0, dmg))) * 0.33, 0.85, v)
+            radius = max(2, int(r0 * (0.7 + 0.6 * min(2.0, float(frame.fauna_mass_frac[i])))))
+            pygame.draw.circle(self._screen, col, (px, py), radius)
 
-            px = int(x * ppu) % W_px
-            py = int(y * ppu) % H_px
-
-            color, radius = _agent_visuals(a)
-            pygame.draw.circle(self._screen, color, (px, py), radius)
-
-            ready = False
-            try:
-                slot = int(getattr(a, "store_slot", -1))
-                if slot >= 0 and hasattr(pop, "_ready_to_reproduce_slot"):
-                    ready = bool(pop._ready_to_reproduce_slot(slot))
-            except Exception:
-                ready = False
-            
-            if ready:
+            if bool(frame.fauna_ready[i]):
                 pulse = 0.5 + 0.5 * math.sin(self._step * 0.25)
-                ring_alpha = int(120 + 120 * pulse)
-                ring_r = radius + 2 + int(pulse * 2)
-                ring_color = (255, 220, 50, ring_alpha)
-                ring_surf = pygame.Surface((ring_r * 2 + 2, ring_r * 2 + 2), pygame.SRCALPHA)
-                pygame.draw.circle(ring_surf, ring_color, (ring_r + 1, ring_r + 1), ring_r, 2)
-                self._screen.blit(ring_surf, (px - ring_r - 1, py - ring_r - 1))
+                rr = radius + 2 + int(pulse * 2)
+                surf = pygame.Surface((rr * 2 + 2, rr * 2 + 2), pygame.SRCALPHA)
+                pygame.draw.circle(surf, (255, 220, 50, int(120 + 120 * pulse)), (rr + 1, rr + 1), rr, 2)
+                self._screen.blit(surf, (px - rr - 1, py - rr - 1))
 
-            pred_trait = 0.0
-            try:
-                pred_trait = float(getattr(getattr(a, "pheno", None), "predation", 0.0))
-            except Exception:
-                pass
-            if pred_trait > 0.15:
-                pred_r = radius + 1
-                pred_alpha = int(60 + 180 * pred_trait)
-                pred_color = (220, 30, 30, pred_alpha)
-                pred_surf = pygame.Surface((pred_r * 2 + 2, pred_r * 2 + 2), pygame.SRCALPHA)
-                pygame.draw.circle(pred_surf, pred_color, (pred_r + 1, pred_r + 1), pred_r, max(1, int(pred_trait * 3)))
-                self._screen.blit(pred_surf, (px - pred_r - 1, py - pred_r - 1))
+            pred = float(frame.fauna_predation[i])
+            if pred > 0.15:
+                pr = radius + 1
+                surf = pygame.Surface((pr * 2 + 2, pr * 2 + 2), pygame.SRCALPHA)
+                pygame.draw.circle(surf, (220, 30, 30, int(60 + 180 * pred)),
+                                   (pr + 1, pr + 1), pr, max(1, int(pred * 3)))
+                self._screen.blit(surf, (px - pr - 1, py - pr - 1))
 
-            body = getattr(a, "body", None)
-            if body is not None and getattr(body, "gestating", False):
-                gest_M = float(getattr(body, "gest_M", 0.0))
-                gest_M_tgt = float(getattr(body, "gest_M_target", 1e-9))
-                frac = min(1.0, gest_M / max(gest_M_tgt, 1e-9))
-                fetus_r = max(1, int(radius * 0.35 + frac * radius * 0.25))
-                g_val = int(180 + 75 * frac)
-                fetus_color = (200, g_val, 120)
-                pygame.draw.circle(self._screen, fetus_color, (px, py), fetus_r)
+            gf = float(frame.fauna_gest_frac[i])
+            if gf > 0.0:
+                fr = max(1, int(radius * 0.35 + gf * radius * 0.25))
+                pygame.draw.circle(self._screen, (200, int(180 + 75 * gf), 120), (px, py), fr)
 
             if self.cfg.draw_heading and hl > 0:
-                dim = tuple(max(0, int(c * 0.6)) for c in color)
+                h = float(frame.fauna_heading[i])
+                dim = tuple(max(0, int(c * 0.6)) for c in col)
                 ex = int(px + (radius + hl * 0.5) * math.cos(h))
                 ey = int(py + (radius + hl * 0.5) * math.sin(h))
                 pygame.draw.line(self._screen, dim, (px, py), (ex, ey), 1)
 
-    def _draw_hud(self, pop, births_total: int, deaths_total: int) -> None:
+    def _draw_hud(self, frame) -> None:
         if not self.cfg.show_hud:
             return
 
-        t = getattr(pop, "t", None)
-        if t is None and hasattr(pop, "world"):
-            t = getattr(pop.world, "t", 0.0)
-
-        n = 0
-        if hasattr(pop, "agents"):
-            n = sum(1 for a in pop.agents if _is_alive(a))
-
         tmean = tmin = tmax = float("nan")
         tmeanN = tmeanS = float("nan")
-        Tb = getattr(getattr(pop, "world", None), "T_band", None)
-        if Tb is not None:
-            Tb = np.asarray(Tb, dtype=np.float32)
-            if Tb.size:
-                # Banden är likstora, så bandstatistik är cellstatistik.
-                tmean = float(np.mean(Tb))
-                tmin = float(np.min(Tb))
-                tmax = float(np.max(Tb))
-                # Halvkloten avgörs av latitudens tecken, inte av bandindex.
-                lat = np.asarray(pop.grid.band_lat, dtype=np.float32)
+        Tb = np.asarray(frame.T_band, dtype=np.float32)
+        if Tb.size:
+            # Banden är likstora, så bandstatistik är cellstatistik.
+            tmean, tmin, tmax = float(np.mean(Tb)), float(np.min(Tb)), float(np.max(Tb))
+            lat = np.asarray(frame.band_lat, dtype=np.float32)
+            if lat.size == Tb.size:
                 north = lat > 0.0
                 if north.any() and (~north).any():
                     tmeanN = float(np.mean(Tb[north]))
                     tmeanS = float(np.mean(Tb[~north]))
 
-        flora_n = 0
-        flora_mass = 0.0
-        line5 = ""
-        if hasattr(pop, "store"):
-            store = pop.store
-            n0 = int(getattr(store, "n_agents", 0))
-            n1 = int(getattr(store, "n", 0))
-            mask = (store.kind[n0:n1] == 1) & store.alive[n0:n1]
-            flora_n = int(np.sum(mask))
-            if flora_n > 0:
-                flora_mass = float(np.sum(store.mass[n0:n1][mask]))
+        claimed = np.asarray(frame.claimed, dtype=np.float64)
+        closed = float(np.mean(claimed >= 1.0)) * 100.0 if claimed.size else 0.0
+        bare = float(np.mean(np.clip(1.0 - claimed, 0.0, 1.0))) * 100.0 if claimed.size else 0.0
 
-        if hasattr(pop, "_flora_summary"):
-            ft = pop._flora_summary()
-            color_by = str(getattr(self.cfg, "flora_color_by", "temp_opt"))
-            line5 = (
-                f"flora[{color_by}]: "
-                f"a={ft['flora_mean_repro_alloc']:.3f}  "
-                f"M*={ft['flora_mean_adult_mass']:.4f}  "
-                f"Topt={ft['flora_mean_temp_opt']:.1f}  "
-                f"Tw={ft['flora_mean_temp_width']:.1f}  "
-                f"d={ft['flora_mean_apparatus']:.4f}"
-            )
+        lines = [
+            f"t={frame.t:8.2f}  pop={frame.fauna_n:4d}  born={frame.births_total:6d}  "
+            f"dead={frame.deaths_total:6d}  mode={self.cfg.mode.upper()}  "
+            f"gamma={self.cfg.gamma:.2f}  {'PAUSED' if self._paused else ''}"
+        ]
+        if math.isfinite(tmean):
+            l2 = f"T(mean/min/max)={tmean:5.1f}/{tmin:5.1f}/{tmax:5.1f}"
+            if math.isfinite(tmeanN):
+                l2 += f"   T(N/S)={tmeanN:5.1f}/{tmeanS:5.1f}"
+            lines.append(l2)
+        else:
+            lines.append("T(mean/min/max)=NA")
 
-        mode = self.cfg.mode.upper()
-        paused = "PAUSED" if self._paused else ""
-
-        line1 = (
-            f"t={t:8.2f}  pop={n:4d}  born={int(births_total):6d}  dead={int(deaths_total):6d}  "
-            f"mode={mode}  gamma={self.cfg.gamma:.2f}  {paused}"
+        lines.append(
+            f"flora_n={frame.flora_n:5d}  flora_mass={frame.flora_mass:.4f} kg  "
+            f"mark: bar={bare:4.1f}%  slutna celler={closed:4.1f}%"
+        )
+        lines.append(
+            f"grön=frisk→röd=döende  ljus=energi  gul ring=parningsredo  "
+            f"[yta {self.cfg.flora_fill} F]  [trait {self.cfg.flora_color_by} T]"
         )
 
-        if math.isfinite(tmean):
-            if math.isfinite(tmeanN) and math.isfinite(tmeanS):
-                line2 = (
-                    f"T(mean/min/max)={tmean:5.1f}/{tmin:5.1f}/{tmax:5.1f}   "
-                    f"T(N/S)={tmeanN:5.1f}/{tmeanS:5.1f}"
-                )
-            else:
-                line2 = f"T(mean/min/max)={tmean:5.1f}/{tmin:5.1f}/{tmax:5.1f}"
-        else:
-            line2 = "T(mean/min/max)=NA"
-
-        line3 = f"flora_n={flora_n:4d}  flora_mass={flora_mass:.4f} kg"
-
-        rays_str = "strålar:PÅ" if self.cfg.draw_rays else "strålar:av"
-        line4 = f"grön=frisk→röd=döende  ljus=energi  gul ring=parningsredo  vit prick=gravid  [{rays_str} R]  [trait T]"
-
-        lines = [line1, line2, line3, line4]
-        if line5:
-            lines.append(line5)
-
-        x0, y0 = 5, 5
-        dy = 18
+        ft = frame.flora_summary
+        if ft:
+            lines.append(
+                f"flora: a={ft.get('flora_mean_repro_alloc', float('nan')):.3f}  "
+                f"M*={ft.get('flora_mean_adult_mass', float('nan')):.4f}  "
+                f"Topt={ft.get('flora_mean_temp_opt', float('nan')):.1f}  "
+                f"Tw={ft.get('flora_mean_temp_width', float('nan')):.1f}  "
+                f"d={ft.get('flora_mean_apparatus', float('nan')):.4f}"
+            )
 
         for i, text in enumerate(lines):
-            y = y0 + i * dy
-            surf_shadow = self._font.render(text, True, (0, 0, 0))
-            self._screen.blit(surf_shadow, (x0 + 1, y + 1))
-            surf = self._font.render(text, True, (255, 255, 255))
-            self._screen.blit(surf, (x0, y))
+            y = 5 + i * 18
+            self._screen.blit(self._font.render(text, True, (0, 0, 0)), (6, y + 1))
+            self._screen.blit(self._font.render(text, True, (255, 255, 255)), (5, y))
 
-    def update(self, pop, births_total: int = 0, deaths_total: int = 0) -> bool:
+    def update(self, frame, grid=None) -> bool:
         """
-        Call from the simulation loop.
-        births_total / deaths_total should be accumulated totals (not per-step).
-        Returns False if the user quit.
+        Rita en bildruta.
+
+        `frame` är en ViewFrame. `grid` kan skickas med om anroparen redan
+        har ett — annars byggs det ur bildrutans width/height, vilket är det
+        som gör viewern körbar utan simulering.
+
+        Returnerar False om användaren stängt fönstret.
         """
         self._step += 1
-
         if not self._handle_events():
             return False
-
         if self.cfg.render_every > 1 and (self._step % self.cfg.render_every != 0):
             self._throttle()
             return True
 
-        self._ensure_projection(pop.grid)
+        if grid is None:
+            grid = self._grid_for(frame)
+        self._ensure_projection(grid)
+        self._ensure_screen()
 
-        rgb = self._make_rgb(pop)
-        self._blit_field(rgb)
-
+        base = self._make_rgb(frame)
         if self.cfg.mode.upper().strip() == "FLORA":
-            self._draw_flora(pop)
+            img = self._compose_flora(frame, base)
+        else:
+            img = base[self._pixel_cell]
+        self._blit_rgb01(img)
 
-        self._draw_agents(pop)
-        self._draw_hud(pop, births_total=births_total, deaths_total=deaths_total)
+        self._draw_agents(frame)
+        self._draw_hud(frame)
 
         self.pg.display.flip()
         self._throttle()
         return True
+
+    def _grid_for(self, frame):
+        """Rekonstruera geometrin ur bildrutan. Grid härleder resten själv."""
+        key = (int(frame.grid_width), int(frame.grid_height))
+        if getattr(self, "_grid_key", None) != key:
+            from grid import Grid
+            self._grid = Grid(width=key[0], height=key[1])
+            self._grid_key = key
+        return self._grid
 
     def close(self) -> None:
         self.pg.quit()

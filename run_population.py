@@ -7,6 +7,7 @@ import time
 from typing import Optional
 
 from viewer_pygame import WorldViewer, ViewerConfig
+from viewframe import frame_from_pop
 
 from world import WorldParams
 from agent import AgentParams
@@ -191,7 +192,8 @@ if __name__ == "__main__":
             deaths_total += int(d)
 
             # --- viewer update (pumps events + render) ---
-            if not viewer.update(pop, births_total=births_total, deaths_total=deaths_total):
+            _frame = frame_from_pop(pop, births_total=births_total, deaths_total=deaths_total)
+            if not viewer.update(_frame, grid=pop.grid):
                 stop_reason = f"USER_QUIT (t={pop.t:.3f})"
                 user_quit = True
                 break            
@@ -235,7 +237,8 @@ if __name__ == "__main__":
         # VIEWER LOOP (keep window alive after stop)
         # -------------------------
         while True:
-            if not viewer.update(pop, births_total=births_total, deaths_total=deaths_total):
+            _frame = frame_from_pop(pop, births_total=births_total, deaths_total=deaths_total)
+            if not viewer.update(_frame, grid=pop.grid):
                 user_quit = True
                 break
             time.sleep(0.01)

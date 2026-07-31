@@ -377,11 +377,13 @@ def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
             )
             os.makedirs(str(a.snapshot_dir), exist_ok=True)
 
+        from viewframe import frame_from_pop
+
         viewer = _snap["viewer"]
         # update() kan hoppa över bildrutor enligt render_every; anropa tills
         # en faktiskt ritats.
         for _ in range(max(1, int(viewer.cfg.render_every)) + 1):
-            viewer.update(pop)
+            viewer.update(frame_from_pop(pop), grid=pop.grid)
             if viewer._screen is not None:
                 break
         if viewer._screen is None:

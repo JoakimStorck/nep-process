@@ -58,13 +58,14 @@ def main() -> int:
 
     import pygame
     from viewer_pygame import ViewerConfig, WorldViewer
+    from viewframe import frame_from_pop
 
     pygame.init()
     cfg = ViewerConfig(scale=int(a.scale), mode=str(a.mode))
     viewer = WorldViewer(cfg)
     # render_every kan hoppa över bildrutor; anropa tills en faktiskt ritas
     for _ in range(max(1, int(cfg.render_every)) + 1):
-        viewer.update(pop)
+        viewer.update(frame_from_pop(pop), grid=pop.grid)
         if viewer._screen is not None:
             break
 
