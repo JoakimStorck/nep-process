@@ -342,6 +342,18 @@ Tre saker återstår att döma, och de kräver längre körningar än sandlådan
 
 **Bördighetstestet** är nu körbart och är den viktigaste enskilda mätningen i planen: `--nutrient-init 0.64` mot standardens 0,32 ska ge omkring dubbel stående biomassa medan dynamikens *form* är oförändrad. Håller det är taket ekologiskt; håller det inte sitter det någon annanstans.
 
+## Steg 5g — Bildrutorna blir dödbara och läsbara
+
+- ~~`SDL_NO_SIGNAL_HANDLERS=1`.~~ **Klart.** SDL installerar egna hanterare för SIGTERM och SIGINT. I dummy-läge finns inget fönster att stänga, signalen tas emot och leder ingenstans, och processen gick inte att döda med `kill` — bara med `kill -9`.
+- ~~Bara video och font initieras.~~ **Klart.** `pygame.init()` startade även ljud och joystick, därav ALSA-varningen. Rättat både i `run_headless.py` och i `viewer_pygame.py`; inget i viewern använder mixer eller joystick, så interaktiva körningar påverkas inte.
+- ~~`--snapshot-crop X Y W H`.~~ **Klart.** Utsnitt i celler, så att en liten yta kan ritas stort. Vid skala 8 och 48×48 celler blir bilden 384 px och enskilda celler går att skilja åt.
+
+Motivet: den första bildserien från en 256×256-värld i skala 2 var oläsbar. Detritusfältet på 178 000 till 255 000 kg mättade färgskalan så att allt blev rött, och med fyra pixlar per cell fanns ingen upplösning kvar för den variation som betyder något — `B` inom räckhåll har p10 = 0 kg mot median 20,8.
+
+Det gick ändå att läsa två saker ur den: agenterna klumpar sig inte, utan ligger jämnt utspridda, och de sista överlevarna ser friska ut snarare än utmärglade. Båda stämmer med mätningarna.
+
+`--snapshot-mode FLORA` finns redan i viewern och ritar floran utan detritusfältet.
+
 ## Steg 5f — Bildrutor från en huvudlös körning
 
 *Rumslig fördelning går inte att läsa ur tidsserier. Viewern fanns men krävde ett fönster.*

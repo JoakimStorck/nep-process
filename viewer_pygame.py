@@ -168,7 +168,12 @@ class WorldViewer:
 
         import pygame  # noqa
         self.pg = pygame
-        pygame.init()
+        # Bara video och font. pygame.init() startar även ljud och joystick,
+        # vilket ger en ALSA-varning på maskiner utan ljudkort och är onödigt
+        # för att rita. Interaktiva körningar påverkas inte — inget i viewern
+        # använder mixer eller joystick.
+        pygame.display.init()
+        pygame.font.init()
         pygame.display.set_caption(cfg.title)
 
         self._screen = None

@@ -131,7 +131,11 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--snapshot-dir", type=str, default="snapshots",
                     help="katalog för bildrutorna; skapas om den saknas")
     ap.add_argument("--snapshot-scale", type=int, default=2, help="pixlar per cellbredd")
-    ap.add_argument("--snapshot-mode", type=str, default="BC", help="viewerns ritläge")
+    ap.add_argument("--snapshot-mode", type=str, default="BC",
+                    help="viewerns ritläge: BC, B, C, TEMP eller FLORA")
+    ap.add_argument("--snapshot-crop", type=int, nargs=4, default=None,
+                    metavar=("X", "Y", "W", "H"),
+                    help="beskär till ett utsnitt i celler; låter en liten yta ritas stort")
     ap.add_argument("--life-log", type=str, default=None,
                     help="skriv life.jsonl med födslar och dödsfall, inklusive dödsorsak")
     ap.add_argument("--check-every", type=int, default=500,
@@ -354,10 +358,19 @@ def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
     def write_snapshot(tick_no: int) -> None:
         if _snap["viewer"] is None:
             os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+            # SDL installerar egna hanterare för SIGTERM och SIGINT för att
+            # kunna stänga fönster och ljudenheter kontrollerat. I dummy-läget
+            # finns inget fönster, signalen tas emot och leder ingenstans, och
+            # processen går inte att döda med `kill`. Lämna signalerna åt Python.
+            os.environ.setdefault("SDL_NO_SIGNAL_HANDLERS", "1")
             import pygame as _pg
             from viewer_pygame import ViewerConfig, WorldViewer
 
-            _pg.init()
+            # Bara det som behövs. pygame.init() startar även ljud och
+            # joystick — därav ALSA-varningen i loggen — utan att något av det
+            # används för att spara en PNG.
+            _pg.display.init()
+            _pg.font.init()
             _snap["pygame"] = _pg
             _snap["viewer"] = WorldViewer(
                 ViewerConfig(scale=int(a.snapshot_scale), mode=str(a.snapshot_mode))
@@ -373,8 +386,19 @@ def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
                 break
         if viewer._screen is None:
             return
+        surf = viewer._screen
+        if a.snapshot_crop is not None:
+            # Utsnittet anges i celler och skalas till pixlar. Kartläggningen är
+            # approximativ på hex — raderna är förskjutna — men räcker gott för
+            # att titta på en avgränsad del av världen i hög upplösning.
+            cx, cy, cw, ch = (int(v) for v in a.snapshot_crop)
+            s = max(1, int(a.snapshot_scale))
+            rect = _snap["pygame"].Rect(cx * s, cy * s, max(1, cw * s), max(1, ch * s))
+            rect = rect.clip(surf.get_rect())
+            if rect.width > 0 and rect.height > 0:
+                surf = surf.subsurface(rect).copy()
         path = os.path.join(str(a.snapshot_dir), f"t{tick_no:07d}.png")
-        _snap["pygame"].image.save(viewer._screen, path)
+        _snap["pygame"].image.save(surf, path)
 
     failures = 0
     check_every = max(0, int(a.check_every))
