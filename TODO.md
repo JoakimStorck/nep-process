@@ -342,6 +342,21 @@ Tre saker återstår att döma, och de kräver längre körningar än sandlådan
 
 **Bördighetstestet** är nu körbart och är den viktigaste enskilda mätningen i planen: `--nutrient-init 0.64` mot standardens 0,32 ska ge omkring dubbel stående biomassa medan dynamikens *form* är oförändrad. Håller det är taket ekologiskt; håller det inte sitter det någon annanstans.
 
+## Steg 5d — Dödsorsak i life-loggen
+
+*Använder befintlig infrastruktur. `LifeLogger` och `death_record` fanns redan; de var bara aldrig exponerade.*
+
+- ~~`death_cause` sätts vid varje dödsväg.~~ **Klart.** Fem vägar i `Body.step()`: `damage`, `starvation`, `hazard`, `guard_pre`, `guard_post`, `guard_energy`.
+- ~~`--life-log` i `run_headless.py`.~~ **Klart.** Ogrindad; händelserna är få jämfört med tickarna.
+
+Skälet: i p71 dog 86 djur på fyrtio månader utan svält — katabolismen var 0,16 procent av intaget — och utan att åldersdöden borde ha slagit. Vi loggade födslar och dödsfall men aldrig varför, och dödsorsaken har gissats fel tre gånger i det här arbetet.
+
+Två vakter kan dessutom döda agenter vid numeriska avvikelser, och de syntes inte alls i någon logg.
+
+**Första mätningen, 4 000 tick:** 11 `damage`, 3 `unknown`, 1 `hazard`, noll svält och noll vaktdödsfall.
+
+Två saker att notera. `damage` inträffar vid medianålder 57 månader, alltså långt under åldersdödens kalibrerade 121–153 — skadan kommer från ansträngning, köld eller svältstress, inte från klockan. Och `unknown` betyder att det finns minst en dödsväg utanför `Body.step()` som inte sätter orsaken; den bör spåras.
+
 ## Steg 5c — Betningshorisonten
 
 *Betaren tar skott och lämnar rot. Ingen ny parameter, inget nytt locus — bara en åtskillnad modellen redan hade.*

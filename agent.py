@@ -466,6 +466,10 @@ class Body:
     gestating: bool = False
     gest_M: float = 0.0          # accumulated fetal mass (M-units)
     gest_E_J: float = 0.0        # accumulated fetal energy in J (weighted space)
+    # Varför individen dog. Sätts vid varje dödsväg och läses av death_record.
+    # Utan den går de fem vägarna inte att skilja åt i efterhand, och vi har
+    # gissat fel på dödsorsak tre gånger i rad.
+    death_cause: str = ""
     gest_M_target: float = 0.0   # target fetal mass
     
     def M_reserve(self) -> float:
@@ -849,6 +853,7 @@ class Body:
             self.guard_steps += 1
             self.guard_killed += 1
             self.guard_last = self._guard_snapshot("pre_state")
+            self.death_cause = "guard_pre"
             self.alive = False
             return
     
@@ -871,6 +876,7 @@ class Body:
                 "extra_drain": float(extra_drain),
                 "age_s": float(age_s),
             }
+            self.death_cause = "guard_energy"
             self.alive = False
             return
     
@@ -1294,6 +1300,7 @@ class Body:
         # (5) Deterministic death conditions
         # ---------------------------------------------------------
         if float(self.D) >= _D_max or float(self.M) <= _M_min:
+            self.death_cause = "damage" if float(self.D) >= _D_max else "starvation"
             self.alive = False
             return
 
@@ -1305,6 +1312,7 @@ class Body:
             if hazard_rate > 0.0:
                 p = 1.0 - math.exp(-hazard_rate * dt)
                 if rng.random() < p:
+                    self.death_cause = "hazard"
                     self.alive = False
                     return
     
@@ -1348,6 +1356,7 @@ class Body:
             self.guard_steps += 1
             self.guard_killed += 1
             self.guard_last = self._guard_snapshot("post_state")
+            self.death_cause = "guard_post"
             self.alive = False
             return
     

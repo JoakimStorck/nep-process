@@ -125,6 +125,8 @@ def parse_args() -> argparse.Namespace:
                     help="WorldParams.nutrient_loss_frac, andel som lämnar systemet vid nedbrytning")
     ap.add_argument("--uptake-rate", type=float, default=None,
                     help="WorldParams.uptake_rate_per_area, kg näring per månad och areaenhet")
+    ap.add_argument("--life-log", type=str, default=None,
+                    help="skriv life.jsonl med födslar och dödsfall, inklusive dödsorsak")
     ap.add_argument("--check-every", type=int, default=500,
                     help="kör invariantsviten var N:te tick (0 = bara vid start och slut)")
     ap.add_argument("--report-every", type=int, default=2000,
@@ -285,10 +287,10 @@ def run(a: argparse.Namespace, seed: int | None = None) -> int:
     # headless-körning.
     writers = []
     observers = []
-    if a.pop_log or a.world_log:
+    if a.pop_log or a.world_log or a.life_log:
         from simlog.jsonl import JsonlWriter
         from simlog.sinks import EventHub
-        from simlog.observers import PopLogger, WorldLogger
+        from simlog.observers import PopLogger, WorldLogger, LifeLogger
 
         if a.pop_log:
             w = JsonlWriter(str(a.pop_log), flush_every=1)
@@ -300,6 +302,13 @@ def run(a: argparse.Namespace, seed: int | None = None) -> int:
             w.__enter__()
             writers.append(w)
             observers.append(WorldLogger(w=w, every_s=float(a.world_every)))
+        if a.life_log:
+            # Ogrindad: varje födsel och dödsfall skrivs. Händelserna är få
+            # jämfört med tickarna, och det är just de sällsynta vi vill se.
+            w = JsonlWriter(str(a.life_log), flush_every=1)
+            w.__enter__()
+            writers.append(w)
+            observers.append(LifeLogger(w=w))
 
         hub = EventHub(observers)
     else:

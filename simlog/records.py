@@ -157,6 +157,9 @@ def death_record(
     return {
         "event": "death",
         "t": float(t),
+        # Vilken av de fem dödsvägarna som utlöstes. Utan den kan man bara
+        # gissa ur D och M i efterhand, och de två vakterna syns inte alls.
+        "cause": str(getattr(body, "death_cause", "") or "unknown"),
 
         "agent_id": int(getattr(agent, "id", -1)),
 
