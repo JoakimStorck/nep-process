@@ -20,6 +20,10 @@ Näringskretsloppet är det som skapar fläckvishet: konkurrens om cellnäring g
 
 Däremot kräver arbetet inte att hela faunamigreringen är gjord. Det behöver att `sense_radius` och `sense_rate` får läsare och kostnader — inte att `Body`:s samtliga fält har bytt ägare. Det motiverar en uppdelning: **Steg 6a — kapacitetsläsare och kostnader för sensing**, som kan ligga direkt efter delmängdsmaskineriet, och **Steg 6b — resten av fauna store-first**.
 
+## Vad som redan är rättat
+
+**Perceptionsfältet visar skottmassa.** `flora_cell_mass` summerade hela växtmassan, alltså även rötter, som varken kan ses eller ätas. Efter 0071 — betningshorisonten — innebar det att djuret navigerade mot en signal som överdrev måltiden två till tre gånger vid den uppmätta rotandelen 0,55–0,70. Rättat; se `docs/statusanalys-vaxtcykeln.md` för sammanhanget.
+
 ## Nuläget
 
 `_T_SENSE` (locus 17) → `pheno.sense_strength` → `_sense_level()` ger fyra nivåer. Varje nivå sätter tre parametrar samtidigt på agentens egen AP-kopia:
@@ -75,7 +79,23 @@ Det här är den axel som mest direkt kopplar till verklig biologi: bytesdjur ha
 
 **Brus.** Det kan härledas ur akuitet i stället för att bära ett eget locus. Ett skarpare öga ger en renare signal; det behöver inte vara ett oberoende val.
 
-**Diskriminering** — att skilja flora från fauna från kadaver. Intressant på sikt, men den fördubblar strategirymden och bör vänta tills de fyra ovan har visat att de differentierar något.
+**Diskriminering** — att skilja flora från fauna från kadaver.
+
+> **Beslut, juli 2026.** Principen är fastlagd även om byggandet skjuts upp:
+> **sensorn detekterar, organismen tolkar.** I dag levererar sensingen tre
+> färdigsorterade kanaler — flora, kadaver, artfrände — vilket är en sensor som
+> redan har dömt. Ingen organism betalar för att kunna skilja dem åt, och ingen
+> kan förlora förmågan. Ett djur som ser en rörelse i gräset vet i verkligheten
+> inte om det är en partner eller ett hot förrän signalen tolkats, och den
+> tolkningen kan slå fel.
+>
+> Diskriminering ska därför vara en kapacitet med kostnad och med brus som gör
+> misstag möjliga. Först då blir flykt, jakt och parning evolverade beteenden i
+> stället för kanaler. Det är en förutsättning för att risk ska kunna vägas mot
+> föda.
+>
+> Arbetet är stort och prioriteras inte nu. Men premissen är beslutad, så att
+> Steg 6a inte behöver ta om frågan.
 
 ---
 

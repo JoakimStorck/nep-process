@@ -342,6 +342,22 @@ Tre saker återstår att döma, och de kräver längre körningar än sandlådan
 
 **Bördighetstestet** är nu körbart och är den viktigaste enskilda mätningen i planen: `--nutrient-init 0.64` mot standardens 0,32 ska ge omkring dubbel stående biomassa medan dynamikens *form* är oförändrad. Håller det är taket ekologiskt; håller det inte sitter det någon annanstans.
 
+## Steg 5e — Perceptionsfältet visar skottmassa
+
+*Rättar ett fel som 0071 införde och som ingen mätning fångade förrän dödsorsakerna loggades.*
+
+- ~~`flora_cell_mass` summerar `mass − flora_root_mass`.~~ **Klart.**
+
+`flora_cell_mass` är fältet strålarna samplar. Det summerade **hela** växtmassan, alltså även rötter. Sedan 0071 stannar betningen vid roten, så djuret navigerade mot en signal som vid den uppmätta rotandelen 0,55–0,70 överdrev måltiden **två till tre gånger**.
+
+Det är inte en fråga om att sensorn ska bedöma ätbarhet. Rötterna är under jord: de kan varken ses eller ätas, och samma horisont definierar båda. Att fältet visade dem betydde att sensorn rapporterade något fysiskt osynligt.
+
+Tidpunkten stämmer med symptomet. Före 0071 var hela plantan ätbar och fältet korrekt. Efter blev svält den dominerande dödsorsaken — 60,2 procent av 221 dödsfall i p71b — hos djur som dog med floran på 47 000 individer omkring sig.
+
+**Principbeslut infört i `docs/synens-axlar.md`:** sensorn detekterar, organismen tolkar. Diskriminering mellan flora, kadaver och artfrände är i dag gratis och felfri — tre färdigsorterade kanaler, alltså en sensor som redan dömt. Den ska bli en kapacitet med kostnad och med brus som gör misstag möjliga. Arbetet prioriteras inte nu, men premissen är beslutad så att Steg 6a slipper ta om frågan.
+
+**Ogjort:** de två navigationsmätningarna — styr agenterna mot det de ser, och hinner de fram. De bör göras efter rättningen; att mäta navigationsförmåga mot ett fält som ljuger om måltiden ger ett svar som inte går att tolka.
+
 ## Steg 5d — Dödsorsak i life-loggen
 
 *Använder befintlig infrastruktur. `LifeLogger` och `death_record` fanns redan; de var bara aldrig exponerade.*

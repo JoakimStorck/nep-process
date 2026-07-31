@@ -605,7 +605,16 @@ class OrganismStore:
         is_flora = self.kind[sorted_slots] == 1
         if np.any(is_flora):
             fcells = sorted_cells[is_flora]
-            fmass = self.mass[sorted_slots][is_flora].astype(np.float64, copy=False)
+            # Skottmassa, inte total. Rötterna är under jord: de kan varken
+            # ses eller ätas. Att fältet summerade hela växten betydde att
+            # sensorn rapporterade något fysiskt osynligt — och sedan 0071, då
+            # betningen stannar vid roten, att djuret såg två till tre gånger
+            # mer mat än det kunde få i sig. Det är inte en fråga om att
+            # sensorn ska bedöma ätbarhet; samma horisont definierar både vad
+            # som syns och vad som går att äta.
+            _fm_all = self.mass[sorted_slots][is_flora].astype(np.float64, copy=False)
+            _fr_all = self.flora_root_mass[sorted_slots][is_flora].astype(np.float64, copy=False)
+            fmass = np.maximum(0.0, _fm_all - _fr_all)
             fstruct = self.structure[sorted_slots][is_flora].astype(np.float64, copy=False)
             fstarts = _group_starts(fcells)
             fu = fcells[fstarts]
