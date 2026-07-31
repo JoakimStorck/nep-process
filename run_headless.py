@@ -29,6 +29,7 @@ direkt i CI eller som pre-commit-kontroll.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 
@@ -125,6 +126,12 @@ def parse_args() -> argparse.Namespace:
                     help="WorldParams.nutrient_loss_frac, andel som lämnar systemet vid nedbrytning")
     ap.add_argument("--uptake-rate", type=float, default=None,
                     help="WorldParams.uptake_rate_per_area, kg näring per månad och areaenhet")
+    ap.add_argument("--snapshot-every", type=int, default=0,
+                    help="skriv en PNG av världen var N:te tick (0 = av)")
+    ap.add_argument("--snapshot-dir", type=str, default="snapshots",
+                    help="katalog för bildrutorna; skapas om den saknas")
+    ap.add_argument("--snapshot-scale", type=int, default=2, help="pixlar per cellbredd")
+    ap.add_argument("--snapshot-mode", type=str, default="BC", help="viewerns ritläge")
     ap.add_argument("--life-log", type=str, default=None,
                     help="skriv life.jsonl med födslar och dödsfall, inklusive dödsorsak")
     ap.add_argument("--check-every", type=int, default=500,
@@ -336,6 +343,39 @@ def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
             flush=True,
         )
 
+    # --- bildrutor utan fönster -------------------------------------------
+    # Samma ritkod som den interaktiva viewern, men sparad till fil. Gör
+    # rumslig fördelning granskbar över ssh, där ett fönster inte går att
+    # öppna. Pygame importeras först när första bildrutan begärs, så en
+    # körning utan --snapshot-every rör aldrig biblioteket.
+    snapshot_every = max(0, int(a.snapshot_every))
+    _snap = {"viewer": None, "pygame": None}
+
+    def write_snapshot(tick_no: int) -> None:
+        if _snap["viewer"] is None:
+            os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+            import pygame as _pg
+            from viewer_pygame import ViewerConfig, WorldViewer
+
+            _pg.init()
+            _snap["pygame"] = _pg
+            _snap["viewer"] = WorldViewer(
+                ViewerConfig(scale=int(a.snapshot_scale), mode=str(a.snapshot_mode))
+            )
+            os.makedirs(str(a.snapshot_dir), exist_ok=True)
+
+        viewer = _snap["viewer"]
+        # update() kan hoppa över bildrutor enligt render_every; anropa tills
+        # en faktiskt ritats.
+        for _ in range(max(1, int(viewer.cfg.render_every)) + 1):
+            viewer.update(pop)
+            if viewer._screen is not None:
+                break
+        if viewer._screen is None:
+            return
+        path = os.path.join(str(a.snapshot_dir), f"t{tick_no:07d}.png")
+        _snap["pygame"].image.save(viewer._screen, path)
+
     failures = 0
     check_every = max(0, int(a.check_every))
     report_every = max(0, int(a.report_every))
@@ -369,6 +409,9 @@ def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
                 print(report.summary(), file=sys.stderr, flush=True)
                 if a.fail_fast:
                     return 1
+
+        if snapshot_every and tick % snapshot_every == 0:
+            write_snapshot(tick)
 
         if report_every and tick % report_every == 0 and not a.quiet:
             el = time.perf_counter() - t0

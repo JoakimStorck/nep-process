@@ -342,6 +342,16 @@ Tre saker återstår att döma, och de kräver längre körningar än sandlådan
 
 **Bördighetstestet** är nu körbart och är den viktigaste enskilda mätningen i planen: `--nutrient-init 0.64` mot standardens 0,32 ska ge omkring dubbel stående biomassa medan dynamikens *form* är oförändrad. Håller det är taket ekologiskt; håller det inte sitter det någon annanstans.
 
+## Steg 5f — Bildrutor från en huvudlös körning
+
+*Rumslig fördelning går inte att läsa ur tidsserier. Viewern fanns men krävde ett fönster.*
+
+- ~~`--snapshot-every` i `run_headless.py`.~~ **Klart.** Plus `--snapshot-dir`, `--snapshot-scale`, `--snapshot-mode`.
+
+Samma ritkod som den interaktiva viewern, sparad till `t0000200.png` och så vidare. `render_frame.py` kunde redan rendera *en* bildruta men körde sin egen simulering fram till den — det gick inte att följa en pågående körning.
+
+Pygame importeras först när första bildrutan begärs, och `SDL_VIDEODRIVER=dummy` sätts strax innan. En körning utan flaggan rör aldrig biblioteket, så den huvudlösa vägen är oförändrad.
+
 ## Steg 5e — Perceptionsfältet visar skottmassa
 
 *Rättar ett fel som 0071 införde och som ingen mätning fångade förrän dödsorsakerna loggades.*
