@@ -73,8 +73,10 @@ väntar, och ansluter av sig själv när servern dyker upp — och återansluter
 servern startas om. Läge, färgaxel, ytfördelning, gamma och zoom är lokala val
 och kostar ingen rundtur.
 
-Fönstret får världens form vid första bildrutan, nedskalad så att den ryms på
-skärmen. En värld på 64×256 celler är nästan fyra gånger högre än den är bred,
+Fönstret är ett fönster: världen ritas en gång, och där fönstret sträcker sig
+utanför den fylls med tom bakgrund. Är världen mindre än fönstret centreras
+den. Fönstret får världens form vid första bildrutan, nedskalad så att den
+ryms på skärmen. En värld på 64×256 celler är nästan fyra gånger högre än den är bred,
 och `--screen-frac` styr hur stor del av skärmen den får ta. `--window 400x900`
 sätter måtten explicit i stället. Fönstret går att ändra storlek på under
 körning.

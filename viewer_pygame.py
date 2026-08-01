@@ -8,6 +8,10 @@ import numpy as np
 
 from viewframe import FLORA_TRAITS, TEMP_RANGE
 
+# Bakgrund där fönstret sträcker sig utanför världen. Mörk men inte svart:
+# den ska gå att skilja från en cell utan liv i den.
+OUTSIDE_RGB = np.array([0.055, 0.065, 0.080], dtype=np.float32)
+
 
 # ---------- Utilities ----------
 def _clip01(x: np.ndarray) -> np.ndarray:
@@ -107,6 +111,7 @@ class WorldViewer:
         self._view_cx = 0.0
         self._view_cy = 0.0
         self._drag = None
+        self._pixel_valid = None
 
         self._screen = None
         self._clock = pygame.time.Clock()
@@ -239,21 +244,32 @@ class WorldViewer:
         wx2, wy2 = self._px_to_world(px, py)
         self._view_cx += wx - wx2
         self._view_cy += wy - wy2
-        self._wrap_view(grid)
+        self._clamp_view(grid)
 
     def pan_px(self, dx: int, dy: int, grid) -> None:
         if not self._viewport or self._ppu_view is None:
             return
         self._view_cx -= dx / self._ppu_view
         self._view_cy -= dy / self._ppu_view
-        self._wrap_view(grid)
+        self._clamp_view(grid)
 
-    def _wrap_view(self, grid) -> None:
-        # Världen är toroidal, så utsnittet får wrappa fritt. cell_of_many
-        # hanterar redan randen, men centrum hålls i intervallet för att
-        # flyttalen inte ska vandra iväg under lång panorering.
-        self._view_cx %= float(grid.extent_x)
-        self._view_cy %= float(grid.extent_y)
+    def _clamp_view(self, grid) -> None:
+        """
+        Håll utsnittet innanför världen.
+
+        Världen är toroidal och skulle kunna kaklas i all oändlighet, men det
+        är inte vad ett fönster är. Utsnittet klampas därför mot världens
+        kanter, och när världen är mindre än fönstret centreras den i stället
+        — att panorera i tomrum är bara ett sätt att tappa bort sig.
+        """
+        ww, wh = self._win_size
+        for axis, extent, win in (("x", float(grid.extent_x), ww), ("y", float(grid.extent_y), wh)):
+            half = 0.5 * win / self._ppu_view
+            name = "_view_c" + axis
+            if 2.0 * half >= extent:
+                setattr(self, name, 0.5 * extent)
+            else:
+                setattr(self, name, float(np.clip(getattr(self, name), half, extent - half)))
 
     def _px_to_world(self, px: int, py: int) -> tuple[float, float]:
         ww, wh = self._win_size
@@ -304,6 +320,17 @@ class WorldViewer:
         self._pixel_cell = np.asarray(
             grid.cell_of_many(XX.ravel(), YY.ravel()), dtype=np.int64
         ).reshape(h_px, w_px)
+
+        # cell_of_many wrappar, så en pixel utanför världen får ändå en cell —
+        # den på andra sidan. Det är rätt för en torus men fel för ett
+        # fönster: världen ska ritas en gång och resten vara tom. Masken är
+        # separabel i x och y, så den kostar två jämförelser per axel.
+        if self._viewport:
+            ok_x = (xs >= 0.0) & (xs < float(grid.extent_x))
+            ok_y = (ys >= 0.0) & (ys < float(grid.extent_y))
+            self._pixel_valid = None if (ok_x.all() and ok_y.all()) else np.outer(ok_y, ok_x)
+        else:
+            self._pixel_valid = None
 
         self._ppu = ppu
         self._w_px = w_px
@@ -529,18 +556,12 @@ class WorldViewer:
 
     def _screen_positions(self, wx, wy):
         """
-        Världskoordinater till fönsterkoordinater, med toroidala kopior.
+        Världskoordinater till fönsterkoordinater.
 
-        Faunan placerades tidigare med `(x * ppu) % fönsterbredd`. Det stämde
-        så länge fönstret var världen — då är modulo just den toroidala
-        wrappen. I utsnittsläget saknas origo och `W_px` är fönstrets bredd,
-        så djuren hamnade i en ruta av världens storlek i fönstrets hörn i
-        stället för på sina platser.
-
-        Wrappen hör till världen och inte till fönstret. Origo dras därför av
-        först, och wrappen sker mot världens utsträckning. Kopiorna gör att
-        ett djur nära världsranden syns på båda sidor, precis som floran redan
-        gjorde — den går via cell_of_many, som alltid wrappat rätt.
+        Wrappen hör till världen och inte till fönstret: origo dras av först,
+        och därefter finns inga kopior. Världen ritas en gång, så ett djur har
+        en plats. Djur utanför utsnittet faller bort här i stället för att
+        ritas utanför fönsterkanten.
         """
         g = getattr(self, "_grid", None)
         wx = np.asarray(wx, dtype=np.float64)
@@ -549,28 +570,16 @@ class WorldViewer:
             return []
 
         ppu = float(self._ppu)
-        span_x = float(g.extent_x) * ppu
-        span_y = float(g.extent_y) * ppu
+        sx = (wx - self._proj_x0) * ppu
+        sy = (wy - self._proj_y0) * ppu
 
-        sx = ((wx - self._proj_x0) * ppu) % span_x
-        sy = ((wy - self._proj_y0) * ppu) % span_y
-
-        nx = int(self._w_px / span_x) + 1
-        ny = int(self._h_px / span_y) + 1
         margin = 4 + int(self.cfg.agent_radius_px) * 3
-
-        out = []
-        for i in range(wx.size):
-            for kx in range(nx + 1):
-                px = sx[i] + kx * span_x
-                if px < -margin or px > self._w_px + margin:
-                    continue
-                for ky in range(ny + 1):
-                    py = sy[i] + ky * span_y
-                    if py < -margin or py > self._h_px + margin:
-                        continue
-                    out.append((i, int(px), int(py)))
-        return out
+        vis = (
+            (sx >= -margin) & (sx <= self._w_px + margin)
+            & (sy >= -margin) & (sy <= self._h_px + margin)
+        )
+        idx = np.flatnonzero(vis)
+        return [(int(i), int(sx[i]), int(sy[i])) for i in idx]
 
     def _draw_agents(self, frame) -> None:
         if not self.cfg.draw_agents:
@@ -725,6 +734,8 @@ class WorldViewer:
             img = self._compose_flora(frame, base)
         else:
             img = base[self._pixel_cell]
+        if self._pixel_valid is not None:
+            img = np.where(self._pixel_valid[..., None], img, OUTSIDE_RGB)
         self._blit_rgb01(img)
 
         self._draw_agents(frame)
