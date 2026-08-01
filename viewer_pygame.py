@@ -462,6 +462,99 @@ class WorldViewer:
         surf = pygame.surfarray.make_surface(np.transpose(img, (1, 0, 2)))
         self._screen.blit(surf, (0, 0))
 
+    def _claim_layout(self, frame):
+        """
+        Lägg ut cellernas ytfördelning som kilar och returnera uppslaget.
+
+        Returnerar (keys, vals, row_src): `keys` är segmentens startvinklar som
+        globalt växande tal `cell + vinkel`, `vals` raden segmentet tillhör
+        (-1 för bar mark) och `row_src` avbildningen tillbaka till bildrutans
+        radordning. Uppslaget görs sedan med ett searchsorted över hela
+        pixelfältet.
+        """
+        starts = np.asarray(frame.claim_starts, dtype=np.int64)
+        share = np.asarray(frame.claim_share, dtype=np.float64)
+        n_cells = starts.shape[0] - 1
+        if n_cells <= 0:
+            return None
+
+        counts = np.diff(starts)
+        n_rows = int(share.shape[0])
+        cell_of_row = np.repeat(np.arange(n_cells, dtype=np.int64), counts)
+
+        cdir = np.asarray(getattr(frame, "claim_dir", np.full(n_rows, -1.0)), dtype=np.float64)
+        if cdir.shape[0] != n_rows:
+            cdir = np.full(n_rows, -1.0)
+        is_spill = cdir >= -0.5
+
+        # Ordna raderna inom cellen: grannrader först, i riktningsordning, och
+        # cellens egna plantor efter. Det gör att flera grannkilar hamnar i
+        # rätt inbördes vridning kring cellen.
+        order = np.lexsort((np.where(is_spill, cdir, 2.0), cell_of_row))
+        share = share[order]
+        cdir = cdir[order]
+        is_spill = is_spill[order]
+        row_src = order
+
+        # Startvinkel för varje rads kil, räknat från cellens egen nollpunkt.
+        cum = np.cumsum(share)
+        before = np.concatenate(([0.0], cum))[starts[:-1]]
+        seg_start = cum - share - np.repeat(before, counts)
+
+        used = np.bincount(cell_of_row, weights=share, minlength=n_cells)[:n_cells]
+        bare = np.clip(1.0 - used, 0.0, 1.0)
+
+        # Vrid hela cellens kilkrans så att den grannrad som håller mest yta
+        # får sin kil centrerad rakt mot moderplantans cell. Med en enda
+        # grannrad blir det exakt; med flera pekar den största rätt och
+        # resten ligger i rätt ordning kring den. Det är skillnaden mellan
+        # att se sex lösryckta kilar och att se en planta som sträcker sig
+        # ut över sina grannar.
+        phi = np.zeros(n_cells)
+        si = np.flatnonzero(is_spill)
+        if si.size:
+            # Den grannrad som håller mest yta i cellen får styra vridningen.
+            # Sortera på (cell, andel) och ta den sista i varje cellgrupp.
+            o = np.lexsort((share[si], cell_of_row[si]))
+            si = si[o]
+            c = cell_of_row[si]
+            pick = si[np.append(np.flatnonzero(np.diff(c)), c.size - 1)]
+            phi[cell_of_row[pick]] = (
+                cdir[pick] - seg_start[pick] - 0.5 * share[pick]
+            ) % 1.0
+
+        # Segmenten är raderna plus cellens bara mark, som ett eget segment
+        # sist i varje cell.
+        seg_cell = np.concatenate([cell_of_row, np.arange(n_cells, dtype=np.int64)])
+        seg_row = np.concatenate([np.arange(n_rows, dtype=np.int64), np.full(n_cells, -1)])
+        seg_off = np.concatenate([seg_start, used])
+        seg_w = np.concatenate([share, bare])
+
+        keep = seg_w > 1e-9
+        seg_cell, seg_row, seg_off, seg_w = seg_cell[keep], seg_row[keep], seg_off[keep], seg_w[keep]
+
+        # Absolut vinkel för segmentets början, efter vridningen.
+        b = (phi[seg_cell] + seg_off) % 1.0
+
+        # Nyckeln cell + vinkel är ett enda växande tal, så en argsort räcker
+        # — ingen lexsort behövs för att gruppera per cell.
+        keys = seg_cell + b
+        srt = np.argsort(keys, kind="stable")
+        keys, vals, seg_cell = keys[srt], seg_row[srt], seg_cell[srt]
+        if keys.size == 0:
+            return None
+
+        # Ett segment per cell sträcker sig över nollpunkten: det med störst
+        # startvinkel, alltså gruppens sista. Det måste finnas med en gång
+        # till vid vinkel 0, annars blir en tårtbit per cell osynlig.
+        gstart = np.concatenate(([0], np.flatnonzero(np.diff(seg_cell)) + 1))
+        gend = np.append(gstart[1:] - 1, keys.size - 1)
+        keys = np.insert(keys, gstart, seg_cell[gend].astype(np.float64))
+        vals = np.insert(vals, gstart, vals[gend])
+
+
+        return keys, vals, row_src
+
     def _compose_flora(self, frame, base01: np.ndarray) -> np.ndarray:
         """
         Lägg ytfördelningen ovanpå bakgrunden.
@@ -494,48 +587,24 @@ class WorldViewer:
         ytor per bildruta, och den ritade dessutom en axelriktad kvadrat på
         ett hexgrid.
         """
-        starts = np.asarray(frame.claim_starts, dtype=np.int64)
-        share = np.asarray(frame.claim_share, dtype=np.float64)
-        n_cells = starts.shape[0] - 1
-        if n_cells <= 0:
+        lay = self._claim_layout(frame)
+        if lay is None:
             return base01
-
-        counts = np.diff(starts)
-        n_rows = int(share.shape[0])
-
-        # Kumulativ andel inom varje cell.
-        cum = np.cumsum(share)
-        if n_rows:
-            # Kumulativ summa inom cellen: dra bort summan fram till cellens
-            # start. Prefixet med en nolla gör att start = 0 faller ut rätt.
-            before = np.concatenate(([0.0], cum))[starts[:-1]]
-            cum = cum - np.repeat(before, counts)
-
-        # Nycklar: cellindex + kumulativ andel, plus en vaktpost per cell.
-        cell_of_row = np.repeat(np.arange(n_cells, dtype=np.int64), counts)
-        keys = np.empty(n_rows + n_cells, dtype=np.float64)
-        row_at = np.empty(n_rows + n_cells, dtype=np.int64)
-        sentinel_at = starts[1:] + np.arange(1, n_cells + 1, dtype=np.int64) - 1
-        is_sent = np.zeros(n_rows + n_cells, dtype=bool)
-        is_sent[sentinel_at] = True
-        keys[sentinel_at] = np.arange(n_cells, dtype=np.float64) + 1.0
-        row_at[sentinel_at] = -1
-        if n_rows:
-            keys[~is_sent] = cell_of_row + np.minimum(cum, 1.0)
-            row_at[~is_sent] = np.arange(n_rows, dtype=np.int64)
+        keys, vals, row_src = lay
 
         kind = "stipple" if self.cfg.flora_fill == "stipple" else "wedge"
         probe = self._pixel_cell.astype(np.float64) + self._u_field(kind, self._grid)
-        sel = np.searchsorted(keys, probe, side="left")
+        sel = np.searchsorted(keys, probe, side="right") - 1
         np.clip(sel, 0, keys.shape[0] - 1, out=sel)
-        row = row_at[sel]
+        row = vals[sel]
 
         img = np.array(base01[self._pixel_cell], dtype=np.float32, copy=True)
         hit = row >= 0
         if not np.any(hit):
             return img
 
-        r = row[hit]
+        r = row_src[row[hit]]
+
         axis = FLORA_TRAITS.index(self.cfg.flora_color_by) \
             if self.cfg.flora_color_by in FLORA_TRAITS else 0
         t = np.asarray(frame.claim_trait[:, axis], dtype=np.float32)[r]

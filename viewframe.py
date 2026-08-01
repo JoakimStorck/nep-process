@@ -35,7 +35,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import numpy as np
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 
 # Traitaxlarna floran kan färgkodas på. Ordningen är bindande: den är
 # kolumnordningen i `claim_trait` och den ordning tangenten T stegar i.
@@ -102,6 +102,12 @@ class ViewFrame:
     claim_fill: np.ndarray = field(default_factory=lambda: np.zeros(0, np.float32))
     claim_trait: np.ndarray = field(default_factory=lambda: np.zeros((0, len(FLORA_TRAITS)), np.float32))
 
+    # Riktningen från radens cell till plantans egen cell, som en andel av
+    # ett varv. -1 för rader i plantans egen cell. Viewern använder den för
+    # att rikta grannkilarna in mot moderplantan, så att en planta som täcker
+    # flera celler går att se som en planta.
+    claim_dir: np.ndarray = field(default_factory=lambda: np.zeros(0, np.float32))
+
     # --- fauna, en post per levande djur ---
     fauna_x: np.ndarray = field(default_factory=lambda: np.zeros(0, np.float32))
     fauna_y: np.ndarray = field(default_factory=lambda: np.zeros(0, np.float32))
@@ -159,6 +165,7 @@ def _claim_table(pop) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
             np.zeros(0, dtype=np.float32),
             np.zeros(0, dtype=np.float32),
             np.zeros((0, len(FLORA_TRAITS)), dtype=np.float32),
+            np.zeros(0, dtype=np.float32),
         )
 
     # Raderna kan peka på en slot som hunnit dö efter upptagspasset —
@@ -194,11 +201,26 @@ def _claim_table(pop) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
             v = _norm(store.flora_repro_alloc[slots], *_TRAIT_RANGE["growth"])
         trait[:, j] = v.astype(np.float32, copy=False)
 
+    # Riktning mot moderplantans cell. Grannraderna uppstår när en plantas
+    # rotarea överstiger 1 och spiller ut i de sex grannarna; för dem pekar
+    # riktningen tillbaka mot plantans egen cell. Avståndet tas kortaste
+    # vägen, eftersom världen wrappar.
+    grid = pop.grid
+    home = np.asarray(store.cell_idx[slots], dtype=np.int64)
+    cx = np.asarray(grid.cell_center_x, dtype=np.float64)
+    cy = np.asarray(grid.cell_center_y, dtype=np.float64)
+    ex, ey = float(grid.extent_x), float(grid.extent_y)
+    dx = (cx[home] - cx[cells] + 0.5 * ex) % ex - 0.5 * ex
+    dy = (cy[home] - cy[cells] + 0.5 * ey) % ey - 0.5 * ey
+    direction = (np.arctan2(dy, dx) / (2.0 * np.pi)) % 1.0
+    direction[home == cells] = -1.0
+
     return (
         starts,
         share.astype(np.float32, copy=False),
         fill.astype(np.float32, copy=False),
         trait,
+        direction.astype(np.float32, copy=False),
     )
 
 
@@ -269,7 +291,7 @@ def frame_from_pop(pop, births_total: int = 0, deaths_total: int = 0) -> ViewFra
     BK = max(1e-12, float(getattr(pop.WP, "B_K", 1.0)))
     CK = max(1e-12, float(getattr(pop.WP, "C_K", getattr(world, "C_K", 1.0)) or 1.0))
 
-    starts, share, fill, trait = _claim_table(pop)
+    starts, share, fill, trait, cdir = _claim_table(pop)
     fa = _fauna_table(pop)
 
     fl = _flora_slots(store)
@@ -302,6 +324,7 @@ def frame_from_pop(pop, births_total: int = 0, deaths_total: int = 0) -> ViewFra
         claim_share=share,
         claim_fill=fill,
         claim_trait=trait,
+        claim_dir=cdir,
         fauna_x=fa["x"],
         fauna_y=fa["y"],
         fauna_heading=fa["heading"],
@@ -350,6 +373,10 @@ _WIRE_U8: dict[str, tuple[float, float]] = {
     # Anspråket kan överstiga 1 — det är hela poängen med det. Taket 4 rymmer
     # den uppmätta spridningen med marginal; över det är cellen ändå mättad.
     "claimed": (0.0, 4.0),
+    # -1 betyder "egen cell". Intervallet rymmer sentinelvärdet och ger
+    # riktningen 1/128 varv, alltså knappt 3 grader — gott om upplösning
+    # för sex grannriktningar.
+    "claim_dir": (-1.0, 1.0),
     "temperature": TEMP_RANGE,
 }
 
