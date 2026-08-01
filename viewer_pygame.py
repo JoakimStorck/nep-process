@@ -527,21 +527,62 @@ class WorldViewer:
         img[hit] = img[hit] * (1.0 - alpha) + col * alpha
         return img
 
+    def _screen_positions(self, wx, wy):
+        """
+        Världskoordinater till fönsterkoordinater, med toroidala kopior.
+
+        Faunan placerades tidigare med `(x * ppu) % fönsterbredd`. Det stämde
+        så länge fönstret var världen — då är modulo just den toroidala
+        wrappen. I utsnittsläget saknas origo och `W_px` är fönstrets bredd,
+        så djuren hamnade i en ruta av världens storlek i fönstrets hörn i
+        stället för på sina platser.
+
+        Wrappen hör till världen och inte till fönstret. Origo dras därför av
+        först, och wrappen sker mot världens utsträckning. Kopiorna gör att
+        ett djur nära världsranden syns på båda sidor, precis som floran redan
+        gjorde — den går via cell_of_many, som alltid wrappat rätt.
+        """
+        g = getattr(self, "_grid", None)
+        wx = np.asarray(wx, dtype=np.float64)
+        wy = np.asarray(wy, dtype=np.float64)
+        if g is None or wx.size == 0:
+            return []
+
+        ppu = float(self._ppu)
+        span_x = float(g.extent_x) * ppu
+        span_y = float(g.extent_y) * ppu
+
+        sx = ((wx - self._proj_x0) * ppu) % span_x
+        sy = ((wy - self._proj_y0) * ppu) % span_y
+
+        nx = int(self._w_px / span_x) + 1
+        ny = int(self._h_px / span_y) + 1
+        margin = 4 + int(self.cfg.agent_radius_px) * 3
+
+        out = []
+        for i in range(wx.size):
+            for kx in range(nx + 1):
+                px = sx[i] + kx * span_x
+                if px < -margin or px > self._w_px + margin:
+                    continue
+                for ky in range(ny + 1):
+                    py = sy[i] + ky * span_y
+                    if py < -margin or py > self._h_px + margin:
+                        continue
+                    out.append((i, int(px), int(py)))
+        return out
+
     def _draw_agents(self, frame) -> None:
         if not self.cfg.draw_agents:
             return
 
         pygame = self.pg
-        ppu = float(self._ppu)
-        W_px, H_px = int(self._w_px), int(self._h_px)
         hl = int(self.cfg.agent_heading_len_px)
         r0 = int(self.cfg.agent_radius_px)
 
-        px_all = (np.asarray(frame.fauna_x, dtype=np.float64) * ppu).astype(np.int64) % W_px
-        py_all = (np.asarray(frame.fauna_y, dtype=np.float64) * ppu).astype(np.int64) % H_px
+        reps = self._screen_positions(frame.fauna_x, frame.fauna_y)
 
-        for i in range(frame.fauna_n):
-            px, py = int(px_all[i]), int(py_all[i])
+        for i, px, py in reps:
             dmg = float(frame.fauna_damage_frac[i])
             e = float(frame.fauna_energy_frac[i])
 
