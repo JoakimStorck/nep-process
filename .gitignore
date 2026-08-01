@@ -22,6 +22,7 @@ Figure_*.png
 
 # --- Results-directory ---
 results/
+runs/
 
 # --- OS / editor ---
 .DS_Store

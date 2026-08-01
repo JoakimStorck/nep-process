@@ -160,11 +160,13 @@ Det är just förhållandet mellan klass A och klass B som var trasigt: ämnesom
 
 ## Fällor
 
-Åtta av dem har kostat oss mätbar tid. De är värda att känna igen.
+Nio av dem har kostat oss mätbar tid. De är värda att känna igen.
 
 **En stock är inte en takt.** `E_cap_per_M` är en lagringskapacitet och skalar inte med dräneringarna. När dräneringarna växte men taket stod still räckte reserven inte en tick. Samma fel i `drain_rate_n`, som normerade en takt mot en stock — kvoten har då enheten 1/tid och ändrar värde vid enhetsbyte. Normera mot basalmetabolismen i stället; då blir måttet skalfritt.
 
-**Snabb dynamik får inte integreras explicit vid långa tick.** Den termiska tidskonstanten är en halv tick, och explicit Euler sköt kroppstemperaturen till −180 °C. Lösningen är analytisk relaxation, exakt för konstant tillförsel och ovillkorligt stabil. Rörelsens newtonska integration har samma problem — relaxationen mot terminalhastighet är sekunder mot ett tick på femton timmar — och bör förenklas till kvasistatisk form.
+**Snabb dynamik får inte integreras explicit vid långa tick.** Den termiska tidskonstanten är en halv tick, och explicit Euler sköt kroppstemperaturen till −180 °C. Lösningen är analytisk relaxation, exakt för konstant tillförsel och ovillkorligt stabil. Rörelsens newtonska integration har samma problem — relaxationen mot terminalhastighet är `M/c₁ ≈ 0,45 tick` — och bör förenklas till kvasistatisk form. Rotationen är den tredje instansen och den värsta: `turn_rate · dt = 6,0 rad/tick` mot ett varv på 6,28, alltså ingen tidskonstant alls.
+
+**Brus i en slumpvandring skalar som `√dt`, inte som `dt`.** Rotationsbrusets steg multipliceras med `dt`, vilket ger en varians per månad på `c²σ²·dt`. Halveras tidssteget halveras den effektiva rotationsdiffusionen, och därmed hela rörelsemönstret. Det är samma familj som fällan ovan men en annan variant: stokastisk integration i stället för styv relaxation, och den syns inte som instabilitet utan som en tyst parameterberoende. Klassindelningen nedan behöver därför en fjärde regel: **stokastiska termer skalar med kvadratroten ur tidssteget.**
 
 **Diskretionära utgifter får inte ligga bland de obligatoriska.** Låg tillväxten i dräneringssumman täckte katabolismen även den, så organismen bröt ner sin egen kropp för att bygga sin egen kropp. Materialet kom tillbaka som massa, så nettot syntes knappt, men varje varv kostade katabolismens utbyte och lade på skada.
 

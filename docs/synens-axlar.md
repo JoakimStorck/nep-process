@@ -1,6 +1,8 @@
 # Designskiss — synens axlar
 
-*Juli 2026. Underlag för Steg 6a i TODO.md. Status: förslag, inte beslut — uppdateras eller markeras som ersatt när Steg 6a byggs.*
+*Juli 2026, reviderat augusti 2026. Underlag för Steg 6a i TODO.md. Status: förslag, inte beslut — uppdateras eller markeras som ersatt när Steg 6a byggs.*
+
+Systerdokument: `docs/rorelsens-arkitektur.md` äger handlingen — hur uppfattning blir rörelse. Det här dokumentet äger perceptionen. Sektorformatet nedan är gränssnittet mellan dem och ägs här.
 
 ---
 
@@ -44,6 +46,20 @@ Det som saknas:
 - **Fyra punkter är en trubbig fenotyprymd.** Selektion behöver gradienter att klättra i.
 - **Kostnaden är platt per nivå.** Ingen strukturkostnad, alltså inget tryck mot enkelhet hos en organism som bär hög akuitet men sällan använder den.
 - **`sense_radius` och `sense_rate` i store skrivs men läses inte.** Samma glapp som resten av kapacitetsmodellen.
+- **Artfrändekanalen kastar allt utom den närmaste.** `see_agent_first_hit()` loopar avståndssteg utifrån och `break`ar vid första träffen. Cellerna läses redan, men bara en individ når observationsvektorn. Det gör flockning fysiskt omöjlig och blockerar parningsdriften när närmaste granne inte är parningsredo. Se `docs/rorelsens-arkitektur.md`, defekt 6.
+- **Bedömningen läser motpartens genom.** `attack_risk()` och `_evaluate_local_agent_drives()` läser `pheno.predation` och `pheno.diet` hos den upptäckta individen. Det är arvsmassa, inte något som kan ses. Det är det skarpaste lokalitetsbrottet i koden och det blir bärande när predationen aktiveras.
+
+---
+
+## Vad räckvidden inte ska lösa
+
+> **Princip, augusti 2026.** Sikten ska förbli lokal. Rörelsemotorns behov är **aggregering inom befintlig radie**, inte längre räckvidd.
+>
+> Vid låg täthet ligger närmaste artfrände på 22,6 cellbredder (N = 8) mot en syn på 7–12. Djuren ska inte kunna se varandra där, och Allee-tröskeln går därför inte att lösa med perception utan att bryta lokaliteten.
+>
+> Den ska lösas i rörelsen. Med riktningspersistens går sökandet från diffusivt till ballistiskt — 25 månader att nå en granne på 22,6 cellbredder i stället för 15 000 — utan att en enda cell till behöver läsas.
+>
+> `sense_radius` behåller alltså sitt nuvarande tak. Axeln är fortsatt värd att ha, men **nedåt**: kostnaden `~3r²` är det som skapar tryck mot enkelhet, och manifestets princip 3 mäts på att en organism med `sense_radius → 0` slutar kosta något alls.
 
 ---
 
@@ -97,6 +113,21 @@ Det här är den axel som mest direkt kopplar till verklig biologi: bytesdjur ha
 > Arbetet är stort och prioriteras inte nu. Men premissen är beslutad, så att
 > Steg 6a inte behöver ta om frågan.
 
+> **Delning av beslutet, augusti 2026.** Rörelsemotorn tvingade fram frågan om
+> vad av ovanstående som faktiskt blockerar. Svaret är: **genomuppslaget, inte
+> förväxlingen.**
+>
+> **Blockerande, byggs i Steg 6a.** Sektorpercepten bär observerbara storheter —
+> storlek och fart — och bedömningen "är detta ett hot" görs av organismen ur
+> dem, med möjlighet att slå fel. Det tar bort läsningen av motpartens
+> `pheno.predation` och `pheno.diet` och ger `attack_risk()` en ärlig grund.
+> Utan det är flykt och jakt inte beteenden utan kanaler, och predationen kan
+> inte aktiveras meningsfullt.
+>
+> **Fortsatt nedprioriterat.** Att flora, kadaver och artfrände ska kunna
+> förväxlas är den dyra delen och behåller sin plats i kön. Med observerbara
+> kännetecken på plats är den önskvärd, inte blockerande.
+
 ---
 
 ## Kostnadsmodellen
@@ -148,6 +179,8 @@ Om axlarna och kostnaderna är rätt satta ska följande differentiera sig utan 
 | Sessil eller nästan | ~0 | ~0 | — | — |
 
 Den sista raden är den viktigaste testet: en organism som inte rör sig ska kunna evolvera bort synen helt och därmed sluta kosta något — både i energi och i CPU. Det är manifestets princip 3 gjord mätbar.
+
+**Förbehåll.** Ingen av de fyra första raderna kan uttryckas av den nuvarande rörelsemotorn, oavsett hur synen evolverar: riktningen dekorrelerar på ett tick, drifterna utesluter varandra, och predationen avfyras aldrig. Tabellen är alltså en växel dragen på `docs/rorelsens-arkitektur.md` och kan inte lösas in före den. Det är ett argument för att prioritera sektorformatet framför `sense_rate` och `sense_fov` — det förra är rörelsemotorns förutsättning, de senare är fristående förbättringar som blir meningsfulla först när det finns beteenden att differentiera.
 
 ---
 

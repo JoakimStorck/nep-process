@@ -697,9 +697,25 @@ Näringsdriften är oförändrat god efter omskrivningen: 7,7e-10 relativt vid 1
 
 **Mätverktyg:** `run_headless.py --stats --flora-ratio N` rapporterar ms per tick och µs per floraindivid tillsammans med näringsdrift och invariantstatus; `--profile` ger hotspots.
 
+## Steg 5h — Rotationen som tillstånd
+
+*Numerisk rättning, oberoende av allt annat. Bör göras först: varje beteendemätning dessförinnan mäter brus. Underlag: `docs/rorelsens-arkitektur.md`, Del 1.*
+
+`turn_rate · dt = 6,0 rad/tick` mot ett varv på 6,28, och enbart utforskarbruset ger en standardavvikelse på 0,97 rad/tick. Riktningen dekorrelerar alltså på ett tick. Uppmätt nettoförflyttning per livstid är 1,1 cellbredder mot en bansträcka på 33 — kvot 0,034. Djuren rör sig utan att komma någonstans, och Allee-tröskeln vid cykelbottnarna är en följd: sökandet är diffusivt där det borde vara ballistiskt, 15 000 månader mot 25 för att nå närmaste granne vid N = 8.
+
+- Headingen blir ett tillstånd med persistenstid `τ_dir` i månader. Bruset skalar som `√dt` så att rotationsdiffusionen blir tidsstegsinvariant — i dag halveras den när tidssteget halveras.
+- Styrningen blir relaxation mot en önskad riktning med tak på vridhastigheten, i stället för en proportionell förstärkning på 1,54 per tick som slår över varje tick.
+- Vridhastighetens tak avtar med farten. Fart köper räckvidd och kostar manöverförmåga.
+- Farten görs kvasistatisk i samma svep; relaxationen mot terminalhastighet är `M/c₁ ≈ 0,45 tick`.
+- `_T_MOB` (locus 11, i dag utan läsare) får äga `τ_dir` och marschfarten.
+
+**Klart när:** nettoförflyttning genom bansträcka per livstid ligger långt över 0,034, och rotationsdiffusionen är oförändrad vid halverat `dt`.
+
 ## Steg 6a — Sensing som evolverbar kapacitet
 
 *Kräver Steg 4 för selektionstrycket och Steg 5 för delmängdsmaskineriet, men inte hela fauna-migreringen. Underlag: `docs/synens-axlar.md`.*
+
+Prioriteringen inom steget är satt av rörelsemotorns behov: sektorformatet och observerbara kännetecken först, `sense_rate` och `sense_fov` sedan. Räckvidden ökas inte — det som krävs är aggregering inom befintlig radie.
 
 Synen är i dag evolverbar i fyra diskreta steg längs en sammanslagen axel. Det som saknas är att axlarna kan handlas mot varandra och att kapaciteten kostar även när den inte används.
 
@@ -709,6 +725,20 @@ Synen är i dag evolverbar i fyra diskreta steg längs en sammanslagen axel. Det
 - Strålbaserad sampling ersätts av aggregering över `cells_within()` grupperad via grannmatrisen.
 
 **Klart när:** en organism med `sense_radius → 0` aldrig berör sensing-koden, och spridningen i `sense_radius` differentierar mot nisch med kostnadsmodellen påslagen men driftar neutralt utan den.
+
+## Steg 6c — Rörelsemotorn
+
+*Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*
+
+Den exklusiva reflexkedjan ersätts av viktade drifter. Tre döda beteendetraits får sina första läsare, predationen aktiveras, och flockning blir möjlig.
+
+- Sex drifter — föda, flykt, jakt, parning, värme, social — ger var sin riktning och vikt. Vektorsumman styr; ingen drift skriver över någon annan.
+- MLP:n viktar drifterna och får en sjunde utgång som är en fri riktning med egen vikt. Drifternas riktningar går in i observationsvektorn. Formen är beslutad: A med en utgång som är D, se dokumentets Del 4.
+- `_T_RISK_AV`, `_T_COLD_AV` och `_T_SOC` får läsare som flyktens, värmens och avståndshållningens vikter. `_T_SOCIAL_DIST` och `_T_ALIGN` tillkommer. Genomet går 38 → 40.
+- Predationen aktiveras: `attack_energy_gain` får en läsare så att predatorn tillgodogörs sitt byte. Förutsätter att kadaver skiljs från förna — beslutet står öppet sedan Steg 4 och blir här blockerande.
+- Hungern skalar födodriften kontinuerligt i stället för att grinda den vid 0,4. Det är mekanismen bakom flockdelning: en mätt flock håller ihop, en hungrig följer var sin gradient.
+
+**Klart när:** predationsdödsfall > 0 över 100 000 tick, inget beteendetrait saknar läsare, och `sociability` differentierar med predationen påslagen men driftar neutralt utan den.
 
 ## Steg 6b — Fauna store-first
 
@@ -754,8 +784,15 @@ Profilera fasmodellen under blandad realistisk belastning. Numba för sensing, C
 | 5 | Kostnad per floraindivid och tick | < 1 µs |
 | 5 | 10 000 flora | < 10 ms/tick |
 | 5 | `n_cells`-beroende termer i spatialindexet | 0 |
+| 5h | Nettoförflyttning ÷ bansträcka per livstid | ≫ 0,034 |
+| 5h | Rotationsdiffusion vid halverat `dt` | oförändrad; halveras i dag |
 | 6a | Sensing-kostnad för organism med `sense_radius → 0` | 0, och koden aldrig berörd |
 | 6a | Spridning i `sense_radius` med kostnad kontra utan | differentierar mot nisch kontra neutral drift |
+| 6c | Beteendetraits utan läsare | 0; i dag 3 |
+| 6c | Predationsdödsfall per 100 000 tick | > 0; i dag 0 i tre av tre |
+| 6c | Spridning i `sociability` med predation kontra utan | differentierar kontra neutral drift |
+| 6c | Korskorrelation i födelsetakt mellan latitudband | < 0,3; i dag 0,45–0,67 |
+| 6c | Andel av styrvektorn ur MLP:ns fria kanal | följs över tid, inget målvärde |
 | 6b | Kapacitetsfält utan läsare | 0 |
 | 6b | Kostnad per fauna och tick | mät baseline, tillåt ej regression |
 | 7 | Massbevarande i hydro över 10 000 tick | drift < 1e-6 relativt |
