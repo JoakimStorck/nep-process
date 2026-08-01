@@ -154,6 +154,15 @@ def death_record(
     birth_t = float(getattr(agent, "birth_t", float("nan")))
     age = float(t - birth_t) if math.isfinite(birth_t) else float("nan")
 
+    # Rörelsens verkningsgrad över livet. Bansträckan är summan av varje ticks
+    # förflyttning; nettot är vektorsumman utan torusvikning. Kvoten säger om
+    # organismen färdades eller bara rörde sig — den låg på 0,034 innan
+    # riktningen fick en persistenstid. Se docs/rorelsens-arkitektur.md, Del 1.
+    path_len = float(getattr(agent, "path_len", 0.0))
+    dx = float(getattr(agent, "disp_x", 0.0))
+    dy = float(getattr(agent, "disp_y", 0.0))
+    net_disp = math.sqrt(dx * dx + dy * dy)
+
     return {
         "event": "death",
         "t": float(t),
@@ -172,6 +181,11 @@ def death_record(
         "M": M,              # kg (body mass at death)
         "E": Et,
         "D": D,
+
+        # Rörelse över livet, i cellbredder.
+        "path_len": path_len,
+        "net_disp": net_disp,
+        "straightness": (net_disp / path_len) if path_len > 1e-12 else float("nan"),
 
         # Carcass deposited (kg, same unit system as M)
         "carcass_amount": float(carcass_amount),

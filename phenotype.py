@@ -619,6 +619,33 @@ def flora_lifespan(structure):
     return FLORA_LIFESPAN_MIN * (FLORA_LIFESPAN_MAX / FLORA_LIFESPAN_MIN) ** s
 
 
+# ---------------------------------------------------------------------------
+# Rörelsens riktningspersistens — härledd ur `mobility`
+# ---------------------------------------------------------------------------
+# `_T_MOB` bar `pheno.mobility` utan en enda läsare. Den äger nu hur långa
+# raksträckor organismen håller **i färdregimen** — kringgående sök på fläcken
+# har en gemensam och mycket kortare tid, satt av `AgentParams.dir_tau_local`.
+# Axeln är alltså inte "hur rakt djuret rör sig" utan "hur långt det förflyttar
+# sig när det har bestämt sig för att förflytta sig".
+#
+# Log-linjär av samma skäl som florans livslängd: axeln spänner en tiopotens
+# och en linjär skala hade lagt merparten av intervallet i den övre änden.
+#
+# **Avvägningen är tunn i det här läget och det är avsiktligt redovisat.** En
+# lång färdsträcka kostar ingenting så länge farten är oberoende av axeln, och
+# den enda nedsidan är att en organism som mislläser sin omgivning — percepten
+# bär brus — färdas längre bort från en god fläck innan den vänder. Den
+# verkliga motkraften är energisk och kommer när farten kopplas till regimen:
+# att färdas ska vara snabbt och därmed dyrt, att söka lokalt ska vara
+# långsamt och billigt. Se docs/rorelsens-arkitektur.md, Del 1.
+
+
+def direction_tau(mobility, tau_min: float = 1.5, tau_max: float = 15.0):
+    """Färdregimens riktningspersistens i månader. Skalär eller array."""
+    u = np.clip(mobility, 0.0, 1.0)
+    return float(tau_min) * (float(tau_max) / float(tau_min)) ** u
+
+
 @dataclass(frozen=True)
 class FloraRanges:
     # Andel av inkomsten som går till reproduktion i stället för till kropp.

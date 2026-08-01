@@ -12,7 +12,7 @@ Manifestet anger emergent beteende som det primära evolutionära målet. Rörel
 
 Den nuvarande rörelsemotorn kommer från en tidig version av modellen och har sedan dess fått lager ovanpå sig utan att grundformen omprövats. Tre mätningar visar att den inte bär det den ska:
 
-- **Djuren kommer ingenstans.** Nettoförflyttning över en livstid är 1,1 cellbredder mot en bansträcka på 33. Kvot 0,034.
+- **Djuren kommer ingenstans.** Rakheten över livet — nettoförflyttning genom bansträcka — är 0,069. De rör sig fort, 37 cellbredder per månad, och lägger 1 563 cellbredders bana på 85 cellbredders förflyttning.
 - **De uppfattar exakt en artfrände** — den närmaste — vilket gör flockning fysiskt omöjlig och blockerar parningsdriften när fel granne står närmast.
 - **Predationen är död kod.** Noll predationsdödsfall i tre körningar om vardera 100 000 tick.
 
@@ -33,23 +33,25 @@ MLP (23 obs + rekurrent hidden → 5 utgångar)
                              F_prop = u · F₀ · M^(2/3), explicit Euler mot dragkraft
 ```
 
-### Nio defekter
+### Tio defekter
 
 **1. Riktningen slumpas om varje tick.** `turn_rate · dt = 300 · 0,02 = 6,0 rad/tick` mot ett varv på 6,28. Enbart utforskarbruset ger en standardavvikelse på 0,97 rad/tick. Headingens dekorrelationstid är därmed ungefär ett tick.
 
-**2. Rotationsbruset är inte tidsstegsinvariant.** Steget skalar som `dt`, inte som `√dt`. Variansen per månad blir `c²σ²·dt` — halveras tidssteget halveras den effektiva rotationsdiffusionen. Modellens beteende beror alltså på tidsstegets storlek. Det är samma familj som den termiska relaxationen och den newtonska rörelseintegrationen, men en annan variant: stokastisk integration i stället för styv relaxation.
+**2. Fartintegrationen är divergent för merparten av populationen.** Explicit Euler mot dragkraften har förstärkningsfaktorn `|1 − dt·c₁/M|`, som passerar ett vid `M = dt·c₁/2 = 2,2 kg`. Uppmätt medianmassa är 1,3–1,7 kg. Schemat hålls ändligt bara av klampningen mot noll och `v_max`, och `F_prop` och `v` är därför aldrig i kraftbalans — vilket också gör att farten inte går att härleda ur `E_loss_loco` under antagande om stationaritet.
 
-**3. Styrregulatorn slår över.** Förstärkningen är `0,85 · 300 · 0,95 / π = 1,54` korrektion per enhet fel och tick. Över ett betyder att felet byter tecken varje tick och dämpas med faktor 0,54. Det är vinglandet, och det är kalibrerat mot ett tick som är för långt.
+**3. Rotationsbruset är inte tidsstegsinvariant.** Steget skalar som `dt`, inte som `√dt`. Variansen per månad blir `c²σ²·dt` — halveras tidssteget halveras den effektiva rotationsdiffusionen. Modellens beteende beror alltså på tidsstegets storlek. Det är samma familj som den termiska relaxationen och den newtonska rörelseintegrationen, men en annan variant: stokastisk integration i stället för styv relaxation.
 
-**4. Driftkedjan är exklusiv.** Exakt en drift per tick, ingen viktning. Ett flyende djur kan inte samtidigt söka mat — food steering är dessutom separat grindad på `flee_state`. Verkliga djur avväger; de växlar inte läge.
+**4. Styrregulatorn slår över.** Förstärkningen är `0,85 · 300 · 0,95 / π = 1,54` korrektion per enhet fel och tick. Över ett betyder att felet byter tecken varje tick och dämpas med faktor 0,54. Det är vinglandet, och det är kalibrerat mot ett tick som är för långt.
 
-**5. Parningsgrenen kastar policyns beslut.** `turn = clamp(0,95 · biasN, …)` — inte `turn +`. De övriga grenarna adderar. MLP:n är alltså helt frånkopplad i just det tillstånd där selektionen skulle ha mest att arbeta med.
+**5. Driftkedjan är exklusiv.** Exakt en drift per tick, ingen viktning. Ett flyende djur kan inte samtidigt söka mat — food steering är dessutom separat grindad på `flee_state`. Verkliga djur avväger; de växlar inte läge.
 
-**6. Agenten uppfattar exakt ett annat djur.** `see_agent_first_hit()` loopar avståndssteg utifrån och `break`ar vid första träffen. Observationsvektorn bär `pred_bearing` och `pred_dist` för den närmaste individen och ingen annan. Två följder: kohesion, separation och alignment saknar sina percept, och `best_mate` blir `None` när närmaste granne inte är parningsredo — även om en mottaglig partner står två cellbredder bakom.
+**6. Parningsgrenen kastar policyns beslut.** `turn = clamp(0,95 · biasN, …)` — inte `turn +`. De övriga grenarna adderar. MLP:n är alltså helt frånkopplad i just det tillstånd där selektionen skulle ha mest att arbeta med.
 
-**7. Riskbedömningen läser motpartens genom.** `_evaluate_local_agent_drives()` och `attack_risk()` läser `pheno.predation`, `pheno.diet`, `body.M`, `body.D` och `body.reserve_frac()` hos den upptäckta individen. De tre senare är i bästa fall delvis synliga; de två första är arvsmassa. Djuret vet att grannen är ett rovdjur genom att läsa dess gener. Det håller i en värld där hotgrenen aldrig avfyras och håller inte i den värld som byggs här.
+**7. Agenten uppfattar exakt ett annat djur.** `see_agent_first_hit()` loopar avståndssteg utifrån och `break`ar vid första träffen. Observationsvektorn bär `pred_bearing` och `pred_dist` för den närmaste individen och ingen annan. Två följder: kohesion, separation och alignment saknar sina percept, och `best_mate` blir `None` när närmaste granne inte är parningsredo — även om en mottaglig partner står två cellbredder bakom.
 
-**8. Predationen kan inte löna sig.** Tre skäl, alla verifierade:
+**8. Riskbedömningen läser motpartens genom.** `_evaluate_local_agent_drives()` och `attack_risk()` läser `pheno.predation`, `pheno.diet`, `body.M`, `body.D` och `body.reserve_frac()` hos den upptäckta individen. De tre senare är i bästa fall delvis synliga; de två första är arvsmassa. Djuret vet att grannen är ett rovdjur genom att läsa dess gener. Det håller i en värld där hotgrenen aldrig avfyras och håller inte i den värld som byggs här.
+
+**9. Predationen kan inte löna sig.** Tre skäl, alla verifierade:
 
 - `attack_energy_gain = 0,5` har **noll läsare**. `_step_predation()` drar predatorns energi och lägger skada på bytet, men predatorn tillgodogörs ingenting. Kadavret hamnar i världen som allmän egendom.
 - Kadavret poolas med förna i `detritus`, massviktat på strukturandel. En ren asätare får 0,087 ur detritus vid strukturandel 0,80 mot betarens 0,258 ur flora vid 0,57. Predatorn ser aldrig ett rikt kadaver. Frågan är sedan tidigare noterad som eget beslut i `TODO.md`; här blir den blockerande.
@@ -57,7 +59,7 @@ MLP (23 obs + rekurrent hidden → 5 utgångar)
 
 Utfallet: `hunt_eff = predation · diet^1,5` når `predator_trait_min` 0,20 hos 4–11 % av födslarna och `threat_predation_min` 0,35 hos 1–3 %. Hotgrenen avfyras nästan aldrig.
 
-**9. Sex parametrar och tre traits har noll läsare.** `mobility`, `risk_aversion` och `cold_aversion` i fenotypen; `flee_radius`, `mate_search_radius` och `attack_energy_gain` i `AgentParams`. `sociability` har en läsare, sist i en kedja som sällan når dit. Det är B1-glappet, på beteendesidan.
+**10. Sex parametrar och tre traits har noll läsare.** `mobility`, `risk_aversion` och `cold_aversion` i fenotypen; `flee_radius`, `mate_search_radius` och `attack_energy_gain` i `AgentParams`. `sociability` har en läsare, sist i en kedja som sällan når dit. Det är B1-glappet, på beteendesidan.
 
 ### Vad som ändå fungerar
 
@@ -78,29 +80,54 @@ Den som överlevde utvecklade attraktion, den som dog snabbast repulsion. Med n 
 
 ## Del 1 — Rotationen
 
-*Numerisk rättning. Oberoende av allt annat i dokumentet och bör göras först, eftersom varje beteendemätning dessförinnan mäter brus.*
+*Numerisk rättning plus en beteendemekanism. Oberoende av allt annat i dokumentet och bör göras först, eftersom varje beteendemätning dessförinnan mäter brus.*
 
-Tre ändringar i `_integrate_motion()`:
+### Rätt svar är inte rak rörelse
 
-**Riktningen får en persistenstid.** Headingen blir ett tillstånd med tröghet, inte ett val per tick. Utforskandet blir en korrelerad slumpvandring med tidskonstant `τ_dir` uttryckt i månader, inte tick — vilket är vad verkliga djur gör och vad som gör riktad sökning möjlig. Bruset skalar som `√dt` så att rotationsdiffusionen blir tidsstegsinvariant.
+Den slingrande banan är inte i sig ett fel. Kringgående sök i ett område är rätt beteende när födan är riklig — det finns ingen anledning att färdas då, och den kurviga banan är just det som håller organismen kvar på fläcken. Områdesbegränsad sökning är ett av de bäst belagda rörelsemönstren i naturen.
 
-**Styrningen blir relaxation mot en önskad riktning**, med en maximal vridhastighet i stället för en proportionell förstärkning per tick. Formen ska vara ovillkorligt stabil vid godtyckligt `dt`, av samma skäl som termoregleringen fick analytisk relaxation.
+Det som saknades var inte raka linjer utan **förmågan att välja**: att färdas när det finns skäl och söka lokalt när det inte finns. En organism vars riktning dekorrelerar på ett tick kan bara göra det ena.
 
-**Svängradien kopplas till farten.** Maximal vridhastighet avtar med hastigheten — centripetalvillkoret. Det är mekanism och inte kostnadsparameter, och det ger rörelsen en avvägning den saknar i dag: fart köper räckvidd men kostar manöverförmåga. Det gör flykt och förföljelse till något annat än en kapplöpning i rak linje, och det ger flockens sammanhållning en fysisk gräns.
+### Ändringarna
 
-Farten bör i samma svep göras kvasistatisk, vilket `docs/metabolismen.md` redan efterlyser: relaxationen mot terminalhastighet är `M/c₁ ≈ 0,45 tick`.
+**Riktningen får en persistenstid, och den är tillståndsberoende.** Headingen blir ett tillstånd med tröghet. `τ_dir` interpolerar mellan en kort söktid — kringgående sök på fläcken — och en lång färdtid. `explore_drive` väljer regim och byter därmed roll: den höjde tidigare bruset, alltså gav mer utforskning *sämre* förflyttning. Den är redan dämpad av `hunger · food_local` i födostyrningen och är därför rätt signal. Bruset skalar som `√dt` så att rotationsdiffusionen blir tidsstegsinvariant.
 
-`_T_MOB` (locus 11, i dag utan läsare) får äga `τ_dir` och marschfarten. Avvägningen är äkta: hög persistens ger effektiv translation men dålig lokal sökning, låg persistens tvärtom. Det är skillnaden mellan en vandrare och en betare.
+**Styrningen blir relaxation mot en önskad riktning**, med tak på vridhastigheten i stället för en proportionell förstärkning på 1,54 per tick. Formen är ovillkorligt stabil vid godtyckligt `dt`, av samma skäl som termoregleringen fick analytisk relaxation.
 
-### Varför Del 1 löser mötesproblemet utan att röra räckvidden
+**Svängradien kopplas till farten** via centripetalvillkoret `ω ≤ a_lat / v`. Fart köper räckvidd och kostar manöverförmåga. Talet är satt så att en organism kan vända inom sitt eget synfält vid marschfart; annars går födostyrningen sönder.
 
-Vid låg täthet ligger närmaste granne på 22,6 cellbredder (N = 8) mot en sensingräckvidd på 7–12. Djuren *ska* inte kunna se varandra där — allt annat vore ett brott mot lokalitetsprincipen.
+`_T_MOB` (locus 11, utan läsare) får äga **färdregimens** persistenstid. Axeln är alltså inte "hur rakt djuret rör sig" utan "hur långt det förflyttar sig när det bestämt sig för att förflytta sig".
 
-Skillnaden mellan att hitta varandra och inte göra det ligger i sökandets form, inte i sikten. Med dagens dekorrelationstid på ett tick blir förflyttningen diffusiv med `D = v²τ/2 ≈ 0,0085` cellbredder²/månad, vilket ger en förväntad tid på 15 000 månader att nå en granne på 22,6 cellbredder. Med persistens i månadsskala blir samma sträcka ballistisk: 25 månader.
+### Uppmätt
 
-Allee-tröskeln är alltså en sökgeometrieffekt, inte en perceptionseffekt, och den ska lösas i rörelsen. Det är det starkaste enskilda argumentet för att Del 1 kommer först.
+8 000 tick, seed 1, samma instrumentering i alla tre:
 
----
+```
+                      rakhet   p90     netto    fart    dödsfall   ålder
+baslinje               0,069  0,134    85 cb   37,3       74       43,4
+fast persistens        0,232  0,880   250 cb   36,6       57       47,1
+områdessökning         0,175  0,387   252 cb   33,5       44       50,0
+```
+
+Områdessökningen når **samma nettoförflyttning som den fasta persistensen med hälften så hög topprakhet**. Den färdas alltså lika långt utan att sluta söka, vilket är hela poängen. Den ger också färst dödsfall och längst liv av de tre.
+
+Tidsstegsberoendet, samma seed vid `dt = 0,01` mot `dt = 0,02`:
+
+```
+                      dt=0,02   dt=0,01   ändring
+baslinje                0,069     0,051     −26 %
+områdessökning          0,175     0,195     +11 %
+```
+
+Förbehåll: körningarna vid `dt = 0,01` avbröts efter 137–144 månader och ger n = 25 respektive 35, så talen är brusiga. Den gamla formens tidsstegsberoende är dessutom sammansatt — bruset skalar fel *och* styrförstärkningen faller från 1,54 till 0,77 och slutar slå över — så rakheten ensam separerar inte de två. Att brusskalningen är fel följer av formen och inte av mätningen: en slumpvandrings steg måste gå som `√dt`.
+
+### Vad som medvetet lämnas
+
+Fartintegrationen rättas **inte** här, trots att den är divergent. Att rätta den höjer den realiserade farten från 37 till en verklig terminalfart, och eftersom `effort = speed / v_max` matar skademodellen slår det direkt igenom i dödligheten: uppmätt gick dödsorsakerna från 68 % svält till 63 % skada och seed 1 dog vid tick 6 000 när båda ändrades i samma svep.
+
+Det är projektets egen lärdom i konkret form — att lossa en fastnaglad axel ogiltigförklarar kalibreringen bakom den. Farten byter form i en egen patch tillsammans med den omkalibrering den kräver.
+
+Det betyder också att `_T_MOB`:s avvägning är tunn tills dess. En lång färdsträcka kostar ingenting så länge farten är oberoende av regimen. Den verkliga motkraften är energisk och kommer med fartkopplingen: att färdas ska vara snabbt och därmed dyrt, att söka lokalt ska vara långsamt och billigt.
 
 ## Del 2 — Grundprinciper
 
@@ -130,7 +157,7 @@ Rörelsemotorn kan inte byggas ovanpå dagens percept. Den kräver tre saker av 
 
 > **Beslut, augusti 2026.** Det som blockerar rörelsemotorn är **genomuppslaget**, inte hela diskrimineringsarbetet.
 >
-> Sektorpercepten ska bära observerbara storheter — storlek och fart — och bedömningen "är detta ett hot" ska göras av organismen ur dem, med möjlighet att slå fel. Då får `attack_risk` en ärlig grund och defekt 7 försvinner.
+> Sektorpercepten ska bära observerbara storheter — storlek och fart — och bedömningen "är detta ett hot" ska göras av organismen ur dem, med möjlighet att slå fel. Då får `attack_risk` en ärlig grund och defekt 8 försvinner.
 >
 > Den fulla formen av "sensorn detekterar, organismen tolkar" — att flora, kadaver och artfrände kan förväxlas — är fortsatt önskvärd men inte längre blockerande. Den behåller sin nedprioritering.
 
@@ -283,8 +310,8 @@ Netto 38 → 40. Det är en expansion, men den övervägande delen av arbetet be
 
 | Egenskap | Målvärde | Nuläge |
 |---|---|---|
-| Nettoförflyttning ÷ bansträcka per livstid | ≫ 0,034 | **0,034** |
-| Rotationsdiffusion vid halverat `dt` | oförändrad | halveras |
+| Rakhet: nettoförflyttning ÷ bansträcka per livstid | högre, och spridd mellan individer | 0,069 → **0,175** |
+| Rakhet vid halverat `dt` | oförändrad | +11 % mot baslinjens −26 % |
 | Beteendetraits utan läsare | 0 | **3** |
 | Predationsdödsfall per 100 000 tick | > 0 | **0 i tre av tre** |
 | Latitudinell fördelning, vinter mot sommar | mätbart skild | ingen skillnad |
@@ -293,7 +320,7 @@ Netto 38 → 40. Det är en expansion, men den övervägande delen av arbetet be
 | Korskorrelation i födelsetakt mellan latitudband | < 0,3 | **0,45–0,67** |
 | Andel av styrvektorn ur MLP:ns fria kanal | följs över tid | — |
 
-Den första raden är den enda som måste vara sann innan någon av de andra betyder något. Den sista är övergångsmåttet från A mot D och har inget målvärde — den ska följas, inte optimeras.
+Den första raden är den enda som måste vara sann innan någon av de andra betyder något. Målet är inte att maximera den — en organism som alltid färdas rakt söker inte — utan att den ska variera med tillståndet. Den sista är övergångsmåttet från A mot D och har inget målvärde — den ska följas, inte optimeras.
 
 ---
 

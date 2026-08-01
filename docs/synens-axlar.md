@@ -46,7 +46,7 @@ Det som saknas:
 - **Fyra punkter är en trubbig fenotyprymd.** Selektion behöver gradienter att klättra i.
 - **Kostnaden är platt per nivå.** Ingen strukturkostnad, alltså inget tryck mot enkelhet hos en organism som bär hög akuitet men sällan använder den.
 - **`sense_radius` och `sense_rate` i store skrivs men läses inte.** Samma glapp som resten av kapacitetsmodellen.
-- **Artfrändekanalen kastar allt utom den närmaste.** `see_agent_first_hit()` loopar avståndssteg utifrån och `break`ar vid första träffen. Cellerna läses redan, men bara en individ når observationsvektorn. Det gör flockning fysiskt omöjlig och blockerar parningsdriften när närmaste granne inte är parningsredo. Se `docs/rorelsens-arkitektur.md`, defekt 6.
+- **Artfrändekanalen kastar allt utom den närmaste.** `see_agent_first_hit()` loopar avståndssteg utifrån och `break`ar vid första träffen. Cellerna läses redan, men bara en individ når observationsvektorn. Det gör flockning fysiskt omöjlig och blockerar parningsdriften när närmaste granne inte är parningsredo. Se `docs/rorelsens-arkitektur.md`, defekt 7.
 - **Bedömningen läser motpartens genom.** `attack_risk()` och `_evaluate_local_agent_drives()` läser `pheno.predation` och `pheno.diet` hos den upptäckta individen. Det är arvsmassa, inte något som kan ses. Det är det skarpaste lokalitetsbrottet i koden och det blir bärande när predationen aktiveras.
 
 ---

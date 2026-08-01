@@ -17,6 +17,7 @@ from phenotype import (
     diet_efficiency,
     assimilated_fraction,
     nutrient_content,
+    direction_tau,
     NUTRIENT_PER_KG_LABILE,
 )
 
@@ -98,7 +99,52 @@ class AgentParams:
     # Steering / policy kinematics
     # ------------------------
     v_max: float = 100.0
-    turn_rate: float = 300.0
+
+    # --- Styrningens kinematik -------------------------------------------
+    #
+    # `turn_rate` var 300 rad/månad, vilket vid dt = 0,02 ger 6,0 rad per tick
+    # mot ett helt varv på 6,28. Riktningen kunde alltså slumpas om helt på ett
+    # tick, och gjorde det: uppmätt rakhet — nettoförflyttning genom bansträcka
+    # över livet — var 0,069, alltså 1 563 cellbredders bana för 85 cellbredders
+    # förflyttning. Se docs/rorelsens-arkitektur.md, Del 1.
+    #
+    # Taket på vridhastigheten, i rad per månad. Vid 25 vänder en organism 180°
+    # på ungefär åtta tick i stället för på ett.
+    turn_rate_max: float = 25.0
+
+    # Relaxationstakt mot önskad riktning, 1/månad. Styrningen är analytisk
+    # relaxation och inte proportionell förstärkning per tick: den gamla formen
+    # hade förstärkningen 1,54 per tick, alltså översläng med teckenbyte varje
+    # tick. Formen nedan kan inte slå över vid något dt.
+    turn_gain: float = 6.0
+
+    # Lateral acceleration i cellbredder per månad². Svängradien följer av
+    # centripetalvillkoret: ω ≤ a_lat / v, alltså r = v²/a_lat. Fart köper
+    # räckvidd och kostar manöverförmåga, vilket är mekanism och inte
+    # kostnadsparameter. Talet är satt så att svängradien vid uppmätt marschfart
+    # (37 cellbredder per månad) blir omkring 1,5 cellbredder — en organism ska
+    # kunna vända inom sitt eget synfält, annars går födostyrningen sönder.
+    lat_accel_max: float = 900.0
+
+    # --- Riktningens persistens: områdessökning mot färd -------------------
+    #
+    # Rotationsdiffusionen uttrycks som en persistenstid och inte som en
+    # brusamplitud, och bruset skalar med √dt så att diffusionen blir
+    # tidsstegsinvariant. Den gamla formen skalade med dt och halverades därför
+    # när tidssteget halverades.
+    #
+    # Persistensen är **tillståndsberoende**, inte konstant. Kringgående sök i
+    # ett område är rätt beteende när födan är riklig — det finns ingen
+    # anledning att färdas då, och den slingrande banan håller organismen kvar
+    # på fläcken. Rak färd är rätt när det finns ett incitament att ta sig
+    # någon annanstans. Det är områdesbegränsad sökning, och den är en av de
+    # bäst belagda rörelsemönstren i naturen.
+    #
+    # `explore_drive` byter därmed roll: den höjde tidigare bruset, alltså gav
+    # mer utforskning *mindre* effektiv förflyttning. Nu väljer den regim.
+    dir_tau_local: float = 0.35   # månader; kringgående sök på fläcken
+    dir_tau_min: float = 1.5      # månader; färdregim vid mobility = 0
+    dir_tau_max: float = 15.0     # månader; färdregim vid mobility = 1
 
     # ------------------------
     # Sensing / perception
@@ -1892,6 +1938,14 @@ class Agent:
 
     last_speed: float = 0.0
 
+    # Bansträcka och nettoförflyttning sedan födseln, det senare utan
+    # torusvikning. Kvoten mellan dem är Del 1:s mätpunkt i
+    # docs/rorelsens-arkitektur.md — 0,034 innan riktningen fick tröghet, alltså
+    # 33 cellbredders bana för 1,1 cellbredders förflyttning.
+    path_len: float = 0.0
+    disp_x: float = 0.0
+    disp_y: float = 0.0
+
     last_B0: float = 0.0
     last_C0: float = 0.0
 
@@ -2454,46 +2508,135 @@ class Agent:
         allow_move: float,
         explore_drive: float,
     ) -> tuple[float, float]:
+        """
+        Riktning och fart som tillstånd med tröghet.
+
+        **Riktningen.** Tre saker var fel i den gamla formen. Vridhastigheten
+        hade inget tak — `turn_rate · dt = 6,0` rad per tick mot ett varv på
+        6,28. Styrningen var proportionell med förstärkningen 1,54 per tick,
+        alltså översläng med teckenbyte varje tick. Och bruset skalade med `dt`
+        i stället för `√dt`, vilket gör en slumpvandrings diffusion beroende av
+        tidsstegets storlek.
+
+        Följden var att headingen dekorrelerade på ett tick. Organismen rörde
+        sig fort — uppmätt 37 cellbredder per månad — men kom ingenstans:
+        rakheten över livet låg på 0,069.
+
+        **Persistensen är tillståndsberoende, inte hög.** Att göra rörelsen rak
+        vore fel svar. Kringgående sök i ett område är rätt beteende när födan
+        är riklig, och den slingrande banan är det som håller organismen kvar på
+        fläcken. Det som saknades var inte raka linjer utan förmågan att
+        **välja** — att färdas när det finns skäl och söka lokalt när det inte
+        finns. Se `explore_drive` i steg 2 nedan.
+
+        **Farten är avsiktligt orörd här.** Den bär samma sorts fel — se
+        kommentaren i steg 1 nedan — men att rätta båda i samma patch gör
+        utfallet oattribuerbart, och mätningen visar att det inte är en teoretisk
+        risk: fauna dog vid tick 6 000 i seed 1 när båda ändrades samtidigt.
+        """
         dt = float(ctx.dt)
-    
-        jitter = float(ctx.rng.normal(0.0, 0.65)) * explore_drive
-        self.heading = float(self.heading) + dt * float(self.AP.turn_rate) * (
-            0.85 * allow_move * turn + 0.25 * jitter
-        )
-        self.heading = self._signed_angle(self.heading)
-    
+
+        # --- 1. fart ----------------------------------------------------------
+        # Oförändrad i den här patchen. Formen är fel — förstärkningsfaktorn
+        # `|1 − dt·c₁/M|` passerar ett vid `M = dt·c₁/2 = 2,2 kg` och
+        # medianmassan är 1,3–1,7, så integrationen är divergent för merparten
+        # av populationen och hålls ändlig bara av klampningen. Men att rätta
+        # den ändrar den realiserade farten, och `effort = speed/v_max` i
+        # skademodellen är kalibrerad mot dagens tal. Uppmätt utfall när båda
+        # ändrades samtidigt:
+        # dödsorsakerna gick från 68 % svält till 63 % skada och seed 1 dog vid
+        # tick 6 000. Farten byter därför form i en egen patch, tillsammans med
+        # den omkalibrering den tvingar fram.
         fatigue = float(self.body.Fg)
         fatigue_factor = clamp(1.0 - 0.9 * fatigue, 0.05, 1.0)
         weak_move = float(self.body.move_factor())
         u = clamp(allow_move * thrust * fatigue_factor * weak_move, 0.0, 1.0)
-    
+
         v_prev = max(0.0, float(self.last_speed))
         M_pre = max(1e-9, float(self.body.M))
-    
+
         F0_cap = float(self.AP.F0)
         alpha = float(self.AP.force_mass_exp)
         F_prop = u * F0_cap * (M_pre ** alpha)
-    
+
         c1 = float(self.AP.drag_lin)
         c2 = float(self.AP.drag_quad)
-    
+
         F_drag_prev = c1 * v_prev + c2 * v_prev * v_prev
         a = (F_prop - F_drag_prev) / M_pre
         v_euler = max(0.0, v_prev + dt * a)
-    
+
         speed = min(v_euler, float(self.AP.v_max))
         v_mid = 0.5 * (v_prev + speed)
         self.last_speed = float(speed)
-    
+
         eta = clamp(float(self.AP.locomotion_eff), 1e-6, 1.0)
-        P_mech = max(0.0, F_prop * v_mid)
-        E_move = (dt * P_mech) / eta
-    
-        x_new = float(self.x) + dt * speed * math.cos(self.heading)
-        y_new = float(self.y) + dt * speed * math.sin(self.heading)
-        self.x, self.y = self.grid.wrap_pos(x_new, y_new)
-    
+        E_move = (dt * max(0.0, F_prop * v_mid)) / eta
+
+        # --- 2. riktning: relaxation med tak, plus persistent brus ------------
+        # Centripetalvillkoret: en snabb organism svänger trögt. Vid låg fart
+        # binder i stället det absoluta taket, så att uttrycket inte divergerar
+        # när farten går mot noll.
+        w_max = min(
+            float(self.AP.turn_rate_max),
+            float(self.AP.lat_accel_max) / max(speed, 1e-6),
+        )
+
+        # Analytisk relaxation mot den önskade riktningen. `turn` tolkas som ett
+        # riktningsanspråk i (−π, π) relativt nuvarande kurs; andelen som tas ut
+        # per tick ligger alltid i (0, 1) och kan därför aldrig slå över.
+        frac = 1.0 - math.exp(-float(self.AP.turn_gain) * dt)
+        d_steer = frac * clamp(float(allow_move) * float(turn), -1.0, 1.0) * math.pi
+
+        # Rotationsdiffusion uttryckt som persistenstid. σ = √(2·D·dt) med
+        # D = 1/τ gör diffusionen oberoende av tidssteget.
+        #
+        # τ interpolerar mellan kringgående sök och rak färd. `explore_drive`
+        # är redan dämpad av `hunger · food_local` i födostyrningen, alltså låg
+        # när organismen står på föda den vill ha och hög annars. Den är därmed
+        # rätt signal för regimvalet — men den användes tvärtom: mer utforskning
+        # gav mer brus och därmed *sämre* förflyttning.
+        tau_local = max(1e-6, float(self.AP.dir_tau_local))
+        tau_run = max(tau_local, float(self.pheno_dir_tau()))
+        e = clamp(float(explore_drive), 0.0, 1.0)
+        tau_dir = tau_local + (tau_run - tau_local) * e
+
+        d_noise = math.sqrt(2.0 * dt / tau_dir) * float(ctx.rng.normal(0.0, 1.0))
+
+        d_theta = clamp(d_steer + d_noise, -w_max * dt, w_max * dt)
+        self.heading = self._signed_angle(float(self.heading) + d_theta)
+
+        # --- 3. förflyttning och mätning -------------------------------------
+        step_x = dt * speed * math.cos(self.heading)
+        step_y = dt * speed * math.sin(self.heading)
+
+        # Bansträcka och nettoförflyttning ackumuleras utan torusvikning, så att
+        # kvoten mellan dem går att läsa i life-loggen. Den kvoten är Del 1:s
+        # enda mätpunkt: 0,034 före den här ändringen.
+        self.path_len += abs(dt * speed)
+        self.disp_x += step_x
+        self.disp_y += step_y
+
+        self.x, self.y = self.grid.wrap_pos(float(self.x) + step_x, float(self.y) + step_y)
+
         return float(speed), float(E_move)
+
+    def pheno_dir_tau(self) -> float:
+        """
+        Riktningens persistenstid i månader, ur `_T_MOB`.
+
+        Locuset hade noll läsare. Avvägningen behöver ingen egen kostnad för att
+        vara tvåsidig: hög persistens ger effektiv förflyttning men dålig lokal
+        genomsökning — organismen lämnar en god fläck och hittar inte tillbaka —
+        medan låg persistens ger tvärtom. Det är skillnaden mellan en vandrare
+        och en betare, och den biter bara i en fläckvis värld, vilket floran
+        efter Steg 4 faktiskt ger.
+        """
+        return direction_tau(
+            float(getattr(self.pheno, "mobility", 0.5)),
+            float(self.AP.dir_tau_min),
+            float(self.AP.dir_tau_max),
+        )
     
     
     def _perform_feeding(

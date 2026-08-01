@@ -697,19 +697,33 @@ Näringsdriften är oförändrat god efter omskrivningen: 7,7e-10 relativt vid 1
 
 **Mätverktyg:** `run_headless.py --stats --flora-ratio N` rapporterar ms per tick och µs per floraindivid tillsammans med näringsdrift och invariantstatus; `--profile` ger hotspots.
 
-## Steg 5h — Rotationen som tillstånd
+## Steg 5h — Riktningen som tillstånd
 
-*Numerisk rättning, oberoende av allt annat. Bör göras först: varje beteendemätning dessförinnan mäter brus. Underlag: `docs/rorelsens-arkitektur.md`, Del 1.*
+*Numerisk rättning plus en beteendemekanism. Oberoende av allt annat, och först: varje beteendemätning dessförinnan mäter brus. Underlag: `docs/rorelsens-arkitektur.md`, Del 1.*
 
-`turn_rate · dt = 6,0 rad/tick` mot ett varv på 6,28, och enbart utforskarbruset ger en standardavvikelse på 0,97 rad/tick. Riktningen dekorrelerar alltså på ett tick. Uppmätt nettoförflyttning per livstid är 1,1 cellbredder mot en bansträcka på 33 — kvot 0,034. Djuren rör sig utan att komma någonstans, och Allee-tröskeln vid cykelbottnarna är en följd: sökandet är diffusivt där det borde vara ballistiskt, 15 000 månader mot 25 för att nå närmaste granne vid N = 8.
+`turn_rate · dt = 6,0` rad per tick mot ett varv på 6,28, och styrningens förstärkning var 1,54 per tick. Riktningen dekorrelerade alltså på ett tick. Djuren rörde sig fort — uppmätt 37 cellbredder per månad — men kom ingenstans: rakheten över livet låg på 0,069, alltså 1 563 cellbredders bana för 85 cellbredders förflyttning.
 
-- Headingen blir ett tillstånd med persistenstid `τ_dir` i månader. Bruset skalar som `√dt` så att rotationsdiffusionen blir tidsstegsinvariant — i dag halveras den när tidssteget halveras.
-- Styrningen blir relaxation mot en önskad riktning med tak på vridhastigheten, i stället för en proportionell förstärkning på 1,54 per tick som slår över varje tick.
-- Vridhastighetens tak avtar med farten. Fart köper räckvidd och kostar manöverförmåga.
-- Farten görs kvasistatisk i samma svep; relaxationen mot terminalhastighet är `M/c₁ ≈ 0,45 tick`.
-- `_T_MOB` (locus 11, i dag utan läsare) får äga `τ_dir` och marschfarten.
+Rätt svar är inte rak rörelse. Kringgående sök i ett område är rätt beteende när födan är riklig, och den kurviga banan håller organismen kvar på fläcken. Det som saknades var förmågan att välja regim.
 
-**Klart när:** nettoförflyttning genom bansträcka per livstid ligger långt över 0,034, och rotationsdiffusionen är oförändrad vid halverat `dt`.
+- Headingen blir ett tillstånd med persistenstid. `τ_dir` interpolerar mellan kort söktid och lång färdtid, med `explore_drive` som regimval. Bruset skalar som `√dt` så att rotationsdiffusionen blir tidsstegsinvariant — den gamla formen skalade med `dt`.
+- Styrningen blir analytisk relaxation med tak på vridhastigheten, ovillkorligt stabil vid godtyckligt `dt`.
+- Vridhastighetens tak följer centripetalvillkoret `ω ≤ a_lat / v`. Fart köper räckvidd och kostar manöverförmåga.
+- `_T_MOB` (locus 11, utan läsare) får äga färdregimens persistenstid.
+- Life-loggen bär bansträcka, nettoförflyttning och deras kvot.
+
+Fartintegrationen rättas **inte** här. Den är divergent för merparten av populationen — förstärkningsfaktorn `|1 − dt·c₁/M|` passerar ett vid 2,2 kg mot en medianmassa på 1,3–1,7 — men att rätta den höjer den realiserade farten och `effort = speed / v_max` matar skademodellen. Uppmätt när båda ändrades samtidigt: dödsorsakerna gick från 68 % svält till 63 % skada och seed 1 dog vid tick 6 000. Farten byter form i Steg 5i med sin omkalibrering.
+
+**Klart när:** rakheten är mätbart högre än 0,069 och varierar med tillståndet, och den är oförändrad vid halverat `dt`.
+
+## Steg 5i — Farten som kraftbalans
+
+*Kräver Steg 5h. Underlag: `docs/rorelsens-arkitektur.md`, Del 1, avsnittet om vad som lämnas.*
+
+- Fartintegrationen byter till kvasistatisk form: terminalfarten löses ur kraftbalansen i stället för att integreras explicit mot en relaxationstid på 0,45 tick.
+- `effort` i skademodellen normeras mot något biologiskt i stället för mot `v_max`, som är ett arkitektoniskt tak.
+- Farten kopplas till rörelseregimen: färd är snabb och dyr, lokalt sök är långsamt och billigt. Det är också det som ger `_T_MOB` sin motkraft.
+
+**Klart när:** dödsorsakernas fördelning är kvar i samma regim som före ändringen, och `_T_MOB` har en mätbar avvägning.
 
 ## Steg 6a — Sensing som evolverbar kapacitet
 
@@ -784,8 +798,9 @@ Profilera fasmodellen under blandad realistisk belastning. Numba för sensing, C
 | 5 | Kostnad per floraindivid och tick | < 1 µs |
 | 5 | 10 000 flora | < 10 ms/tick |
 | 5 | `n_cells`-beroende termer i spatialindexet | 0 |
-| 5h | Nettoförflyttning ÷ bansträcka per livstid | ≫ 0,034 |
-| 5h | Rotationsdiffusion vid halverat `dt` | oförändrad; halveras i dag |
+| 5h | Rakhet: nettoförflyttning ÷ bansträcka per livstid | högre än 0,069 och tillståndsberoende |
+| 5h | Rakhet vid halverat `dt` | oförändrad |
+| 5i | Dödsorsakernas fördelning | oförändrad regim mot före fartändringen |
 | 6a | Sensing-kostnad för organism med `sense_radius → 0` | 0, och koden aldrig berörd |
 | 6a | Spridning i `sense_radius` med kostnad kontra utan | differentierar mot nisch kontra neutral drift |
 | 6c | Beteendetraits utan läsare | 0; i dag 3 |
