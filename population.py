@@ -134,6 +134,19 @@ class PopParams:
     # om dynamiken inte bär det faller floran tillbaka, och då är det den
     # dynamiken som ska rättas.
     flora_init_mass_ratio: float = 2000.0
+    # Medelmassa per sådd planta. Antalet faller ut ur måltotalen dividerat med
+    # det här talet, i stället för ur världens cellantal.
+    #
+    # 1,32 kg är den uppmätta jämviktsmassan per individ: 118 104 kg fördelat
+    # på 89 319 plantor i en floraköring utan fauna över 30 000 tick. Sådden
+    # hamnar därmed nära den struktur som ändå uppstår, i stället för att
+    # behöva växa dit från fel håll.
+    #
+    # Tätheten är dessutom självbegränsande sedan sådden betalas ur marken: en
+    # cell med `nutrient_init` = 0,117 kg fri näring räcker till omkring fem
+    # plantor av den här storleken, vilket är samma storleksordning som
+    # jämviktens 5,45 per cell. Plantor som inte får betalt krymps.
+    flora_init_plant_mass: float = 1.32
     #
     # Efter Steg 4b betyder talet vad det säger. Bördigheten ligger i
     # `WorldParams.nutrient_init` och sådden debiteras marken, så det här är en
@@ -1291,19 +1304,35 @@ class Population:
             # plantorna 7,7 kg och rymdes i 4 172 celler av 16 384: tre
             # fjärdedelar av världen fångade inget ljus alls, medan varje sådd
             # planta hade bladarea 3,0 i en cell som mättas vid 1,0 och därmed
-            # kastade bort två tredjedelar av sitt eget. Uppskattad
-            # ljusinfångning vid tick noll gick från omkring 25 procent till
-            # omkring 75 av samma biomassa.
-            n_flora = n_cells
-            spread_mean = want / max(1, n_cells)
+            # kastade bort två tredjedelar av sitt eget.
+            #
+            # Men steget stannade vid en planta per cell, och det är en planta
+            # för lite. Antalet sattes då av världens storlek och massan per
+            # individ föll ut som kvot — vid 130 170 kg blev plantorna 7,94 kg
+            # mot jämviktens 1,32, alltså sextusen jättar där det borde stå
+            # nittiotusen småplantor. Betningshorisonten verkar per planta, så
+            # en betare mötte en helt annan värld än den som faktiskt uppstår.
+            #
+            # Hur många plantor en cell rymmer ska avgöras av konkurrensen
+            # mellan rotsystemen, inte av sådden. Den mekanismen finns redan:
+            # anspråket är rotarea mot cellarea 1, överskott spiller till de
+            # sex grannarna, och summan skalas ner där marken är slut. Sådden
+            # sätter därför bara en rimlig plantstorlek och låter antalet följa.
+            per_plant = max(1e-9, float(self.PP.flora_init_plant_mass))
+            n_flora = max(1, int(round(want / per_plant)))
+            spread_mean = want / n_flora
         elif n_flora is None:
             n_flora = max(16, int(self.PP.max_pop) // 2)
 
-        n_flora = max(0, min(int(n_flora), n_cells))
+        n_flora = max(0, int(n_flora))
         if n_flora <= 0:
             return 0
 
-        cells = self.rng.choice(n_cells, size=n_flora, replace=False)
+        # Med återläggning. Utan den kunde en cell få högst en planta, vilket
+        # var hela begränsningen. Cellerna blir olika täta av slumpen, vilket
+        # är rimligare än exakt en var — och rotkonkurrensen sorterar det inom
+        # några hundra tick, precis som den gör med spridningen i drift.
+        cells = self.rng.choice(n_cells, size=n_flora, replace=True)
 
         created = 0
         placed = 0.0
@@ -1347,10 +1376,14 @@ class Population:
             placed += float(self.store.mass[slot])
 
         if target_mass is not None and placed < float(target_mass) * 0.999:
-            # Cellrymden räckte inte. Tyst avvikelse här vore ett dolt
-            # designfel; hellre en synlig anmärkning.
+            # Marken kunde inte betala. Sedan sådden köps ur den fria
+            # näringspoolen är det budgeten och inte cellrymden som sätter
+            # taket, och taket är då världens verkliga bördighet. Tyst
+            # avvikelse här vore ett dolt designfel; hellre en synlig
+            # anmärkning.
             print(f"[flora] sådd nådde {placed:.3f} kg av begärda "
-                  f"{float(target_mass):.3f} kg — cellrymden ({n_cells}) räckte inte")
+                  f"{float(target_mass):.3f} kg i {created} plantor — "
+                  f"marken hade inte näring för mer")
 
         return created
         

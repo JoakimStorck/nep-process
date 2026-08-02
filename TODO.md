@@ -948,6 +948,38 @@ tidskonstant     4 h        144 h
 
 Talen skalar linjärt med `nutrient_input`. Det gör bördighetsstegen enkel att sätta upp: fördubblad bördighet fördubblar alla tre.
 
+### Sådden får den täthet konkurrensen ändå ger
+
+*0087. Fynd ur en faunakörning som visade sig mäta fel sak.*
+
+Sextio djur i den nyseedade världen kollapsade på hundra månader: floran föll 130 170 → 20 268 kg och faunan till noll. Men körningen var ogiltig, och skälet stod i första raden:
+
+```
+[flora] sådd nådde 130 169 kg av begärda 191 390 — cellrymden (16384) räckte inte
+```
+
+Sådden drog celler **utan återläggning**. Varje cell kunde få högst en planta, så 130 170 kg blev 16 384 individer på 7,94 kg. Jämvikten är 89 319 plantor på 1,32 kg.
+
+Djuren mötte alltså sextusen jättar där det borde stå nittiotusen småplantor. Betningshorisonten verkar per planta — betaren tar skottet och lämnar roten — så refug, återväxt och funktionell respons såg en värld som inte uppstår i drift. Det förklarar också varför floran föll så fort trots att totalmassan låg nära jämvikten.
+
+**Hur många plantor en cell rymmer ska avgöras av rotkonkurrensen, inte av sådden.** Den mekanismen finns redan och är verksam: anspråket är rotarea mot cellarea 1, överskott spiller till de sex grannarna, och summan skalas ner där marken är slut. Jämvikten har 5,45 plantor per cell. Bara sådden kände inte till den.
+
+Ändringen är att dra celler **med** återläggning och låta antalet följa av en rimlig plantstorlek i stället för av världens cellantal:
+
+```
+flora_init_plant_mass = 1,32 kg     (uppmätt jämviktsmassa per individ)
+n_flora = måltotal / plantmassa
+cells   = rng.choice(n_cells, size=n_flora, replace=True)
+```
+
+Utfall vid samma måltotal: 144 993 plantor, 8,85 per cell, 16 383 av 16 384 celler bebodda, median 9 och max 23 per cell. Mot tidigare 16 384 plantor och exakt en per cell.
+
+**Tätheten är dessutom självbegränsande.** Sådden köps ur den fria näringspoolen sedan 0086, så en cell med `nutrient_init` = 0,117 kg räcker till omkring fem plantor av den storleken — samma storleksordning som jämviktens 5,45. Vid `--flora-ratio 2000` och `init_pop 60` levererade sådden 119 984 kg av begärda 191 390, alltså praktiskt taget exakt jämviktsmassan 118 104. Taket är nu världens verkliga bördighet i stället för dess cellantal, och diagnostikraden säger det.
+
+Med tjugo djur i den nya sådden håller sig beståndet på 17–26 över 3 000 tick i stället för att kollapsa.
+
+**Kvar:** sådd flora har fortfarande slumpade traits och ingen rumslig struktur — inga fläckar, ingen släktskapsstruktur, ingen selektionshistoria. En kort inkörning behövs fortfarande, men några tusen tick i stället för tjugotusen.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*

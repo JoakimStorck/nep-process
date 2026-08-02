@@ -354,6 +354,8 @@ def parse_args() -> argparse.Namespace:
                     help="bredare diagnostikrad och sammanfattning vid slut")
     ap.add_argument("--seeds", type=str, default=None,
                     help="kommaseparerad lista, t.ex. 1,2,3 — kör flera och jämför")
+    ap.add_argument("--flora-plant-mass", type=float, default=None,
+                    help="PopParams.flora_init_plant_mass, medelmassa per sådd planta")
     ap.add_argument("--flora-ratio", type=float, default=None,
                     help="PopParams.flora_init_mass_ratio; standard är modellens eget värde")
     ap.add_argument("--pop-log", type=str, default=None,
@@ -391,6 +393,8 @@ def build_population(a: argparse.Namespace, seed: int, hub=None) -> Population:
     PP = PopParams(init_pop=int(a.init_pop), max_pop=int(a.max_pop))
     if getattr(a, "flora_ratio", None) is not None:
         PP.flora_init_mass_ratio = float(a.flora_ratio)
+    if getattr(a, "flora_plant_mass", None) is not None:
+        PP.flora_init_plant_mass = float(a.flora_plant_mass)
     return Population(WP=WP, AP=AP, PP=PP, seed=int(seed), hub=hub)
 
 
