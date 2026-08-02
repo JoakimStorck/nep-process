@@ -535,6 +535,28 @@ class Population:
                         flow_sums[k] += float(fl.get(k, 0.0))
                     except Exception:
                         pass
+
+        # Skadeinflödets termer, summerade över levande. Att veta vilken term
+        # som faktiskt bygger skadan är förutsättningen för att kunna byta
+        # `effort`-normeringen mot något mätt: den går i dag mot `v_max = 100`,
+        # som är en klampningsgräns och ingen biologisk fart.
+        dmg_keys = ["dD_eff", "dD_met", "dD_age", "dD_starve", "dD_cold",
+                    "effort", "rest", "speed_n"]
+        dmg_sums = {k: 0.0 for k in dmg_keys}
+        for a in alive:
+            dm = getattr(getattr(a, "body", None), "last_damage_terms", None)
+            if isinstance(dm, dict):
+                for k in dmg_keys:
+                    try:
+                        dmg_sums[k] += float(dm.get(k, 0.0))
+                    except Exception:
+                        pass
+        if pop_n > 0:
+            # De tre sista är tillstånd och inte flöden; de rapporteras som
+            # medelvärde över beståndet.
+            for k in ("effort", "rest", "speed_n"):
+                dmg_sums[k] /= float(pop_n)
+        flow_sums.update(dmg_sums)
     
         # Backward compatible: mean_* som tidigare
         # Nya fält: median_* och pXX_* + mass/energy ledgers.

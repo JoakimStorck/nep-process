@@ -717,13 +717,16 @@ Fartintegrationen rättas **inte** här. Den är divergent för merparten av pop
 
 ## Steg 5i — Farten som kraftbalans
 
-*Kräver Steg 5h. Underlag: `docs/rorelsens-arkitektur.md`, Del 1, avsnittet om vad som lämnas.*
+*Kräver Steg 5h. Underlag: `docs/rorelsens-arkitektur.md`, Del 1.*
 
-- Fartintegrationen byter till kvasistatisk form: terminalfarten löses ur kraftbalansen i stället för att integreras explicit mot en relaxationstid på 0,45 tick.
-- `effort` i skademodellen normeras mot något biologiskt i stället för mot `v_max`, som är ett arkitektoniskt tak.
-- Farten kopplas till rörelseregimen: färd är snabb och dyr, lokalt sök är långsamt och billigt. Det är också det som ger `_T_MOB` sin motkraft.
+Explicit Euler mot dragkraften har förstärkningsfaktorn `|1 − dt·c₁/M|`, som passerar ett vid 2,2 kg mot en uppmätt medianmassa på 1,3–1,7. Schemat var divergent för merparten av populationen och hölls ändligt bara av klampningen, så farten svängde mellan noll och taket i stället för att följa gaspådraget.
 
-**Klart när:** dödsorsakernas fördelning är kvar i samma regim som före ändringen, och `_T_MOB` har en mätbar avvägning.
+- Terminalfarten löses ur `F_prop = c₁v + c₂v²` i stället för att integreras. Relaxationstiden är 0,45 tick, alltså kortare än tidssteget — samma fälla och samma lösning som den termiska relaxationen.
+- Skadeinflödets fem termer plus `effort`, `rest` och `speed_n` exporteras till pop-loggen. `effort` normeras mot `v_max = 100`, som är en klampningsgräns och ingen biologisk fart, och omnormeringen ska göras mot en mätning.
+
+Uppmätt, 8 000 tick seed 1: dödsorsakerna går från 61 % skada och 25 % svält till 43 % och 45 %, alltså tillbaka mot baslinjens 58/32. Skadeinflödet fördelar sig `dD_met` 49 %, `dD_eff` 29 %, `dD_age` 15 %, `dD_starve` 6 %, `dD_cold` 1 % — rörelsen står för knappt en tredjedel.
+
+**Klart när:** invariantsviten är godkänd och skadeinflödets fördelning är känd. Omnormeringen av `effort` och kopplingen mellan fart och rörelseregim ligger efter p78.
 
 ## Steg 6a — Sensing som evolverbar kapacitet
 
@@ -800,7 +803,8 @@ Profilera fasmodellen under blandad realistisk belastning. Numba för sensing, C
 | 5 | `n_cells`-beroende termer i spatialindexet | 0 |
 | 5h | Rakhet: nettoförflyttning ÷ bansträcka per livstid | högre än 0,069 och tillståndsberoende |
 | 5h | Rakhet vid halverat `dt` | oförändrad |
-| 5i | Dödsorsakernas fördelning | oförändrad regim mot före fartändringen |
+| 5i | Dödsorsakernas fördelning | oförändrad regim; uppmätt 43/45 mot baslinjens 58/32 |
+| 5i | Skadeinflödets termer | kända, inte gissade |
 | 6a | Sensing-kostnad för organism med `sense_radius → 0` | 0, och koden aldrig berörd |
 | 6a | Spridning i `sense_radius` med kostnad kontra utan | differentierar mot nisch kontra neutral drift |
 | 6c | Beteendetraits utan läsare | 0; i dag 3 |

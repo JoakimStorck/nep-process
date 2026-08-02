@@ -496,6 +496,9 @@ class Body:
     # energy ledger diagnostics (per-individual)
     last_ledger: dict | None = None
     last_flux: dict | None = None
+
+    # Skadeinflödets termer från senaste steget, för aggregering i pop-loggen.
+    last_damage_terms: dict | None = None
     ledger_steps: int = 0
     ledger_bad_steps: int = 0
     ledger_max_abs: float = 0.0
@@ -1307,7 +1310,35 @@ class Body:
         dD_in      = dD_eff + dD_met + dD_age + dD_starve + dD_cold
         dD_pos_rate = dD_in / max(dt, 1e-9)
 
-        self.D = clamp(D_before + dD_in, 0.0, _D_max)
+        # Skadeinflödets termer var för sig. Utan uppdelningen går det bara att
+        # se att skada dödar, inte vilken term som byggde den — och `effort`
+        # normeras mot `v_max`, som är ett arkitektoniskt tak och inte en
+        # biologisk fart. Omnormeringen ska göras mot en mätning och inte mot en
+        # gissning, så termerna exporteras först.
+        self.last_damage_terms = {
+            "dD_eff": float(dD_eff),
+            "dD_met": float(dD_met),
+            "dD_age": float(dD_age),
+            "dD_starve": float(dD_starve),
+            "dD_cold": float(dD_cold),
+            "effort": float(effort),
+            "rest": float(rest),
+            "speed_n": float(speed_n),
+        }
+
+        # Skadan före taket. Den, och inte det klampade värdet, är det som
+        # avgör om djuret överlever ticken.
+        #
+        # Klampen låg tidigare före reparationen, och reparationen drar alltid
+        # av en flisa. Ett djur vars inflöde slog i taket fick därför D satt
+        # till exakt D_max, sedan reparerat till D_max - epsilon, och
+        # dödstestet `D >= D_max` blev falskt — varje tick, hur stort inflödet
+        # än var. Det gav en fixpunkt exakt på gränsen: maximalt skadad och
+        # odödlig. Uppmätt i runs/p78/s2 satt den sista individen på
+        # mean_D = 1,00000 i 186 månader och blev 343 månader gammal, mot 140
+        # för det äldsta djur som någonsin dött i samma körning.
+        D_raw = D_before + dD_in
+        self.D = clamp(D_raw, 0.0, _D_max)
 
         E_pain_repair = float(self.step_pain_and_repair(ctx, pheno, D_before=D_before))
         E_out_repair  = E_pain_repair
@@ -1345,8 +1376,13 @@ class Body:
         # ---------------------------------------------------------
         # (5) Deterministic death conditions
         # ---------------------------------------------------------
-        if float(self.D) >= _D_max or float(self.M) <= _M_min:
-            self.death_cause = "damage" if float(self.D) >= _D_max else "starvation"
+        # Skadedöden prövas mot D_raw, alltså inflödet innan taket kapade det.
+        # Reparationen har verkat däremellan och kan sänka D under D_max, men
+        # den kan inte göra ogjort att skadan under ticken översteg vad
+        # kroppen bär. Att pröva mot self.D vore att låta klampen bestämma
+        # över biologin.
+        if float(D_raw) >= _D_max or float(self.M) <= _M_min:
+            self.death_cause = "damage" if float(D_raw) >= _D_max else "starvation"
             self.alive = False
             return
 
@@ -2529,49 +2565,50 @@ class Agent:
         **välja** — att färdas när det finns skäl och söka lokalt när det inte
         finns. Se `explore_drive` i steg 2 nedan.
 
-        **Farten är avsiktligt orörd här.** Den bär samma sorts fel — se
-        kommentaren i steg 1 nedan — men att rätta båda i samma patch gör
-        utfallet oattribuerbart, och mätningen visar att det inte är en teoretisk
-        risk: fauna dog vid tick 6 000 i seed 1 när båda ändrades samtidigt.
+        **Farten** löses ur kraftbalansen i stället för att integreras explicit
+        mot en relaxationstid som är kortare än tidssteget. Se steg 1 nedan.
         """
         dt = float(ctx.dt)
 
-        # --- 1. fart ----------------------------------------------------------
-        # Oförändrad i den här patchen. Formen är fel — förstärkningsfaktorn
-        # `|1 − dt·c₁/M|` passerar ett vid `M = dt·c₁/2 = 2,2 kg` och
-        # medianmassan är 1,3–1,7, så integrationen är divergent för merparten
-        # av populationen och hålls ändlig bara av klampningen. Men att rätta
-        # den ändrar den realiserade farten, och `effort = speed/v_max` i
-        # skademodellen är kalibrerad mot dagens tal. Uppmätt utfall när båda
-        # ändrades samtidigt:
-        # dödsorsakerna gick från 68 % svält till 63 % skada och seed 1 dog vid
-        # tick 6 000. Farten byter därför form i en egen patch, tillsammans med
-        # den omkalibrering den tvingar fram.
+        # --- 1. fart: kvasistatisk kraftbalans --------------------------------
+        # Explicit Euler mot dragkraften har förstärkningsfaktorn
+        # `|1 − dt·c₁/M|`, som passerar ett vid `M = dt·c₁/2 = 2,2 kg`. Uppmätt
+        # medianmassa är 1,3–1,7 kg, så schemat var divergent för merparten av
+        # populationen och hölls ändligt bara av klampningen mot noll och
+        # `v_max`. Farten svängde alltså mellan noll och taket i stället för att
+        # följa gaspådraget, och `F_prop` och `v` var aldrig i kraftbalans —
+        # vilket också är skälet till att farten inte gick att härleda ur
+        # `E_loss_loco` under antagande om stationaritet.
+        #
+        # Relaxationstiden `M/c₁ ≈ 0,45 tick` är kortare än tidssteget, så
+        # kvasistatisk form är den riktiga approximationen: terminalfarten löses
+        # direkt ur `F_prop = c₁v + c₂v²`. Samma fälla och samma lösning som den
+        # termiska relaxationen; se `docs/metabolismen.md`.
         fatigue = float(self.body.Fg)
         fatigue_factor = clamp(1.0 - 0.9 * fatigue, 0.05, 1.0)
         weak_move = float(self.body.move_factor())
         u = clamp(allow_move * thrust * fatigue_factor * weak_move, 0.0, 1.0)
 
-        v_prev = max(0.0, float(self.last_speed))
         M_pre = max(1e-9, float(self.body.M))
-
-        F0_cap = float(self.AP.F0)
-        alpha = float(self.AP.force_mass_exp)
-        F_prop = u * F0_cap * (M_pre ** alpha)
+        F_prop = u * float(self.AP.F0) * (M_pre ** float(self.AP.force_mass_exp))
 
         c1 = float(self.AP.drag_lin)
         c2 = float(self.AP.drag_quad)
 
-        F_drag_prev = c1 * v_prev + c2 * v_prev * v_prev
-        a = (F_prop - F_drag_prev) / M_pre
-        v_euler = max(0.0, v_prev + dt * a)
-
-        speed = min(v_euler, float(self.AP.v_max))
-        v_mid = 0.5 * (v_prev + speed)
+        if F_prop <= 0.0:
+            speed = 0.0
+        elif c2 > 0.0:
+            speed = (math.sqrt(c1 * c1 + 4.0 * c2 * F_prop) - c1) / (2.0 * c2)
+        else:
+            speed = F_prop / max(c1, 1e-12)
+        speed = min(max(0.0, speed), float(self.AP.v_max))
         self.last_speed = float(speed)
 
+        # Vid kraftbalans är den mekaniska effekten exakt dragkraftens
+        # dissipation. Uttrycket är oförändrat men beror inte längre på
+        # föregående ticks numeriska transient.
         eta = clamp(float(self.AP.locomotion_eff), 1e-6, 1.0)
-        E_move = (dt * max(0.0, F_prop * v_mid)) / eta
+        E_move = (dt * max(0.0, F_prop * speed)) / eta
 
         # --- 2. riktning: relaxation med tak, plus persistent brus ------------
         # Centripetalvillkoret: en snabb organism svänger trögt. Vid låg fart

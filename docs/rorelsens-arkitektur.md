@@ -121,13 +121,38 @@ områdessökning          0,175     0,195     +11 %
 
 Förbehåll: körningarna vid `dt = 0,01` avbröts efter 137–144 månader och ger n = 25 respektive 35, så talen är brusiga. Den gamla formens tidsstegsberoende är dessutom sammansatt — bruset skalar fel *och* styrförstärkningen faller från 1,54 till 0,77 och slutar slå över — så rakheten ensam separerar inte de två. Att brusskalningen är fel följer av formen och inte av mätningen: en slumpvandrings steg måste gå som `√dt`.
 
-### Vad som medvetet lämnas
+### Farten, och en rättelse
 
-Fartintegrationen rättas **inte** här, trots att den är divergent. Att rätta den höjer den realiserade farten från 37 till en verklig terminalfart, och eftersom `effort = speed / v_max` matar skademodellen slår det direkt igenom i dödligheten: uppmätt gick dödsorsakerna från 68 % svält till 63 % skada och seed 1 dog vid tick 6 000 när båda ändrades i samma svep.
+Fartintegrationen byter form i samma arbete men i en egen patch: `F_prop = c₁v + c₂v²` löses direkt i stället för att integreras explicit mot en relaxationstid på 0,45 tick.
 
-Det är projektets egen lärdom i konkret form — att lossa en fastnaglad axel ogiltigförklarar kalibreringen bakom den. Farten byter form i en egen patch tillsammans med den omkalibrering den kräver.
+**Rättelse.** Uppdelningen motiverades först med att en samtidig ändring flyttade dödsorsakerna "från 68 % svält till 63 % skada". Den jämförelsen var ogiltig — 68 % kom från p75:s hela 100 000-tickskörning och 63 % från en körning på 8 000 tick. Mätt mot rätt baslinje vid samma längd:
 
-Det betyder också att `_T_MOB`:s avvägning är tunn tills dess. En lång färdsträcka kostar ingenting så länge farten är oberoende av regimen. Den verkliga motkraften är energisk och kommer med fartkopplingen: att färdas ska vara snabbt och därmed dyrt, att söka lokalt ska vara långsamt och billigt.
+```
+                     skada   svält
+baslinje              58 %    32 %
+5h, områdessökning    61 %    25 %
+5i, kvasistatisk      43 %    45 %
+```
+
+Den kvasistatiska farten flyttar alltså fördelningen **tillbaka mot svält**, i motsatt riktning mot vad jag påstod. Uppdelningen i två patchar är ändå riktig — en ändring per körning är projektets metod — men den var inte motiverad av det jag angav.
+
+### `effort` normeras mot ett arkitektoniskt tak
+
+`speed_n = speed / v_max` med `v_max = 100`, som är en klampningsgräns och ingen biologisk fart. Uppmätt efter 5i: `speed_n` 0,32, `effort` 0,48, `rest` 0,50 i medeltal. Skadeinflödets termer, andel av totalt:
+
+```
+dD_met     49 %     drain_rate mot basalmetabolismen
+dD_eff     29 %     effort, alltså fart och aktivitet
+dD_age     15 %
+dD_starve   6 %
+dD_cold     1 %
+```
+
+Rörelsen står alltså för knappt en tredjedel av skadan, inte för merparten. Omnormeringen ska göras mot den mätningen och inte mot en gissning, och den ligger därför efter p78.
+
+### Vad som fortfarande saknas
+
+`_T_MOB`:s avvägning är tunn tills farten kopplas till rörelseregimen: att färdas ska vara snabbt och därmed dyrt, att söka lokalt ska vara långsamt och billigt. Det är en beteendeändring och inte en numerisk rättning, och den hör till ett eget steg.
 
 ## Del 2 — Grundprinciper
 

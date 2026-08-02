@@ -625,6 +625,62 @@ def check_flora_claims(pop) -> list[Violation]:
     return out
 
 
+def check_damage_saturation(pop) -> list[Violation]:
+    """
+    Ett levande djur får inte ligga kvar på skadetaket tick efter tick.
+
+    D_max är en dödströskel, inte ett viloläge. Ligger ett djur kvar strax
+    under taket över flera tick betyder det att någon gräns tillämpas i fel
+    ordning i förhållande till dödstestet — precis det fel som lät en individ
+    i runs/p78/s2 sitta på D = 1,00000 i 186 månader.
+
+    Kontrollen är medvetet trög: den kräver att samma individ setts mättad
+    vid flera på varandra följande anrop. Ett enstaka tick på taket är
+    legitimt — reparationen kan hinna ta ner skadan innan nästa tick — medan
+    en individ som fastnar där är en artefakt.
+    """
+    out: list[Violation] = []
+    AP = getattr(pop, "AP", None)
+    D_max = float(getattr(AP, "D_max", 1.0) or 1.0)
+    if D_max <= 0.0:
+        return out
+
+    # Hur många anrop i rad en individ måste ha varit mättad för att räknas.
+    # Sviten körs typiskt var n:te tick, så tre anrop är en lång stund.
+    limit = 3
+    tol = 1e-4
+
+    seen = getattr(pop, "_damage_saturation_streak", None)
+    if seen is None:
+        seen = {}
+        setattr(pop, "_damage_saturation_streak", seen)
+
+    now: dict[int, int] = {}
+    for a in getattr(pop, "agents", []) or []:
+        body = getattr(a, "body", None)
+        if body is None or not bool(getattr(body, "alive", False)):
+            continue
+        d = float(getattr(body, "D", 0.0))
+        if d < D_max - tol:
+            continue
+        aid = int(getattr(a, "id", getattr(a, "agent_id", id(a))))
+        now[aid] = seen.get(aid, 0) + 1
+
+    seen.clear()
+    seen.update(now)
+
+    stuck = sorted((n, aid) for aid, n in now.items() if n >= limit)
+    if stuck:
+        n, aid = stuck[-1]
+        out.append(Violation(
+            "damage_saturation",
+            f"{len(stuck)} levande djur ligger kvar på skadetaket "
+            f"(D >= {D_max - tol:.6f}); värst är id {aid} med {n} kontroller i rad "
+            f"— dödströskeln nås aldrig",
+        ))
+    return out
+
+
 ALL_CHECKS = (
     check_sparse_fields,
     check_nutrient_balance,
@@ -638,6 +694,7 @@ ALL_CHECKS = (
     check_spatial_index,
     check_agent_store_binding,
     check_flora_claims,
+    check_damage_saturation,
 )
 
 
