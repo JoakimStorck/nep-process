@@ -298,6 +298,9 @@ class Population:
         self._recent_sample_ids = []
         self._births_total = 0
         self._deaths_total = 0
+        # Kumulativt antal dödsfall där ingen dödsorsak sattes. Ska förbli noll;
+        # se check_death_cause_set i invariants.py.
+        self._deaths_without_cause = 0
 
         self._flora_summary_cache = None
 
@@ -2594,6 +2597,15 @@ class Population:
             self._write_body_surface_to_store(prey.store_slot, prey)
             
             if float(prey.body.D) >= float(prey.body.AP.D_max):
+                # Dödsorsaken måste sättas här. Det här är den enda av sex
+                # dödsvägar som dödar utanför `Body.step()`, och den satte
+                # tidigare ingenting — `records.death_record` föll då tillbaka
+                # på "unknown". Följden var att predationen var osynlig i
+                # life-loggen och felaktigt beskrevs som död kod i tre
+                # statusanalyser. Signaturen är entydig: samtliga 38 `unknown`
+                # över p75, p77 och p78 har D = 1,000000 exakt, vilket bara
+                # `min(D + dD, D_max)` ovan producerar.
+                prey.body.death_cause = "predation"
                 prey.body.alive = False
                 self._write_alive_to_store(prey.store_slot, False)
     
@@ -2608,6 +2620,12 @@ class Population:
     
         for a in self.agents:
             if not a.body.alive:
+                # En död utan orsak betyder att någon väg dödar utanför de sex
+                # kända, och den vägen är per definition oinstrumenterad.
+                # Räknaren läses av check_death_cause_set i invariantsviten.
+                if not str(getattr(a.body, "death_cause", "") or ""):
+                    self._deaths_without_cause += 1
+
                 self._banks[a._policy_key].release(a._policy_slot)
     
                 # Strukturandelen måste läsas innan sloten frigörs; kadavret

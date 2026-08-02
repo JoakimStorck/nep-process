@@ -681,6 +681,32 @@ def check_damage_saturation(pop) -> list[Violation]:
     return out
 
 
+def check_death_cause_set(pop) -> list[Violation]:
+    """
+    Varje dödsfall ska ha en dödsorsak.
+
+    Sex vägar dödar ett djur: `damage`, `starvation`, `hazard`, de tre
+    vakterna, och predationen. Fem av dem ligger i `Body.step()` och sätter
+    `death_cause` innan de sätter `alive = False`. Predationen ligger i
+    `_step_predation()` och gjorde det inte, vilket lät den dö tyst: alla
+    38 dödsfall med orsak `unknown` över p75, p77 och p78 var predation, och
+    nischen beskrevs därför som död kod i tre statusanalyser.
+
+    Kontrollen är kumulativ och inte en ögonblicksbild. En död agent tas bort
+    i samma tick som den dör, så en sviten som körs var n:te tick skulle
+    aldrig hinna se den.
+    """
+    out: list[Violation] = []
+    n = int(getattr(pop, "_deaths_without_cause", 0) or 0)
+    if n > 0:
+        out.append(Violation(
+            "death_cause_unset",
+            f"{n} dödsfall utan dödsorsak — någon väg dödar utanför de sex "
+            f"kända och är därmed oinstrumenterad",
+        ))
+    return out
+
+
 ALL_CHECKS = (
     check_sparse_fields,
     check_nutrient_balance,
@@ -695,6 +721,7 @@ ALL_CHECKS = (
     check_agent_store_binding,
     check_flora_claims,
     check_damage_saturation,
+    check_death_cause_set,
 )
 
 
