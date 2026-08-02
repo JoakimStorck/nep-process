@@ -61,6 +61,7 @@ class Grid:
     band_lat: np.ndarray = field(init=False, repr=False, compare=False)
     cell_center_x: np.ndarray = field(init=False, repr=False, compare=False)
     cell_center_y: np.ndarray = field(init=False, repr=False, compare=False)
+    _within_cache: dict = field(init=False, repr=False, compare=False)
 
     # Cellgeometri: w * h = 1 ger cellarea 1; h / w = sqrt(3)/2 ger regelbunden
     # spetsig hexagon.
@@ -121,6 +122,7 @@ class Grid:
         object.__setattr__(self, "band_lat", band_lat)
         object.__setattr__(self, "cell_center_x", cx)
         object.__setattr__(self, "cell_center_y", cy)
+        object.__setattr__(self, "_within_cache", {})
 
     # -- form och utsträckning -------------------------------------------
 
@@ -312,20 +314,13 @@ class Grid:
         dx, dy = self.torus_delta_pos(x1, y1, x2, y2)
         return dx * dx + dy * dy
 
-    def cells_within(self, cell: int, r: int) -> tuple[int, ...]:
-        """
-        Alla celler inom topologiskt avstånd <= r, via bredden-först-sökning i
-        grannmatrisen. Ger 1, 7, 19, 37 … celler och är korrekt på torus utan
-        specialfall vid sömmarna.
-        """
-        rr = int(r)
-        if rr < 0:
-            return ()
+    def _bfs_within(self, cell: int, r: int) -> list[int]:
+        """Bredden-först-sökning i grannmatrisen. Definitionen av ordningen."""
         start = int(cell) % int(self.n_cells)
         seen = {start}
         frontier = [start]
         out = [start]
-        for _ in range(rr):
+        for _ in range(int(r)):
             nxt = []
             for c in frontier:
                 for nb in self.neighbor_idx[c]:
@@ -337,4 +332,111 @@ class Grid:
             frontier = nxt
             if not frontier:
                 break
+        return out
+
+    def _within_offsets(self, r: int) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Grannskapet som axialoffset `(dq, dr)`, i bredden-först-ordning.
+
+        Grannrelationen är translationsinvariant i axialrum: samma sekvens av
+        offset gäller från varje cell, oavsett radparitet och oavsett var i
+        torusen cellen ligger. Det är verifierat mot `_bfs_within()` i
+        invariantsviten. Därför räcker det att köra sökningen en gång per
+        radie och sedan lägga till offseten till vilken cell som helst.
+
+        Poängen är att uppslaget slutar vara en Python-sökning med mängd och
+        frontier. `cells_within()` anropades en gång per betande djur och tick
+        och kostade 21 mikrosekunder av betningens 106.
+        """
+        rr = int(r)
+        cached = self._within_cache.get(rr)
+        if cached is not None:
+            return cached
+
+        W = int(self.width)
+        H = int(self.height)
+        # Startcell mitt i världen, så att sökningen inte råkar wrappa i
+        # närheten av sömmen medan offseten härleds.
+        c0 = (H // 2) * W + (W // 2)
+        r0 = c0 // W
+        q0 = (c0 % W) - ((r0 - (r0 & 1)) // 2)
+
+        dq_l: list[int] = []
+        dr_l: list[int] = []
+        for cell in self._bfs_within(c0, rr):
+            row = cell // W
+            col = cell % W
+            dq_l.append(col - ((row - (row & 1)) // 2) - q0)
+            dr_l.append(row - r0)
+        cached = (
+            np.asarray(dq_l, dtype=np.int64),
+            np.asarray(dr_l, dtype=np.int64),
+        )
+        self._within_cache[rr] = cached
+        return cached
+
+    def cells_within_many(self, cells: object, r: int) -> np.ndarray:
+        """
+        Grannskapen kring många celler på en gång.
+
+        `cells` med form `(n,)` ger `(n, K)` med samma cellordning per rad som
+        `cells_within()`. Skalär `cells` ger `(K,)`.
+
+        Det är den vektoriserade formen av samma topologi — inte en annan
+        geometri. Geometrin bor fortfarande bara här.
+        """
+        rr = int(r)
+        c = np.asarray(cells, dtype=np.int64)
+        scalar = c.ndim == 0
+        c = np.atleast_1d(c) % np.int64(self.n_cells)
+        if rr < 0:
+            out = np.zeros((c.size, 0), dtype=np.int32)
+            return out[0] if scalar else out
+
+        dq, dr = self._within_offsets(rr)
+        W = np.int64(self.width)
+        H = np.int64(self.height)
+
+        row = c // W
+        col = c % W
+        q = col - ((row - (row & 1)) // 2)
+
+        # Raden får inte wrappas före kolumnomvandlingen. Axialrummet är inte
+        # globalt konsistent på torus i radled: varje rad förskjuter kolumnen
+        # med en halv, så ett varv runt världen förskjuter den med H/2. Wrappas
+        # raden först försvinner den förskjutningen och grannskapet hamnar fel
+        # vid sömmen — osynligt när (H/2) % W == 0, vilket 64x256 råkar uppfylla.
+        row2 = row[:, None] + dr[None, :]
+        q2 = q[:, None] + dq[None, :]
+        c2 = (q2 + ((row2 - (row2 & 1)) // 2)) % W
+        out = ((row2 % H) * W + c2).astype(np.int32, copy=False)
+        return out[0] if scalar else out
+
+    def cells_within(self, cell: int, r: int) -> tuple[int, ...]:
+        """
+        Alla celler inom topologiskt avstånd <= r. Ger 1, 7, 19, 37 … celler
+        och är korrekt på torus utan specialfall vid sömmarna.
+
+        Byggs numera ur den cachade offsettabellen i stället för en sökning per
+        anrop. Ordningen är oförändrad: tabellen härleds ur `_bfs_within()`.
+        """
+        rr = int(r)
+        if rr < 0:
+            return ()
+        dq, dr = self._within_offsets(rr)
+        key = ("py", rr)
+        pairs = self._within_cache.get(key)
+        if pairs is None:
+            pairs = list(zip(dq.tolist(), dr.tolist()))
+            self._within_cache[key] = pairs
+
+        W = int(self.width)
+        H = int(self.height)
+        c = int(cell) % int(self.n_cells)
+        row = c // W
+        q = (c % W) - ((row - (row & 1)) // 2)
+        out = []
+        for ddq, ddr in pairs:
+            row2 = row + ddr
+            out.append((row2 % H) * W + ((q + ddq + ((row2 - (row2 & 1)) // 2)) % W))
         return tuple(out)

@@ -793,6 +793,39 @@ Två designkonsekvenser som mätningen pekar ut:
 - **Sektorerna aggregeras i världsram och roteras till kroppsram efteråt.** Rotationen är en viktad blandning mellan grannsektorer, alltså samma operation som akuitetens oskärpa i `docs/synens-axlar.md`. De komponerar, och offsettabellen blir headingoberoende och delas av alla djur.
 - **Artfrändekanalen går via täta per-cell-faunafält** byggda med `bincount` över `fauna_slots` en gång per tick: antal, massa, hastighetssumma. Då blir artfränder samma kodväg som floran — en gather, inget CSR-uppslag per cell — och percepten bär observerbara storheter i stället för `pheno.predation`. Defekt 8 i `docs/rorelsens-arkitektur.md` faller ut som biprodukt. Samma glesningstrick som `flora_cell_mass` redan använder håller kostnaden nere vid en miljon celler.
 
+### Betningen — mätningen som sa emot designen
+
+*0082. Underlag: samma A/B-mätning, samma process, interfolierade varv.*
+
+Betningen är 97 µs per djur och tick och därmed lika dyr som artfrändesensingen. Uppdelningen inom den, mätt med en probe:
+
+```
+slots_in_cell x 7        48 us   45 %   sju searchsorted, ett Python-anrop i taget
+B-loopen                 30 us   28 %   ~28 plantor, skalär numpy-indexering
+cells_within             21 us   20 %   bredden-först med mängd och frontier
+cell_of                   3 us
+```
+
+Det såg ut som ett lärobokstillfälle för vektorisering. Det var det inte.
+
+En per-djur-vektorisering — grannskapet som en gather, slotarna i ett svep, girigheten som kumulativsumma — mättes mot originalet i samma process med identiskt utfall (noll avvikelser i B över 200 djur) och blev **1,7 gånger långsammare**: 80,5 mot 48,2 µs. Skälet är storleken. `reach = ceil(v · dt)` är 1 vid uppmätt fart, alltså sju celler och omkring 28 plantor. Numpys anropsoverhead är ~1–2 µs per operation, och femton operationer på 28 element kostar mer än Python-loopen de ersätter. Uppslaget mot store:n har ensamt ~30 µs fast overhead oavsett hur få celler det gäller.
+
+Korsningen ligger vid r = 2. Uppslaget av slotar, µs per djur:
+
+```
+K = 7 (r=1)     gammalt 27      vektoriserat 34
+K = 19 (r=2)    gammalt 70      vektoriserat 39
+K = 37 (r=3)    gammalt 130     vektoriserat 51
+```
+
+**Vinsten ligger inte i att vektorisera per djur utan i att batcha över djur.** Samma aritmetik för tvåhundra djur i ett svep — `cell_of_many`, ett `cells_within_many` med formen (n, K), ett uppslag mot store:n, en `reduceat` per djur — kostar 2,26 µs per djur vid r = 1. Mot dagens 48 för samma arbete är det tjugoen gånger.
+
+Det kräver att uppslaget skiljs från förbrukningen: alla djur rör sig, sedan slås grannskapen upp i ett svep, sedan betar djuren i tur och ordning på det redan uppslagna. Ordningen mellan djuren bevaras då exakt, och bara uppslaget batchas. Det är en uppdelning av `_step_move_system` i locomotion och feeding, vilket är den ordning manifestets fasmodell ändå anger.
+
+**0082 levererar därför bara grannskapstabellen**, inte betningen. `cells_within()` byggs ur en cachad axialoffsettabell i stället för en sökning per anrop: 5,6 → 4,3 µs vid r = 1, 20,5 → 7,1 vid r = 2, 49 → 11 vid r = 3. Tabellen härleds ur `_bfs_within()` en gång per radie och ger identisk cellordning — verifierat mot sökningen för 2 500 celler och fem radier. `cells_within_many()` är samma topologi i batchad form och är förutsättningen både för feeding-passet och för sektorpercepten.
+
+`slots_in_cells()` byggdes men ingår inte. Den har ingen vinnande anropare förrän passet delas, och att lägga in produktion utan konsumtion är precis det fel den här planens statusanalys gång på gång pekar ut i världslagret.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*
