@@ -826,6 +826,32 @@ Det kräver att uppslaget skiljs från förbrukningen: alla djur rör sig, sedan
 
 `slots_in_cells()` byggdes men ingår inte. Den har ingen vinnande anropare förrän passet delas, och att lägga in produktion utan konsumtion är precis det fel den här planens statusanalys gång på gång pekar ut i världslagret.
 
+### Betningen, andra försöket
+
+*0083. Mätning före design, igen — och den sa något annat än första gången.*
+
+Girigheten rör **1,22 plantor per anrop**. Uppslaget som föregår den rör 12,5 celler och 13,5 plantor. Nittio procent av betningens kostnad ligger alltså i att ta reda på vad som finns, inte i att äta det.
+
+```
+uppslag + tillgänglighet   91 us
+girighetsloopen            10 us
+plantor girigheten rör    1,22
+```
+
+Och tillgängligheten låg redan färdig. `store.flora_cell_mass` är summan av `max(0, massa - rotmassa)` per cell — exakt det skottförråd betningshorisonten ser. Den byggdes om plantvis i en Python-loop vid varje tugga för ett tal som fanns i en array.
+
+Ändringen är därför liten: tillgängligheten läses ur fältet, girigheten slås upp lat och hoppar tomma celler på fältet i stället för via spatialindexet, och varje tugga skriver av cellens förråd så att nästa betare inom samma tick ser rätt värde. Ingen batchning, ingen passdelning.
+
+```
+uppslag + tillgänglighet   115,7 -> 12,7 us      9,1 ggr   (samma process, interfolierat)
+_perform_feeding i drift    kvot mot orörd motion 5,6 -> 2,7
+B:s avvikelse mot plantsumman   median 3,2e-8, max 1,4e-7
+```
+
+Avvikelsen är float32-epsilon: `flora_cell_mass` lagras i float32, plantsumman räknades i float64. Ändringen är alltså **inte bit-för-bit**. Banorna följs åt inom ett par individer och några procent av floramassan över 600 tick på två seeds, utan systematiskt tecken.
+
+**Passdelningen behövdes inte.** Slutsatsen från 0082 — att vinsten kräver batchning över djur — gällde uppslaget av *slotar*. När tillgängligheten inte behöver slotarna alls faller behovet bort. Batchningen står kvar som nödvändig för sektorpercepten i 0084, där varje djur verkligen behöver läsa hela sitt grannskap.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*

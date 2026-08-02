@@ -1358,33 +1358,28 @@ class Population:
         cell0 = int(self.grid.cell_of(float(x), float(y)))
         got = 0.0
         energy = 0.0
-    
-        candidate_cells: list[int] = [cell0]
-        for r in range(1, int(max_radius) + 1):
-            for cell in self.grid.cells_within(cell0, r):
-                if cell != cell0:
-                    candidate_cells.append(int(cell))
-    
-        seen: set[int] = set()
-        ordered_cells: list[int] = []
-        for c in candidate_cells:
-            if c not in seen:
-                seen.add(c)
-                ordered_cells.append(c)
-    
+
+        # Grannskapet en gång, ur grannskapstabellen. Det gamla anropet gjorde
+        # en bredden-först-sökning per radie och slog sedan ihop resultaten med
+        # en mängd; `cells_within` ger redan ringarna i ordning utan dubbletter.
+        ordered_cells = self.grid.cells_within(cell0, int(max_radius))
+
         # Funktionell respons av Hollings typ II, härledd ur att betandet tar
         # tid. Tillgänglig massa inom räckhåll räknas först; efterfrågan kapas
         # sedan av vad söktid och hanteringstid medger under en tick. Se
         # AgentParams.graze_handle_h för härledningen av talen.
-        # Endast skottet är ätbart. Roten ligger under betningshorisonten, så
-        # den funktionella responsen ska se den verkliga resursen och inte hela
-        # kroppen.
-        B = 0.0
-        for cell in ordered_cells:
-            for slot in self.store.slots_in_cell(cell):
-                s = int(slot)
-                if bool(self.store.alive[s]) and int(self.store.kind[s]) == 1:
-                    B += max(0.0, float(self.store.mass[s]) - float(self.store.flora_root_mass[s]))
+        #
+        # Tillgängligheten läses ur `store.flora_cell_mass`, som redan är
+        # summan av `max(0, massa - rotmassa)` per cell — alltså exakt det
+        # skottförråd betningshorisonten ser. Den byggdes förut om plantvis i
+        # en Python-loop vid varje tugga: 13,5 plantor och 12,5 celluppslag per
+        # anrop, 91 av betningens 101 mikrosekunder, för ett tal som redan låg
+        # färdigt. Fältet är fräscht under faunapassen eftersom bara betningen
+        # ändrar floramassa efter florapasset, och betningen skriver av sig
+        # nedan.
+        cells = np.asarray(ordered_cells, dtype=np.int64)
+        cell_avail = self.store.flora_cell_mass[cells]
+        B = float(cell_avail.sum())
         if B > 0.0:
             AP = self.AP
             a_s = float(AP.graze_search_a)
@@ -1395,7 +1390,14 @@ class Population:
         if amt <= 1e-12:
             return 0.0, 0.0
 
-        for cell in ordered_cells:
+        # Girigheten är oförändrad men slås upp lat. Hollings tak gör tuggan
+        # liten mot vad som står inom räckhåll, och mätt rör den 1,22 plantor
+        # per anrop. Att slå upp alla tolv cellernas slotar för att sedan bryta
+        # i den första var tolv gånger för mycket arbete. Tomma celler hoppas
+        # över på fältet i stället för via spatialindexet.
+        for ci, cell in enumerate(ordered_cells):
+            if float(cell_avail[ci]) <= 1e-12:
+                continue
             for slot in self.store.slots_in_cell(cell):
                 s = int(slot)
     
@@ -1440,6 +1442,13 @@ class Population:
                 got += take
                 energy += take * e_kg
                 amt -= take
+
+                # Cellens skottförråd skrivs av direkt. Utan det skulle nästa
+                # betare inom samma tick se massa som redan är uppäten, och
+                # tillgängligheten vore inte längre den verkliga.
+                self.store.flora_cell_mass[cell] = np.float32(
+                    max(0.0, float(self.store.flora_cell_mass[cell]) - take)
+                )
     
                 if new_m <= 1e-12:
                     # Nås numera bara av plantor utan rotmassa alls. Betning kan
