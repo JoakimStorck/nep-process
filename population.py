@@ -286,6 +286,7 @@ class Population:
         self.world.consume_food_hook = self.consume_food
         self.world.sample_flora_local_hook = self.sample_flora_local
         self.world.sample_flora_rays_hook = self.sample_flora_rays        
+        self._sector_cache: dict = {}
         
         self.store = OrganismStore(
             capacity=int(self.PP.max_pop),
@@ -2301,6 +2302,110 @@ class Population:
     
         return float(dM_growth_flora), int(flora_established), float(flora_dispersed_mass)
         
+    def _build_sector_percept(
+        self,
+        alive: list,
+        n_sectors: int = 6,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Perceptionens världskanaler som sektoraggregat, för alla djur på en gång.
+
+        Strålarna sampladeepunkter: tolv riktningar gånger sju avståndssteg, med
+        `grid.cell_of` per punkt i en nästlad Python-loop. De översamplade nära —
+        alla tolv strålarna landar i samma sex celler vid avstånd ett — och
+        undersamplade långt, där grannskapet är brett och strålarna glesa.
+
+        Här aggregeras i stället *varje* cell inom räckvidden till sin
+        riktningssektor. Räckvidden är oförändrad; det är täckningen inom den
+        som blir hel. Sex sektorer, en per hexgranne.
+
+        Aggregeringen sker i världsram med en gemensam offsettabell och roteras
+        sedan till kroppsram per djur. Rotationen är en viktad blandning mellan
+        grannsektorer — samma operation som en akuitetsoskärpa, och de
+        komponerar därför när den kommer.
+
+        Mättnaden `x / (x + K)` tillämpas per cell före medelvärdet, precis som
+        strålarna gjorde per samplingspunkt. Vikten faller med avståndet så att
+        närmare celler väger tyngre, vilket strålarnas viktprofil också gjorde.
+
+        Returnerar `(B_u, C_u)`, båda `(n, n_sectors)` i kroppsram.
+        """
+        S = int(n_sectors)
+        n = len(alive)
+        if n == 0:
+            z = np.zeros((0, S), dtype=np.float32)
+            return z, z
+
+        AP0 = alive[0].AP
+        r_max = max(1, int(round(float(AP0.ray_len_front))))
+        dq, dr, dist, sec, w = self._sector_tables(r_max, S)
+
+        xs = np.fromiter((a.x for a in alive), dtype=np.float64, count=n)
+        ys = np.fromiter((a.y for a in alive), dtype=np.float64, count=n)
+        cell0 = self.grid.cell_of_many(xs, ys).astype(np.int64, copy=False)
+        cells = self.grid.cells_within_many(cell0, r_max).astype(np.int64, copy=False)
+
+        Kb = float(getattr(self.WP, "B_K", 0.0))
+        Kc = float(getattr(self.WP, "C_sense_K", 0.0))
+
+        def sat(field: np.ndarray, K: float) -> np.ndarray:
+            v = np.maximum(field[cells].astype(np.float32, copy=False), np.float32(0.0))
+            if K <= 0.0:
+                return (v > 0.0).astype(np.float32, copy=False)
+            return v / (v + np.float32(K))
+
+        Bu = sat(self.store.flora_cell_mass, Kb)
+        Cu = sat(np.asarray(self.world.detritus), Kc)
+
+        # Egen cell är B0/C0 och hör inte till någon sektor.
+        m = sec >= 0
+        base = np.arange(n, dtype=np.int64)[:, None] * S
+        flat = (base + sec[None, :])[:, m].ravel()
+        wm = w[m]
+        wsum = np.bincount(flat, weights=np.broadcast_to(wm, (n, wm.size)).ravel(),
+                           minlength=n * S).reshape(n, S)
+        np.maximum(wsum, 1e-9, out=wsum)
+
+        def agg(u: np.ndarray) -> np.ndarray:
+            acc = np.bincount(flat, weights=(u[:, m] * wm[None, :]).ravel(),
+                              minlength=n * S).reshape(n, S)
+            return acc / wsum
+
+        Bw = agg(Bu)
+        Cw = agg(Cu)
+
+        # Rotation till kroppsram: fraktionell cirkulär förskjutning.
+        head = np.fromiter((a.heading for a in alive), dtype=np.float64, count=n)
+        shift = head / (2.0 * math.pi / S)
+        i0 = np.floor(shift).astype(np.int64)
+        frac = (shift - i0)[:, None].astype(np.float32)
+        k = np.arange(S, dtype=np.int64)[None, :]
+        a0 = (k + i0[:, None]) % S
+        a1 = (a0 + 1) % S
+        rows = np.arange(n, dtype=np.int64)[:, None]
+
+        B_out = ((1.0 - frac) * Bw[rows, a0] + frac * Bw[rows, a1]).astype(np.float32, copy=False)
+        C_out = ((1.0 - frac) * Cw[rows, a0] + frac * Cw[rows, a1]).astype(np.float32, copy=False)
+        return B_out, C_out
+
+    def _sector_tables(self, r_max: int, S: int):
+        """Offset, avstånd, sektorindex och vikt per cell i grannskapet. Cachad."""
+        key = (int(r_max), int(S))
+        cached = self._sector_cache.get(key)
+        if cached is not None:
+            return cached
+        dq, dr = self.grid._within_offsets(int(r_max))
+        dist = (np.abs(dq) + np.abs(dq + dr) + np.abs(dr)) // 2
+        gx = float(self.grid.COL_SPACING) * (dq + 0.5 * dr)
+        gy = float(self.grid.ROW_SPACING) * dr
+        ang = np.arctan2(gy, gx) % (2.0 * math.pi)
+        sec = np.floor(ang / (2.0 * math.pi) * S).astype(np.int64) % S
+        sec[dist == 0] = -1
+        w = (1.0 / (1.0 + dist.astype(np.float32))).astype(np.float32)
+        cached = (dq, dr, dist, sec, w)
+        self._sector_cache[key] = cached
+        return cached
+
     def _step_sense_system(
         self,
         ctx: "StepCtx",
@@ -2330,8 +2435,20 @@ class Population:
     
         BC_list: list[tuple[float, float]] = [(0.0, 0.0)] * n
     
+        # Sektorpercepten byggs bara för dem som faktiskt sensar den här
+        # ticken. Cachevägen rör den inte, och att räkna för alla vore tre
+        # gånger för mycket arbete vid nuvarande sensingfrekvens.
+        sensing = [i for i, a in enumerate(alive) if int(a._sense_cd) <= 0]
+        secB = secC = None
+        if sensing:
+            secB, secC = self._build_sector_percept([alive[i] for i in sensing])
+        sec_row = {}
+        for k, i in enumerate(sensing):
+            sec_row[i] = (secB[k], secC[k])
+
         for i, a in enumerate(alive):
-            x_in, B0, C0 = a.build_inputs(self.world, rng=self.rng)
+            x_in, B0, C0 = a.build_inputs(self.world, rng=self.rng,
+                                          sectors=sec_row.get(i))
     
             if x_in is None:
                 X[i] = 0.0

@@ -1723,6 +1723,49 @@ class RaySensors:
         self._ixs = np.empty((self._n, self._m), dtype=np.int32)
         self._iys = np.empty((self._n, self._m), dtype=np.int32)
 
+    def sense_local(
+        self,
+        world: World,
+        x: float,
+        y: float,
+        secB: np.ndarray,
+        secC: np.ndarray,
+        rng: np.random.Generator | None = None,
+    ) -> tuple[tuple[float, float], np.ndarray, np.ndarray]:
+        """
+        Perception när grannskapet redan aggregerats till sektorer.
+
+        Strålarnas geometri behövs inte längre: sektorerna kommer färdiga från
+        `Population._build_sector_percept()`, som räknar dem för alla djur på en
+        gång. Kvar här är det som är lokalt för individen — cellens eget
+        innehåll och sensorbruset.
+
+        Bruset läggs på i u-domänen precis som förut, med samma sigma. Antalet
+        dragningar följer antalet sektorer i stället för antalet strålar, så
+        slumpströmmen är inte densamma som med strålsensorn.
+        """
+        B0_kg, C0_kg = world.sample_food_local(x, y)
+        Pworld = getattr(world, "WP", None)
+        Kb = float(getattr(Pworld, "B_K", 0.0)) if Pworld is not None else 0.0
+        Kc = float(getattr(Pworld, "C_sense_K", 0.0)) if Pworld is not None else 0.0
+
+        B0_u = self._sat1_u(float(B0_kg), Kb)
+        C0_u = self._sat1_u(float(C0_kg), Kc)
+
+        accB = np.array(secB, dtype=np.float32, copy=True)
+        accC = np.array(secC, dtype=np.float32, copy=True)
+
+        sig = float(self.AP.noise_sigma)
+        if sig > 0.0 and (rng is not None) and accB.size:
+            accB += (rng.standard_normal(size=accB.size) * sig).astype(np.float32, copy=False)
+            accC += (rng.standard_normal(size=accC.size) * sig).astype(np.float32, copy=False)
+            B0_u = float(B0_u + rng.normal(0.0, sig * 0.5))
+            C0_u = float(C0_u + rng.normal(0.0, sig * 0.5))
+
+        np.clip(accB, 0.0, 1.0, out=accB)
+        np.clip(accC, 0.0, 1.0, out=accC)
+        return (clamp(B0_u, 0.0, 1.0), clamp(C0_u, 0.0, 1.0)), accB, accC
+
     def sense(
         self,
         world: World,
@@ -2185,6 +2228,7 @@ class Agent:
         world: World,
         rng: np.random.Generator,
         m_eff: int,
+        sectors: tuple[np.ndarray, np.ndarray] | None = None,
     ) -> tuple[
         float, float, np.ndarray, np.ndarray,
         float, float, float, int, int, int,
@@ -2193,9 +2237,15 @@ class Agent:
         """
         Kör full sensing och returnerar allt som build_inputs behöver vidare.
         """
-        (B0, C0), rays_B, rays_C = self.sensors.sense(
-            world, self.x, self.y, self.heading, rng=rng, m_eff=m_eff,
-        )
+        if sectors is not None:
+            secB, secC = sectors
+            (B0, C0), rays_B, rays_C = self.sensors.sense_local(
+                world, self.x, self.y, secB, secC, rng=rng,
+            )
+        else:
+            (B0, C0), rays_B, rays_C = self.sensors.sense(
+                world, self.x, self.y, self.heading, rng=rng, m_eff=m_eff,
+            )
     
         thresh = float(self.AP.sense_alert_thresh)
         food_near = (
@@ -2243,7 +2293,8 @@ class Agent:
             self._sense_m_eff = m_full
             self._sense_cd = max(0, int(self.AP.sense_idle_steps) - 1)
             
-    def build_inputs(self, world: World, rng: np.random.Generator):
+    def build_inputs(self, world: World, rng: np.random.Generator,
+                     sectors: tuple[np.ndarray, np.ndarray] | None = None):
         if not self.body.alive:
             return None, 0.0, 0.0
     
@@ -2270,7 +2321,7 @@ class Agent:
             j_agent, hit_slot, hit_id,
             food_near, agent_near,
             pred_bearing, pred_dist,
-        ) = self._run_full_sensing(world, rng, m_eff)
+        ) = self._run_full_sensing(world, rng, m_eff, sectors=sectors)
     
         self._cached_agent_hit = (N_ag, Nu_ag, Nd_ag, hit_slot, hit_id)
     

@@ -852,6 +852,31 @@ Avvikelsen är float32-epsilon: `flora_cell_mass` lagras i float32, plantsumman 
 
 **Passdelningen behövdes inte.** Slutsatsen från 0082 — att vinsten kräver batchning över djur — gällde uppslaget av *slotar*. När tillgängligheten inte behöver slotarna alls faller behovet bort. Batchningen står kvar som nödvändig för sektorpercepten i 0084, där varje djur verkligen behöver läsa hela sitt grannskap.
 
+### Sektorpercepten — världskanalerna
+
+*0084. Första patchen i serien som inte kan vara neutral.*
+
+Strålarna samplade punkter: tolv riktningar gånger sju avståndssteg, med `grid.cell_of` per punkt i en nästlad Python-loop. De översamplade nära — alla tolv strålarna landar i samma sex celler vid avstånd ett — och undersamplade långt, där grannskapet är brett och strålarna glesa.
+
+Nu aggregeras varje cell inom räckvidden till sin riktningssektor. **Räckvidden är oförändrad; det är täckningen inom den som blir hel.** 169 celler mot 84 samplingspunkter, sex sektorer, en per hexgranne. Aggregeringen sker i världsram med en gemensam offsettabell för alla djur på en gång och roteras sedan till kroppsram med en fraktionell cirkulär förskjutning — samma operation som en akuitetsoskärpa, så de komponerar när den kommer.
+
+Mättnaden `x / (x + K)` läggs per cell före medelvärdet, precis som strålarna gjorde per samplingspunkt, med `B_K` och `C_sense_K` oförändrade. Vikten faller med avståndet.
+
+```
+_step_sense_system     338,9 -> 246,3 us/djur
+fauna-linjära pass     580,3 -> 496,3 us/djur
+sektoraggregeringen     16,8 us/djur vid 200 djur (mot sense 118)
+```
+
+Referenspassen låg still under mätningen — `_integrate_motion` 25,0 → 26,0, `_perform_feeding` 67,8 → 69,2, `_step_world_and_flora` 112,3 → 110,8 — så maskinstaten är jämförbar och skillnaden är verklig.
+
+**Varför OBS_DIM inte ändrades.** `_build_obs` kollapsade redan strålarna till mean, max och bäringen till max: tolv tal blev sex. Sektorerna går därför in i samma kontrakt utan att observationsvektorn byter längd, utan att hjärnorna ogiltigförklaras och utan att cachevägens indexering skrivs om. Att exponera de sex sektorvärdena direkt för MLP:n är ett eget steg, där dimensionsbytet blir den enda ändringen.
+
+**Inte neutral.** Bruset drar nu sex tal per kanal i stället för tolv, så slumpströmmen skiljer sig, och percepten bär annan information. Banorna över 600 tick på tre seeds ligger inom ett par individer och några procent av floramassan, utan systematiskt tecken — men jämförelser mot äldre loggar på tickavstånd gäller inte längre.
+
+**Kvar:** `see_agent_first_hit` är orörd och är nu 176 av sensingens 246 µs. Den uppfattar exakt en artfrände, kostar mest när den inte hittar något, och läser motpartens arvsmassa i riskvärderingen. Artfrändekanalen återanvänder samma gather och är nästa patch.
+
+>>>>>>> Stashed changes
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*
