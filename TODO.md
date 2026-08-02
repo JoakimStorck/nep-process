@@ -743,6 +743,56 @@ Synen är i dag evolverbar i fyra diskreta steg längs en sammanslagen axel. Det
 
 **Klart när:** en organism med `sense_radius → 0` aldrig berör sensing-koden, och spridningen i `sense_radius` differentierar mot nisch med kostnadsmodellen påslagen men driftar neutralt utan den.
 
+### Mätningen inför steget
+
+*64×256, seed 1, 160 tick efter uppvärmning, `--pass-timing`. Floran hålls på ~16 300 individer i alla tre körningarna: sådden skalar med faunans startmassa, så `--flora-ratio` kompenserar `--init_pop`. Utan den kompensationen mäter man sextonfaldigad flora och inte fler djur.*
+
+```
+                        12 djur    50 djur   200 djur      us/djur
+totalt                   23,5 ms    40,5 ms    100,1 ms
+_step_world_and_flora    13,9       14,3       14,6         konstant
+_finalize_store_and_emit  4,4        4,8        6,1         nästan konstant
+_step_sense_system        2,40      10,24      37,05       200 → 185
+_step_move_system         1,50       6,27      24,69       125 → 123
+_step_body_system         0,65       2,76      10,75        54 →  54
+_step_decision_system     0,53       1,90       5,99        44 →  30
+```
+
+Sensingen är strikt linjär i antalet djur och blir inte billigare per individ med tätheten: den adaptiva frekvensen ger exakt en tredjedel full sensing per tick i alla tre körningarna (4/12, 16,7/50, 66,3/200). Extrapolationen från tolv djur förutsäger 104 ms vid 200 mot uppmätta 100, så den linjära modellen håller. Vid 500 djur och samma flora: ~220 ms/tick, varav sensingen ensam ~93.
+
+**Sensingen är 46 procent av problemet, inte hela.** De fauna-linjära passen kostar tillsammans 395 µs per djur. Finfördelningen med `--pass-timing-inner` vid 200 djur:
+
+```
+RaySensors.see_agent_first_hit   19,3 ms    96 us/djur   53 % av sensingen
+RaySensors.sense                 13,1 ms    66 us/djur   35 %
+Agent._build_obs                  2,4 ms    12 us/djur
+Agent._perform_feeding           19,4 ms    97 us/djur   78 % av move-passet
+Agent._integrate_motion           3,5 ms    17 us/djur
+```
+
+Två fynd som ändrar steget.
+
+`see_agent_first_hit` är den dyraste enskilda posten i hela faunakedjan och levererar **en granne**. Den kostar dessutom mest när den inte hittar något — 349 µs per anrop vid 12 och 50 djur mot 278 vid 200, eftersom den bryter tidigare vid hög täthet. Alltså dyrast precis i den glesa regim vi vill lämna.
+
+`_step_move_system` är i praktiken inte rörelse. `_integrate_motion` är 17 µs; betningen via `world.consume_food` är 97. Betningen är alltså lika dyr som artfrändesensingen och ligger utanför det här steget som det är formulerat. Att lämna den betyder att 500 djur landar på ~130 ms i stället för ~220 — bättre, men inte tillräckligt.
+
+### Vad aggregeringen kostar
+
+Mikrobänk på den aritmetik omarbetningen skulle göra: vektoriserad axialoffsettabell, en gather av `(n_djur, K)` cell-ID, `bincount` till sex sektorer. Fem fält delar en gather.
+
+```
+r=7, K=169 celler       12 djur   0,116 ms/tick    9,7 us/djur
+                       200 djur   1,361 ms/tick    6,8 us/djur
+                       500 djur   3,891 ms/tick    7,8 us/djur
+```
+
+169 celler är fler celler än dagens 84 strålpunkter, och ändå ~7 µs mot 185. Strålarna översamplar nära och undersamplar långt; de är både redundanta och ofullständiga. Vinsten ligger inte i att läsa mindre utan i att sluta göra det i Python.
+
+Två designkonsekvenser som mätningen pekar ut:
+
+- **Sektorerna aggregeras i världsram och roteras till kroppsram efteråt.** Rotationen är en viktad blandning mellan grannsektorer, alltså samma operation som akuitetens oskärpa i `docs/synens-axlar.md`. De komponerar, och offsettabellen blir headingoberoende och delas av alla djur.
+- **Artfrändekanalen går via täta per-cell-faunafält** byggda med `bincount` över `fauna_slots` en gång per tick: antal, massa, hastighetssumma. Då blir artfränder samma kodväg som floran — en gather, inget CSR-uppslag per cell — och percepten bär observerbara storheter i stället för `pheno.predation`. Defekt 8 i `docs/rorelsens-arkitektur.md` faller ut som biprodukt. Samma glesningstrick som `flora_cell_mass` redan använder håller kostnaden nere vid en miljon celler.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*

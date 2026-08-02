@@ -107,6 +107,188 @@ def instrument_mating() -> None:
     Population._try_mating = wrapped
 
 
+# ---------------------------------------------------------------------------
+# Passtidtagning.
+#
+# cProfile tredubblar körtiden och förvränger fördelningen mellan pass, så
+# --profile duger för att hitta en hotspot men inte för att jämföra två
+# körningar. Den här mätningen läser perf_counter runt varje systempass:
+# tjugotvå klockavläsningar per tick, alltså långt under en promille.
+#
+# Frågan den ska svara på är inte var tiden går utan *vad den växer med*.
+# Floran och faunan skalar oberoende, och totalen döljer det: ett pass som är
+# en femtedel vid tolv djur kan vara hälften vid tvåhundra utan att någon
+# enskild körning visar det. Därför normeras varje post både per djur och per
+# floraindivid, och de fauna-linjära posten summeras för sig.
+#
+# Håll floran konstant när init_pop varieras. Sådden skalar med faunans
+# startmassa, så --flora-ratio måste kompenseras: ratio × init_pop konstant.
+# ---------------------------------------------------------------------------
+
+_PASSES = (
+    "_step_world_and_flora",
+    "_step_metabolism_system",
+    "_step_sense_system",
+    "_step_decision_system",
+    "_step_move_system",
+    "_step_body_system",
+    "_step_interaction_system",
+    "_step_deaths",
+    "_step_births",
+    "_step_sampling",
+    "_finalize_store_and_emit",
+)
+
+# Pass vars kostnad förväntas skala med antalet djur. Summeras separat,
+# eftersom det är den summan som avgör hur stor en population kan bli.
+_FAUNA_PASSES = frozenset({
+    "_step_metabolism_system",
+    "_step_sense_system",
+    "_step_decision_system",
+    "_step_move_system",
+    "_step_body_system",
+    "_step_interaction_system",
+})
+
+_INNER_CLASSES_DONE = False
+
+
+class PassTimer:
+    """Ackumulerar tid och anropsantal per pass, normerat mot beståndet."""
+
+    def __init__(self, warmup: int = 50) -> None:
+        self.warmup = int(warmup)
+        self.acc: dict[str, float] = {}
+        self.calls: dict[str, int] = {}
+        self.order: list[str] = []
+        self.ticks = 0
+        self.wall = 0.0
+        self.fauna_sum = 0.0
+        self.flora_sum = 0.0
+        self.active = False
+
+    # -- installation ---------------------------------------------------
+
+    def _slot(self, label: str) -> None:
+        if label not in self.acc:
+            self.acc[label] = 0.0
+            self.calls[label] = 0
+            self.order.append(label)
+
+    def _wrap(self, owner, name: str, label: str) -> None:
+        orig = getattr(owner, name)
+        self._slot(label)
+
+        def wrapped(*args, **kwargs):
+            if not self.active:
+                return orig(*args, **kwargs)
+            t0 = time.perf_counter()
+            try:
+                return orig(*args, **kwargs)
+            finally:
+                self.acc[label] += time.perf_counter() - t0
+                self.calls[label] += 1
+
+        setattr(owner, name, wrapped)
+
+    def install(self, pop: Population) -> None:
+        """Passen wrappas på instansen; ingen annan körning påverkas."""
+        for name in _PASSES:
+            self._wrap(pop, name, name)
+
+    def install_inner(self) -> None:
+        """
+        Finfördelning inuti sense- och move-passen.
+
+        Wrappas på klassnivå och kostar en klockavläsning per agent och metod,
+        alltså mer än passtidtagningen. Håll den till separata körningar.
+        """
+        global _INNER_CLASSES_DONE
+        if _INNER_CLASSES_DONE:
+            return
+        from agent import Agent, RaySensors
+
+        for cls, name in (
+            (RaySensors, "sense"),
+            (RaySensors, "see_agent_first_hit"),
+            (Agent, "_build_obs"),
+            (Agent, "_build_inputs_from_cache"),
+            (Agent, "_integrate_motion"),
+            (Agent, "_perform_feeding"),
+        ):
+            self._wrap(cls, name, f"  {cls.__name__}.{name}")
+        _INNER_CLASSES_DONE = True
+
+    # -- mätning --------------------------------------------------------
+
+    def begin_tick(self) -> float:
+        return time.perf_counter()
+
+    def end_tick(self, pop: Population, t0: float, tick: int) -> None:
+        if tick <= self.warmup:
+            # Numbas JIT och de första allokeringarna hör inte till taktens
+            # stationära kostnad. Nollställ i stället för att dra av.
+            self.reset()
+            self.active = True
+            return
+        self.wall += time.perf_counter() - t0
+        self.ticks += 1
+        self.fauna_sum += float(len(pop._fauna_slots()))
+        self.flora_sum += float(len(pop._flora_slots()))
+
+    def reset(self) -> None:
+        for k in self.acc:
+            self.acc[k] = 0.0
+            self.calls[k] = 0
+        self.ticks = 0
+        self.wall = 0.0
+        self.fauna_sum = 0.0
+        self.flora_sum = 0.0
+
+    # -- rapport --------------------------------------------------------
+
+    def report(self) -> None:
+        if self.ticks <= 0:
+            print("\n--- passtidtagning: för få tick efter uppvärmningen ---")
+            return
+
+        n = float(self.ticks)
+        fauna = self.fauna_sum / n
+        flora = self.flora_sum / n
+        tot_ms = self.wall / n * 1e3
+
+        print(f"\n--- passtidtagning ---")
+        print(f"  {self.ticks} tick efter {self.warmup} uppvärmning   "
+              f"fauna {fauna:.1f}   flora {flora:.0f}   "
+              f"totalt {tot_ms:.3f} ms/tick")
+        print(f"  {'pass':32s} {'ms/tick':>9s} {'andel':>7s} "
+              f"{'us/djur':>9s} {'us/planta':>10s} {'anrop':>8s}")
+
+        fauna_ms = 0.0
+        for label in self.order:
+            ms = self.acc[label] / n * 1e3
+            if label in _FAUNA_PASSES:
+                fauna_ms += ms
+            print(f"  {label:32s} {ms:9.3f} {100.0 * ms / max(1e-12, tot_ms):6.1f}% "
+                  f"{ms * 1e3 / max(1.0, fauna):9.2f} "
+                  f"{ms * 1e3 / max(1.0, flora):10.3f} "
+                  f"{self.calls[label] / n:8.1f}")
+
+        per_animal = fauna_ms * 1e3 / max(1.0, fauna)
+        fixed_ms = tot_ms - fauna_ms
+        print(f"\n  fauna-linjära pass   {fauna_ms:.3f} ms/tick, "
+              f"{100.0 * fauna_ms / max(1e-12, tot_ms):.1f} % av takten, "
+              f"{per_animal:.1f} us per djur")
+        print(f"  övrigt               {fixed_ms:.3f} ms/tick")
+        for target in (200, 500, 1000):
+            est = fixed_ms + per_animal * target / 1e3
+            print(f"    extrapolerat till {target:4d} djur vid samma flora: "
+                  f"{est:8.1f} ms/tick")
+        print("  Extrapolationen antar att floran hålls konstant och att "
+              "sensingens\n  träfffrekvens inte ändras med tätheten. Den är "
+              "en storleksordning, inte\n  en prognos.")
+
+
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="Kör nep-process headless med invariantkontroll.")
     ap.add_argument("--ticks", type=int, default=10000, help="antal simuleringssteg")
@@ -154,6 +336,14 @@ def parse_args() -> argparse.Namespace:
                     help="avbryt vid första invariantbrottet")
     ap.add_argument("--profile", action="store_true",
                     help="kör under cProfile och skriv topplista vid slut")
+    ap.add_argument("--pass-timing", action="store_true",
+                    help="tidta varje systempass med perf_counter; oförvrängt, "
+                         "till skillnad från --profile")
+    ap.add_argument("--pass-timing-inner", action="store_true",
+                    help="dessutom finfördelning inuti sense- och move-passen; "
+                         "kostar mer och bör köras separat")
+    ap.add_argument("--pass-timing-warmup", type=int, default=50,
+                    help="tick som räknas som uppvärmning och utesluts")
     ap.add_argument("--quiet", action="store_true")
 
     ap.add_argument("--stats", action="store_true",
@@ -342,6 +532,14 @@ def run(a: argparse.Namespace, seed: int | None = None) -> int:
 
 def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
     pop = build_population(a, seed, hub=hub)
+
+    timer: PassTimer | None = None
+    if a.pass_timing or a.pass_timing_inner:
+        timer = PassTimer(warmup=int(a.pass_timing_warmup))
+        if a.pass_timing_inner:
+            timer.install_inner()
+        timer.install(pop)
+
     d0 = diagnostics(pop)
     nb0 = nutrient_balance(pop)
     n_cells = int(pop.grid.n_cells)
@@ -444,11 +642,16 @@ def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
             # en pausad session tyst felaktig.
             server.wait_while_paused()
 
+        tick_t0 = timer.begin_tick() if timer is not None else 0.0
+
         try:
             pop.step()
         except Exception as exc:  # noqa: BLE001 — vi vill se vilket tick som small
             print(f"AVBROTT i tick {tick}: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
             raise
+
+        if timer is not None:
+            timer.end_tick(pop, tick_t0, tick)
 
         if a.stats:
             for x in pop.agents:
@@ -513,6 +716,9 @@ def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
         )
         if a.stats:
             print_summary(pop, d0, nb0, len(unika), worst_drift, n_cells, elapsed, tick)
+
+    if timer is not None and not a.quiet:
+        timer.report()
 
     return 0 if failures == 0 else 1
 
