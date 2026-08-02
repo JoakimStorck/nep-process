@@ -302,6 +302,10 @@ def parse_args() -> argparse.Namespace:
 
     ap.add_argument("--nutrient-init", type=float, default=None,
                     help="WorldParams.nutrient_init, kg fri näring per cell — bördigheten")
+    ap.add_argument("--detritus-init", type=float, default=None,
+                    help="WorldParams.detritus_init, kg förna per cell vid start")
+    ap.add_argument("--detritus-structure-init", type=float, default=None,
+                    help="WorldParams.detritus_structure_init, strukturandel i sådd förna")
     ap.add_argument("--nutrient-input", type=float, default=None,
                     help="WorldParams.nutrient_input, per cell och månad")
     ap.add_argument("--nutrient-loss-frac", type=float, default=None,
@@ -370,6 +374,8 @@ def build_population(a: argparse.Namespace, seed: int, hub=None) -> Population:
     wp_over: dict[str, float] = {}
     for cli, name in (
         (a.nutrient_init, "nutrient_init"),
+        (a.detritus_init, "detritus_init"),
+        (a.detritus_structure_init, "detritus_structure_init"),
         (a.nutrient_input, "nutrient_input"),
         (a.nutrient_loss_frac, "nutrient_loss_frac"),
         (a.uptake_rate, "uptake_rate_per_area"),

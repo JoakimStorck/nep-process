@@ -901,6 +901,53 @@ Referenspassen låg still: `_integrate_motion` 25,0 → 24,6, `_perform_feeding`
 
 **Kvar:** riskvärderingen i `attack_risk` läser fortfarande `pheno.predation`, alltså motpartens arvsmassa. Och percepten bär ännu bara *en* artfrände till MLP:n — sektoraggregat av artfrändetäthet kräver att `OBS_DIM` växer, och det bör vara den enda ändringen i sin egen patch.
 
+### Näringen sås vid sin jämvikt
+
+*0086. Underlag: floraköring utan fauna, 60 000 tick, `runs/p85-flora`.*
+
+`nutrient_init` är den **fria**, växttillgängliga poolen — inte näring bunden i marken. Bundet material är detritus, och det stod på noll. Världen startade alltså med hundra procent av sin näring omedelbart tillgänglig och steril mark. Verkliga ekosystem ligger på motsatt ytterlighet: under en procent tillgängligt, resten i markens organiska material.
+
+Två följder, båda mätta.
+
+**Inkörningen var mest bokföring.** Fri pool 4 142 kg vid tick 500, 50 kg vid jämvikt. De 45 000 ticken gick till största delen åt att flytta näring från den fria poolen in i växter och förna, inte till att floran hittade sin form. Antalet plantor planade ut redan kring tick 12 000.
+
+**Stocken bar inte sig själv.** 5 243 kg såddes, 4 854 återstod efter hundra år, fortfarande fallande. Varje körning startade bördigare än världen kan hålla, så bärkraft mätt vid någon given tick var en mätning på ett förlopp.
+
+Jämvikten följer av en identitet:
+
+```
+mineralisering_jämvikt = nutrient_input · n_cells / nutrient_loss_frac = 904 kg/år
+uppmätt vid tick 60 000                                               = 1 293 kg/år
+```
+
+Nedbrytningstakten påverkar inte det flödet. Den bestämmer bara hur stor detrituspoolen måste vara för att bära det. Faktorn 0,699 ger jämvikten 1 475 kg näring i detritus, 1 885 i flora och 35 fri — totalt 3 395 mot sådda 5 243.
+
+Talen sår den fördelningen direkt. Detritus läggs på sin jämviktsnivå; florans andel läggs i den fria poolen, eftersom det är därifrån växterna tar upp.
+
+```
+nutrient_init            0,32  ->  0,117    kg fri näring per cell
+detritus_init            0,0   ->  21,16    kg förna per cell
+detritus_structure_init         0,93        ny parameter
+```
+
+Strukturandelen behövs för att `detritus_structure` styr nedbrytningstakten. Sås förna utan den bryts allt ner som labilt material och hela poolen mineraliseras på nio månader. 0,93 är den uppmätta jämviktssammansättningen: strukturell förna bryts ner 6,7 gånger långsammare och anrikas därför i poolen oavsett vad floran fäller.
+
+Utfall över 6 000 tick:
+
+```
+             före          efter
+tillfört    6 147 kg      3 461 kg
+förlorat    1 293 kg         90 kg
+takt        -1 166 kg/h    +23 kg/h
+tidskonstant     4 h        144 h
+```
+
+**Invariantsviten fångade ett verkligt fel.** Ledgern bokförde utgångstillståndets fria näring och den sådda florans vävnad som tillförd men inte förnan — posten var noll så länge `detritus_init` var det. 1 454 kg av 3 371 låg i marken och såg ut som en läcka på 43 procent. Sviten hittade det på tick 0.
+
+**Kvar att verifiera:** var floran landar. Förutsägelsen är 121 000 kg biomassa och omkring 66 000 plantor, nått kring tick 12 000-15 000 i stället för 45 000. Vid tick 6 000 stod den på 87 500 kg och 68 869 plantor, vilket ligger i banan.
+
+Talen skalar linjärt med `nutrient_input`. Det gör bördighetsstegen enkel att sätta upp: fördubblad bördighet fördubblar alla tre.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*

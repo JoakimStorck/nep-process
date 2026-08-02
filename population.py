@@ -450,6 +450,16 @@ class Population:
 
         total = float(np.sum(np.asarray(world.nutrient), dtype=np.float64))
 
+        # Sådd förna bär näring och måste bokföras som tillförd, precis som den
+        # fria poolen. Posten var noll så länge `detritus_init` var det, och
+        # blev synlig först när världen började sås vid sin jämviktsfördelning:
+        # 1 454 kg av 3 371 låg i marken och såg ut som en läcka på 43 procent.
+        act = np.asarray(world.detritus_active_cells, dtype=np.int64)
+        if act.size:
+            d = np.asarray(world.detritus)[act].astype(np.float64)
+            ds = np.asarray(world.detritus_structure)[act].astype(np.float64)
+            total += float(np.sum(d * nutrient_content_array(ds)))
+
         for slot in range(int(store.n)):
             if not bool(store.alive[slot]):
                 continue

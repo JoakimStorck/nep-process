@@ -89,14 +89,46 @@ class WorldParams:
 
     elevation_init: float = 0.0
     water_init: float = 0.0
-    # Världens bördighet: fri näring per cell vid start. Var noll, vilket
-    # gjorde `flora_init_mass_ratio` till bördighetsreglage i förklädnad —
-    # hela stocken kom in i världen som vävnad i den sådda floran, och marken
-    # var steril. Talet är härlett i docs/vaxternas-livscykel.md: med
-    # M_1 = B_K täcker en planta på 11 kg exakt en cell, och stocken som bär
-    # den täckningen med förna och fri pool inräknad är 0,32 kg per cell.
-    nutrient_init: float = 0.32
-    detritus_init: float = 0.0
+    # Sådden av näring, fördelad som vid jämvikt.
+    #
+    # `nutrient_init` är den **fria**, växttillgängliga poolen — inte näring
+    # bunden i marken. Bundet material är detritus, som stod på noll. Världen
+    # startade alltså med hundra procent av sin näring omedelbart tillgänglig
+    # och en steril mark. Verkliga ekosystem ligger på motsatt ytterlighet:
+    # under en procent tillgängligt, resten i markens organiska material.
+    #
+    # Följden var mätbar. En floraköring över 60 000 tick utan fauna ägnade
+    # merparten av inkörningen åt omfördelning snarare än tillväxt: fri pool
+    # 4 142 kg vid tick 500, 50 kg vid jämvikt. Och stocken bar inte sig själv
+    # — 5 243 kg såddes, 4 854 återstod efter hundra år, fortfarande fallande.
+    #
+    # Jämvikten följer av en identitet. Förlusten är `nutrient_loss_frac`
+    # gånger mineraliseringen, och vid jämvikt möter den tillförseln:
+    #
+    #     mineralisering_jämvikt = nutrient_input · n_cells / nutrient_loss_frac
+    #
+    # Nedbrytningstakten påverkar inte det flödet. Den bestämmer bara hur stor
+    # detrituspoolen måste vara för att bära det. Vid uppmätt näringsviktad
+    # takt 0,613/år och 16 384 celler ger identiteten 904 kg/år mot uppmätta
+    # 1 293, alltså en faktor 0,699 kvar att falla. Jämvikten är då
+    # 1 475 kg näring i detritus, 1 885 i flora och 35 fri — totalt 3 395.
+    #
+    # Talen nedan sår den fördelningen direkt. Detritus läggs på sin
+    # jämviktsnivå; florans andel läggs i den fria poolen, eftersom det är
+    # därifrån växterna tar upp. Under inkörningen dras den fria poolen ner
+    # från 1 920 till 35 kg medan biomassan byggs, och systemet landar där det
+    # hör hemma i stället för att först göra sig av med en gåva.
+    #
+    # Skalar linjärt med `nutrient_input`: fördubblad bördighet fördubblar alla
+    # tre.
+    nutrient_init: float = 0.117
+    detritus_init: float = 21.16
+    # Strukturandel i den sådda förnan. Behövs för att `detritus_structure`
+    # styr nedbrytningstakten — sås detritus utan den bryts allt ner som labilt
+    # material och hela poolen mineraliseras på nio månader. 0,93 är den
+    # uppmätta jämviktssammansättningen: strukturell förna bryts ner 6,7 gånger
+    # långsammare och anrikas därför i poolen, oavsett vad floran fäller.
+    detritus_structure_init: float = 0.93
 
     rain_input_base: float = 0.0
     spring_input_base: float = 0.0
@@ -276,7 +308,13 @@ class World:
         # Massviktad medelstrukturandel i cellens detritus, ärvd från det som
         # dog. Styr nedbrytningstakten: högstrukturerat material bryts ner
         # långsammare. Samma kadensklass och samma aktiva mängd som detritus.
-        self.detritus_structure = np.zeros(nc, dtype=np.float64)
+        self.detritus_structure = np.full(
+            nc, float(self.WP.detritus_structure_init), dtype=np.float64
+        )
+        # Tom förna har ingen sammansättning. Att lämna andelen satt i celler
+        # utan detritus vore ett tillstånd utan bärare, och `_detritus_add`
+        # blandar massviktat och skulle då blanda mot ett spöke.
+        self.detritus_structure[~self._detritus_member] = 0.0
 
         # Ackumulerad exkreterad massa sedan senaste ledgeruppdatering.
         self._dM_excreted = 0.0
