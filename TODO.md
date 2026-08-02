@@ -877,6 +877,30 @@ Referenspassen låg still under mätningen — `_integrate_motion` 25,0 → 26,0
 **Kvar:** `see_agent_first_hit` är orörd och är nu 176 av sensingens 246 µs. Den uppfattar exakt en artfrände, kostar mest när den inte hittar något, och läser motpartens arvsmassa i riskvärderingen. Artfrändekanalen återanvänder samma gather och är nästa patch.
 
 >>>>>>> Stashed changes
+### Artfrändekanalen
+
+*0085. Strålmarschen är borta.*
+
+`see_agent_first_hit` gick avståndssteg för avståndssteg och stråle för stråle med `grid.cell_of` per punkt. Den kostade **mest när den inte hittade något**, eftersom den då gick hela vägen ut — alltså mest i den glesa regim modellen ska lämna. Vid 200 djur var den 176 av sensingens 246 mikrosekunder.
+
+Grannskapet slås nu upp mot ett faunaeget cellindex. Faunan är hundratal mot florans tiotusental, så indexet är litet och uppslaget behöver inte sålla bort växter en och en. Kandidaterna är typiskt noll eller ett par per grannskap, och de få som finns avgörs vektoriserat.
+
+```
+_step_sense_system     338,9 -> 53,1 us/djur     (0084 tog den till 246,3)
+fauna-linjära pass     580,3 -> 290,0 us/djur
+see_agent_first_hit    176,2 -> 0 anrop
+```
+
+Referenspassen låg still: `_integrate_motion` 25,0 → 24,6, `_perform_feeding` 67,8 → 70,0, `_step_world_and_flora` 112,3 → 111,0.
+
+**Lokaliteten är oförändrad.** Kandidater hämtas ur celler inom synellipsens räckvidd, aldrig ur en global lista. Räckvidden är samma ellips som strålarna hade — `r(θ) = r_front (1-e) / (1 - e cos θ)` — så synfältet är fortsatt framåtriktat och den bakre blindzonen består. `m_eff` kapar räckvidden precis som `ray_depths` gjorde.
+
+**Träffen är nu den verkligt närmaste inom räckhåll**, inte den första som råkade ligga på en stråle. Strålarna hade hål mellan sig som växte med avståndet, och en granne kunde vara osynlig för att den stod mellan två strålar.
+
+**En bugg som ändringen blottade.** Födoreflexen läste `sensors._accB` och `_ang_base` direkt — strålsensorns buffertar. Efter 0084 fylls de aldrig, och reflexen läste oinitierat minne. Den läser nu `_acc_dir_B` och `_acc_dir_ang`, som sätts av den perceptionsväg som faktiskt kördes. Fångades av `-W error::RuntimeWarning`, inte av invariantsviten.
+
+**Kvar:** riskvärderingen i `attack_risk` läser fortfarande `pheno.predation`, alltså motpartens arvsmassa. Och percepten bär ännu bara *en* artfrände till MLP:n — sektoraggregat av artfrändetäthet kräver att `OBS_DIM` växer, och det bör vara den enda ändringen i sin egen patch.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*

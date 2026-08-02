@@ -2406,6 +2406,142 @@ class Population:
         self._sector_cache[key] = cached
         return cached
 
+    def _acquire_neighbours(self, alive: list, idx: list) -> dict:
+        """
+        Närmaste synliga artfrände för varje sensande djur, i ett svep.
+
+        Strålmarschen gick avståndssteg för avståndssteg och stråle för stråle
+        med `grid.cell_of` per punkt. Den kostade mest när den *inte* hittade
+        något, eftersom den då gick hela vägen ut — alltså mest i den glesa
+        regim modellen ska lämna. Vid 200 djur var den 176 av sensingens 246
+        mikrosekunder per djur.
+
+        Här slås grannskapet upp mot ett faunaeget cellindex. Faunan är hundratal
+        mot florans tiotusental, så ett eget index är litet och gör att uppslaget
+        inte behöver sålla bort växter en och en. Kandidaterna är typiskt noll
+        eller ett par per grannskap.
+
+        Lokaliteten är oförändrad: kandidater hämtas ur celler inom
+        synellipsens räckvidd, aldrig ur en global lista. Räckvidden är samma
+        ellips som strålarna hade — r(θ) = r_front (1-e) / (1 - e cos θ) — så
+        synfältet är fortsatt framåtriktat och den bakre blindzonen består.
+
+        Skillnaden mot strålmarschen är att träffen nu är den *verkligt* närmaste
+        inom räckhåll, inte den första som råkade ligga på en stråle. Strålarna
+        hade hål mellan sig som växte med avståndet.
+        """
+        out: dict = {}
+        if not idx:
+            return out
+
+        fslots = np.asarray(self._fauna_slots(), dtype=np.int64)
+        if fslots.size == 0:
+            return out
+
+        st = self.store
+        fcells = st.cell_idx[fslots].astype(np.int64, copy=False)
+        order = np.argsort(fcells, kind="stable")
+        fcells_s = fcells[order]
+        fslots_s = fslots[order]
+        counts = np.bincount(fcells_s, minlength=int(self.grid.n_cells))
+
+        AP0 = alive[idx[0]].AP
+        r_front = float(AP0.ray_len_front)
+        ecc = max(0.0, min(0.999, float(AP0.ray_eccentricity)))
+        step = float(AP0.ray_step)
+        r_top = max(1, int(round(r_front)))
+
+        sub = [alive[i] for i in idx]
+        n = len(sub)
+        xs = np.fromiter((a.x for a in sub), dtype=np.float64, count=n)
+        ys = np.fromiter((a.y for a in sub), dtype=np.float64, count=n)
+        cell0 = self.grid.cell_of_many(xs, ys).astype(np.int64, copy=False)
+        cells = self.grid.cells_within_many(cell0, r_top).astype(np.int64, copy=False)
+
+        occ = counts[cells] > 0
+        rows, cols = np.nonzero(occ)
+        if rows.size == 0:
+            return out
+
+        # Ragged uppslag av de få bebodda cellerna.
+        cc = cells[rows, cols]
+        lo = np.searchsorted(fcells_s, cc, side="left")
+        hi = np.searchsorted(fcells_s, cc, side="right")
+        cnt = hi - lo
+        tot = int(cnt.sum())
+        if tot == 0:
+            return out
+        starts = np.zeros(cnt.size + 1, dtype=np.int64)
+        np.cumsum(cnt, out=starts[1:])
+        flat = np.repeat(lo - starts[:-1], cnt) + np.arange(tot, dtype=np.int64)
+        cand_slot = fslots_s[flat]
+        cand_row = np.repeat(rows, cnt)
+
+        ax = xs[cand_row]
+        ay = ys[cand_row]
+        bx = st.pos_x[cand_slot].astype(np.float64, copy=False)
+        by = st.pos_y[cand_slot].astype(np.float64, copy=False)
+        ex = float(self.grid.extent_x)
+        ey = float(self.grid.extent_y)
+        dx = (bx - ax) % ex
+        dy = (by - ay) % ey
+        dx = np.where(dx > 0.5 * ex, dx - ex, dx)
+        dy = np.where(dy > 0.5 * ey, dy - ey, dy)
+        dist = np.sqrt(dx * dx + dy * dy)
+
+        heads = np.fromiter((a.heading for a in sub), dtype=np.float64, count=n)
+        self_ids = np.fromiter((int(a.id) for a in sub), dtype=np.int64, count=n)
+        rel = (np.arctan2(dy, dx) - heads[cand_row]) % (2.0 * math.pi)
+        r_lim = r_front * (1.0 - ecc) / (1.0 - ecc * np.cos(rel))
+
+        # m_eff kapar räckvidden precis som ray_depths gjorde.
+        m_eff = np.fromiter(
+            (max(0, int(alive[i]._sense_m_eff)) for i in idx), dtype=np.int64, count=n
+        )
+        cap = np.where(m_eff[cand_row] > 0, m_eff[cand_row] * step, r_front)
+        r_lim = np.minimum(r_lim, cap)
+
+        ok = (
+            (dist > 0.0)
+            & (dist <= r_lim)
+            & (st.id[cand_slot].astype(np.int64, copy=False) != self_ids[cand_row])
+            & (st.id[cand_slot] > 0)
+            & (st.alive[cand_slot])
+            & (st.kind[cand_slot] == 0)
+        )
+        if not np.any(ok):
+            return out
+
+        cand_row = cand_row[ok]
+        cand_slot = cand_slot[ok]
+        dist = dist[ok]
+        rel = rel[ok]
+
+        # Närmaste per djur: sortera på (rad, avstånd) och ta första i varje grupp.
+        srt = np.lexsort((dist, cand_row))
+        cand_row = cand_row[srt]
+        cand_slot = cand_slot[srt]
+        dist = dist[srt]
+        rel = rel[srt]
+        first = np.ones(cand_row.size, dtype=bool)
+        first[1:] = cand_row[1:] != cand_row[:-1]
+        sel = np.flatnonzero(first)
+
+        for k in sel:
+            r = int(cand_row[k])
+            s_ = int(cand_slot[k])
+            d = float(dist[k])
+            j = min(int(AP0.n_rays) * 0 + int(d / max(step, 1e-9)), 10_000)
+            out[idx[r]] = (
+                1.0,
+                float(rel[k] / (2.0 * math.pi)),
+                float(d / max(r_front, 1e-9)),
+                int(j),
+                s_,
+                int(st.id[s_]),
+            )
+        return out
+
     def _step_sense_system(
         self,
         ctx: "StepCtx",
@@ -2445,10 +2581,17 @@ class Population:
         sec_row = {}
         for k, i in enumerate(sensing):
             sec_row[i] = (secB[k], secC[k])
+        # Tomt uppslag betyder "ingen artfrände inom räckhåll", inte "ej
+        # beräknat". Utan den skillnaden faller just de djur som inget ser
+        # tillbaka på strålmarschen — och det är precis de dyraste fallen.
+        nb_row = {i: None for i in sensing}
+        if sensing:
+            nb_row.update(self._acquire_neighbours(alive, sensing))
 
         for i, a in enumerate(alive):
             x_in, B0, C0 = a.build_inputs(self.world, rng=self.rng,
-                                          sectors=sec_row.get(i))
+                                          sectors=sec_row.get(i),
+                                          neighbour=nb_row.get(i, False))
     
             if x_in is None:
                 X[i] = 0.0

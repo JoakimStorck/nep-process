@@ -1764,6 +1764,21 @@ class RaySensors:
 
         np.clip(accB, 0.0, 1.0, out=accB)
         np.clip(accC, 0.0, 1.0, out=accC)
+
+        # Riktningskanalen som reflexerna läser. Strålsensorn exponerade
+        # `_accB` och `_ang_base`; sektorpercepten har färre och bredare
+        # riktningar, och reflexen ska läsa den som faktiskt kördes.
+        # Sektor k pekar (k + 0,5) sektorbredder från nosen.
+        S = int(accB.size)
+        if getattr(self, "_sector_ang", None) is None or self._sector_ang.size != S:
+            self._sector_ang = (
+                (np.arange(S, dtype=np.float32) + np.float32(0.5))
+                * np.float32(2.0 * math.pi / max(S, 1))
+            )
+        self._acc_dir_B = accB
+        self._acc_dir_C = accC
+        self._acc_dir_ang = self._sector_ang
+
         return (clamp(B0_u, 0.0, 1.0), clamp(C0_u, 0.0, 1.0)), accB, accC
 
     def sense(
@@ -1861,6 +1876,10 @@ class RaySensors:
         np.clip(self._accC, 0.0, 1.0, out=self._accC)
         B0_u = clamp(B0_u, 0.0, 1.0)
         C0_u = clamp(C0_u, 0.0, 1.0)
+
+        self._acc_dir_B = self._accB
+        self._acc_dir_C = self._accC
+        self._acc_dir_ang = self._ang_base
 
         return (float(B0_u), float(C0_u)), self._accB, self._accC
 
@@ -2229,6 +2248,7 @@ class Agent:
         rng: np.random.Generator,
         m_eff: int,
         sectors: tuple[np.ndarray, np.ndarray] | None = None,
+        neighbour: object = False,
     ) -> tuple[
         float, float, np.ndarray, np.ndarray,
         float, float, float, int, int, int,
@@ -2255,9 +2275,15 @@ class Agent:
             or (len(rays_C) > 0 and float(rays_C.max()) > thresh)
         )
     
-        N_ag, Nu_ag, Nd_ag, j_agent, hit_slot, hit_id = self.sensors.see_agent_first_hit(
-            world, self.x, self.y, self.heading, self.id, m_eff=m_eff,
-        )
+        if neighbour is not False:
+            if neighbour is None:
+                N_ag, Nu_ag, Nd_ag, j_agent, hit_slot, hit_id = 0.0, 0.0, 0.0, -1, -1, 0
+            else:
+                N_ag, Nu_ag, Nd_ag, j_agent, hit_slot, hit_id = neighbour
+        else:
+            N_ag, Nu_ag, Nd_ag, j_agent, hit_slot, hit_id = self.sensors.see_agent_first_hit(
+                world, self.x, self.y, self.heading, self.id, m_eff=m_eff,
+            )
         agent_near = j_agent >= 0
     
         pred_bearing = float(Nu_ag) * 2.0 * math.pi if N_ag > 0.5 else 0.0
@@ -2294,7 +2320,8 @@ class Agent:
             self._sense_cd = max(0, int(self.AP.sense_idle_steps) - 1)
             
     def build_inputs(self, world: World, rng: np.random.Generator,
-                     sectors: tuple[np.ndarray, np.ndarray] | None = None):
+                     sectors: tuple[np.ndarray, np.ndarray] | None = None,
+                     neighbour: object = False):
         if not self.body.alive:
             return None, 0.0, 0.0
     
@@ -2321,7 +2348,8 @@ class Agent:
             j_agent, hit_slot, hit_id,
             food_near, agent_near,
             pred_bearing, pred_dist,
-        ) = self._run_full_sensing(world, rng, m_eff, sectors=sectors)
+        ) = self._run_full_sensing(world, rng, m_eff, sectors=sectors,
+                                   neighbour=neighbour)
     
         self._cached_agent_hit = (N_ag, Nu_ag, Nd_ag, hit_slot, hit_id)
     
@@ -2556,9 +2584,9 @@ class Agent:
         if flee_state < 0.5 and hunger_now > 0.4:
             sensors = getattr(self, "sensors", None)
             if sensors is not None:
-                accB = getattr(sensors, "_accB", None)
-                accC = getattr(sensors, "_accC", None)
-                ang = getattr(sensors, "_ang_base", None)
+                accB = getattr(sensors, "_acc_dir_B", None)
+                accC = getattr(sensors, "_acc_dir_C", None)
+                ang = getattr(sensors, "_acc_dir_ang", None)
     
                 if accB is not None and accC is not None and ang is not None and len(accB) > 0:
                     _diet = float(getattr(self.pheno, "diet", 0.5))
