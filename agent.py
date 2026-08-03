@@ -2081,6 +2081,8 @@ class Agent:
     _sense_cd: int = field(init=False, default=0)        # steg kvar tills nästa skanning
     # Minne av senast sedda artfrände: [x, y, kurs, ålder i tick]. None = tomt.
     _nb_mem: object = field(init=False, default=None, repr=False, compare=False)
+    # Temperatur per riktningssektor i kroppsram, satt av sensingpasset.
+    _temp_sectors: object = field(init=False, default=None, repr=False, compare=False)
     _cached_B0: float = field(init=False, default=0.0)
     _cached_C0: float = field(init=False, default=0.0)
     _cached_x_in: np.ndarray = field(init=False)         # cachat obs-vektor
@@ -2961,6 +2963,32 @@ class Agent:
             in_mating_mode,
         )
     
+        # Termisk gradient. `cold_aversion` hade ingen läsare alls — djuren
+        # bar en ärftlig köldaversion som inte gjorde någonting, och drev
+        # därför mot kylan: 68 procent dog kallare än de föddes, och
+        # svältdöden hade median 2,6 grader mot världens 12,2.
+        #
+        # Riktningen är en viktad vektorsumma över sektorernas avvikelse från
+        # sitt eget medelvärde, alltså den lokala gradienten. Styrkan skalas av
+        # köldaversionen och av hur mycket djuret faktiskt fryser — ett djur i
+        # trettio grader har ingen anledning att söka värme.
+        _ts = getattr(self, "_temp_sectors", None)
+        if _ts is not None and len(_ts):
+            _ca = float(getattr(self.pheno, "cold_aversion", 0.0))
+            _Tloc = float(world.temperature_at(self.x, self.y)) if hasattr(world, "temperature_at") \
+                else float(np.mean(_ts))
+            _stress = clamp((float(self.AP.Tb_set) - _Tloc) / float(self.AP.Tb_set), 0.0, 1.0)
+            if _ca > 1e-6 and _stress > 1e-6:
+                _S = len(_ts)
+                _dev = np.asarray(_ts, dtype=np.float64) - float(np.mean(_ts))
+                _ang = (np.arange(_S) + 0.5) * (2.0 * math.pi / _S)
+                _gx = float(np.sum(_dev * np.cos(_ang)))
+                _gy = float(np.sum(_dev * np.sin(_ang)))
+                if abs(_gx) + abs(_gy) > 1e-9:
+                    _errT = self._signed_angle(math.atan2(_gy, _gx))
+                    turn = clamp(turn + 0.70 * _ca * _stress
+                                 * clamp(_errT / math.pi, -1.0, 1.0), -1.0, 1.0)
+
         # Minnet av senast sedda artfrände. Uppdateras när någon syns och
         # dödräknas annars framåt längs dess senast sedda kurs. Det överbryggar
         # både sensingintervallet och den sida där synfältet är kortast.

@@ -1205,6 +1205,53 @@ Underhåll och termoreglering summerar till 138 procent av intaget: beståndet g
 
 `repro_cooldown_s = 8,0` binder aldrig: median kullintervall är 16,2–17,3 månader och **noll procent** av intervallen ligger under parametern.
 
+### Köldaversionen får en läsare
+
+*0096. En egenskap som fanns men inte gjorde något.*
+
+`cold_aversion` hade **fem förekomster i hela repot**, alla i `phenotype.py`: deklaration, intervallgränser, härledning och export till loggen. Noll läsare. Djuren bar en ärftlig köldaversion som inte påverkade någonting.
+
+Följden är mätbar i p89. Rumslig analys av 311 dödsfall mot temperaturfältet:
+
+```
+                dödsfall   andel   andel av världen
+T < 5 °C            183    58,8 %          30,5 %
+5-10                 66    21,2 %          14,1 %
+25-30                 8     2,6 %          19,5 %
+
+svält   n=233   T median  2,6 °C
+skada   n= 76   T median 12,2 °C
+```
+
+**Svältdöden är en kylddöd.** Åttio procent av dödsfallen sker under tio grader. Och djuren drev dit: temperatur vid födsel median 11,5, vid död 3,8, med 68 procent som slutade kallare än de föddes. Vägsträcka 1 372 mot nettoförflyttning 175 — ren slumpvandring.
+
+Kostnaden förklarar varför det dödar:
+
+```
+Tenv    termo/basal      fixkostnad relativt 2,6 °C
+  0        1,23                 1,00
+ 12        0,84                 0,86
+ 25        0,40                 0,65
+ 30        0,23                 0,57
+```
+
+Vid noll grader kostar termoregleringen mer än hela basalmetabolismen. Underhåll plus termo låg på 138 procent av energiintaget; i de varmaste banden vore samma post 79 procent. Skillnaden mellan kroniskt underskott och överskott ligger i var djuret står.
+
+**Ändringen** lägger temperaturen som tredje världskanal i sektorpercepten från 0084 — samma gather, ingen mättnad, eftersom temperatur är ett värde och inte en mängd. Reflexen styr mot den lokala gradienten, beräknad som viktad vektorsumma över sektorernas avvikelse från sitt medelvärde, skalad av `cold_aversion` och av hur mycket djuret faktiskt fryser.
+
+Utfall efter 1 500 tick med 60 djur:
+
+```
+start                     T median 13,5
+tick 1500                 T median 22,6     (världens median 12,2)
+  hög cold_aversion                24,7
+  låg cold_aversion                16,2
+```
+
+**Motverkande konsekvens finns i geometrin.** De varma banden är ungefär en fjärdedel av världen. Den som söker värme trängs med alla andra som gör det och betar hårdare lokalt; den som tål kyla får resten av världen. Det är en nisch-axel, inte en gratis vinst.
+
+Och koncentrationen är en biprodukt värd att mäta: samlas djuren i banden fyrdubblas tätheten där, vilket mildrar mötesproblemet — fjorton månaders väntan efter mognad, 42 procent barnlösa — utan att någon flockningsmekanik behöver fungera.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*

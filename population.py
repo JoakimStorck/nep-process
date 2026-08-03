@@ -2543,7 +2543,7 @@ class Population:
         n = len(alive)
         if n == 0:
             z = np.zeros((0, S), dtype=np.float32)
-            return z, z
+            return z, z, z
 
         AP0 = alive[0].AP
         r_max = max(1, int(round(float(AP0.ray_len_front))))
@@ -2566,6 +2566,19 @@ class Population:
         Bu = sat(self.store.flora_cell_mass, Kb)
         Cu = sat(np.asarray(self.world.detritus), Kc)
 
+        # Tredje världskanal: temperatur. Samma gather, ingen mättnad —
+        # temperaturen är inte en mängd utan ett värde, och det som ska styra
+        # är skillnaden mellan sektorerna.
+        #
+        # `cold_aversion` fanns som ärftlig egenskap men hade noll läsare:
+        # fem förekomster i phenotype.py, alla deklaration eller export. Djuren
+        # kunde alltså inte söka värme. Uppmätt i p89 dog 68 procent kallare än
+        # de föddes, median 11,5 -> 3,8 grader, och svältdöden hade median
+        # 2,6 grader mot världens 12,2. Vid noll grader kostar termoregleringen
+        # mer än hela basalmetabolismen; i de varmaste banden 43 procent mindre.
+        Tw_cells = np.asarray(self.world.temperature_of_cells(cells.ravel()),
+                              dtype=np.float32).reshape(cells.shape)
+
         # Egen cell är B0/C0 och hör inte till någon sektor.
         m = sec >= 0
         base = np.arange(n, dtype=np.int64)[:, None] * S
@@ -2582,6 +2595,7 @@ class Population:
 
         Bw = agg(Bu)
         Cw = agg(Cu)
+        Tw = agg(Tw_cells)
 
         # Rotation till kroppsram: fraktionell cirkulär förskjutning.
         head = np.fromiter((a.heading for a in alive), dtype=np.float64, count=n)
@@ -2595,7 +2609,8 @@ class Population:
 
         B_out = ((1.0 - frac) * Bw[rows, a0] + frac * Bw[rows, a1]).astype(np.float32, copy=False)
         C_out = ((1.0 - frac) * Cw[rows, a0] + frac * Cw[rows, a1]).astype(np.float32, copy=False)
-        return B_out, C_out
+        T_out = ((1.0 - frac) * Tw[rows, a0] + frac * Tw[rows, a1]).astype(np.float32, copy=False)
+        return B_out, C_out, T_out
 
     def _sector_tables(self, r_max: int, S: int):
         """Offset, avstånd, sektorindex och vikt per cell i grannskapet. Cachad."""
@@ -2786,10 +2801,11 @@ class Population:
         sensing = [i for i, a in enumerate(alive) if int(a._sense_cd) <= 0]
         secB = secC = None
         if sensing:
-            secB, secC = self._build_sector_percept([alive[i] for i in sensing])
+            secB, secC, secT = self._build_sector_percept([alive[i] for i in sensing])
         sec_row = {}
         for k, i in enumerate(sensing):
             sec_row[i] = (secB[k], secC[k])
+            alive[i]._temp_sectors = secT[k]
         # Tomt uppslag betyder "ingen artfrände inom räckhåll", inte "ej
         # beräknat". Utan den skillnaden faller just de djur som inget ser
         # tillbaka på strålmarschen — och det är precis de dyraste fallen.
