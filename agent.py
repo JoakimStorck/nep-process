@@ -151,7 +151,32 @@ class AgentParams:
     # ------------------------
     n_rays: int = 12
     ray_len_front: float = 7.0    # max räckvidd framåt (ellipsens långa halva)
-    ray_eccentricity: float = 0.7  # 0=cirkel → 1=extremt avlångt
+    # Artfrändesynens form. Sedan 0084 läser världskanalerna sitt grannskap
+    # isotropt via sektoraggregat; ellipsen styr numera bara var en artfrände
+    # kan upptäckas.
+    #
+    # Vid 0,7 gav r(θ) = r_front(1−e)/(1−e·cos θ) tio enheter rakt fram, tre
+    # åt sidan och 1,8 rakt bak. En flockkamrat som färdas jämsides på fyra
+    # enheters avstånd var alltså osynlig — och det är just där en flockkamrat
+    # befinner sig. Visuellt syntes det som att djur upptäckte varandra
+    # frontalt, gjorde en ömsesidig riktningsändring och sedan fortsatte i
+    # tangentens riktning, eftersom motparten försvann ur perceptionen i samma
+    # ögonblick som de passerade.
+    #
+    # Vid 0,3 blir det tio fram, sju åt sidan och 5,4 bak. Framåtriktningen är
+    # kvar men sidosynen räcker för att hålla sällskap. Samma ändring bör också
+    # höja parningsfrekvensen, som legat på sex till sju procent av alla
+    # tillfällen då en partner setts.
+    ray_eccentricity: float = 0.3  # 0=cirkel → 1=extremt avlångt
+    # Hur många tick en sedd artfrände minns efter att den lämnat synfältet.
+    # 0 = av. Sensingen körs var tionde tick i vila, och djuret förflyttar sig
+    # 7,4 enheter däremellan — nästan hela synfältets längd. Utan minne finns
+    # grannen bara de tick då den råkar synas, och alignment hinner ett enda
+    # samplingstillfälle per möte. Minnet dödräknar grannens position framåt
+    # längs dess senast sedda kurs, så att den inte tappas mellan sensingar
+    # eller när den glider åt sidan. Styr aldrig parning eller predation —
+    # bara styrningen.
+    social_memory_ticks: int = 12
                                    # r(θ) = r_front×(1-e)/(1-e×cos(θ))
                                    # sida(90°)=r_front×(1-e)≈2.1, bak(180°)≈1.2
     ray_step: float = 1.0
@@ -2054,6 +2079,8 @@ class Agent:
 
     # Adaptiv sensing-cache: lagrar senaste sensing-resultat och cooldown-räknare.
     _sense_cd: int = field(init=False, default=0)        # steg kvar tills nästa skanning
+    # Minne av senast sedda artfrände: [x, y, kurs, ålder i tick]. None = tomt.
+    _nb_mem: object = field(init=False, default=None, repr=False, compare=False)
     _cached_B0: float = field(init=False, default=0.0)
     _cached_C0: float = field(init=False, default=0.0)
     _cached_x_in: np.ndarray = field(init=False)         # cachat obs-vektor
@@ -2504,6 +2531,7 @@ class Agent:
         best_threat_score: float,
         best_mate,
         neighbour_heading: float | None = None,
+        neighbour_memory=None,
     ) -> tuple[float, float, float, float, float]:
         hunt_state = 0.0
         flee_state = 0.0
@@ -2549,11 +2577,21 @@ class Agent:
             thrust = max(thrust, 0.95)
             explore_drive = 0.0
     
-        elif N > 0.5:
-            a_hit = self.heading + (2.0 * math.pi * float(Nu))
+        elif N > 0.5 or neighbour_memory is not None:
+            if N > 0.5:
+                a_hit = self.heading + (2.0 * math.pi * float(Nu))
+                Nd_mem = float(Nd)
+                head_mem = neighbour_heading
+                trust = 1.0
+            else:
+                # Minnet styr bara. Det ger aldrig ett mål för parning eller
+                # predation — de kräver en verkligt detekterad motpart.
+                a_hit, Nd_mem, head_mem, trust = neighbour_memory
+            _ = a_hit
             errN = self._signed_angle(a_hit - self.heading)
-            biasN = clamp(errN / math.pi, -1.0, 1.0)
-            Nd_f = float(Nd)
+            biasN = clamp(errN / math.pi, -1.0, 1.0) * trust
+            Nd_f = Nd_mem
+            neighbour_heading = head_mem
     
             # Reynolds tre regler, med var sin räckvidd. Separation nära,
             # alignment på mellanavstånd, kohesion långt bort.
@@ -2923,6 +2961,38 @@ class Agent:
             in_mating_mode,
         )
     
+        # Minnet av senast sedda artfrände. Uppdateras när någon syns och
+        # dödräknas annars framåt längs dess senast sedda kurs. Det överbryggar
+        # både sensingintervallet och den sida där synfältet är kortast.
+        mem_lim = int(getattr(self.AP, "social_memory_ticks", 0))
+        if detected is not None:
+            self._nb_mem = [float(detected.x), float(detected.y),
+                            float(detected.heading), 0]
+        elif self._nb_mem is not None:
+            m = self._nb_mem
+            m[3] += 1
+            if m[3] > mem_lim:
+                self._nb_mem = None
+            else:
+                v = float(getattr(self, "last_speed", 0.0)) * float(ctx.dt)
+                m[0] += v * math.cos(m[2])
+                m[1] += v * math.sin(m[2])
+
+        nb_mem = None
+        if detected is None and self._nb_mem is not None and mem_lim > 0:
+            mx, my, mh, mage = self._nb_mem
+            dxm = mx - self.x
+            dym = my - self.y
+            ex, ey = float(self.grid.extent_x), float(self.grid.extent_y)
+            dxm -= ex * round(dxm / ex)
+            dym -= ey * round(dym / ey)
+            dm = math.hypot(dxm, dym)
+            rf = float(self.AP.ray_len_front)
+            if dm <= rf:
+                # Tilltron avtar linjärt med minnets ålder.
+                nb_mem = (math.atan2(dym, dxm), dm / max(rf, 1e-9), mh,
+                          max(0.0, 1.0 - mage / max(1.0, float(mem_lim))))
+
         turn, thrust, explore_drive, flee_state, hunt_state = self._apply_reflex_drives(
             turn=turn,
             thrust=thrust,
@@ -2939,6 +3009,7 @@ class Agent:
             best_threat_score=best_threat_score,
             best_mate=best_mate,
             neighbour_heading=(float(detected.heading) if detected is not None else None),
+            neighbour_memory=nb_mem,
         )
     
         turn, thrust, explore_drive = self._apply_food_steering(

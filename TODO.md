@@ -1071,6 +1071,31 @@ En tredje rättelse: utforskningsdriften dämpades med `abs(soc_bias)`, så äve
 
 **Overifierad.** Sandlådan hinner inte en giltig körning: faunan måste sättas in i en flora vid jämvikt, alltså tidigast tick 15 000, och 40 000 tick tar tjugo minuter. Kohesionskvoten mot Poisson är måttet som avgör om alignment gör skillnad.
 
+### Synfältet och minnet
+
+*0092. Två fynd ur en visuell körning, båda räknebara i efterhand.*
+
+0091 gav ingen mätbar flockning: kohesionskvoten mot Poisson låg kring ett i alla fyra nivåer och båda körningarna, med spridning inom en nivå från 0,79 till 1,88. Medelbeståndet var oförändrat, 24,2 mot 25,3. Vid visuell granskning syntes djuren upptäcka varandra frontalt, göra en ömsesidig riktningsändring — och sedan fortsätta i tangentens riktning.
+
+**Synfältet är blint åt sidan.**
+
+```
+r(θ) = r_front · (1−e) / (1 − e·cos θ)     r_front = 10, e = 0,7
+
+rakt fram    10,0        åt sidan   3,0
+snett bak     2,1        rakt bak   1,8
+```
+
+En flockkamrat som färdas jämsides på fyra enheters avstånd är osynlig — och det är just där en flockkamrat befinner sig. Alignment kan inte fungera i ett sådant synfält oavsett hur regeln formuleras.
+
+Sedan 0084 läser världskanalerna sitt grannskap isotropt via sektoraggregat, så ellipsen styr numera **bara** var en artfrände kan upptäckas. Att sänka excentriciteten till 0,3 påverkar därför ingenting annat: tio fram, sju åt sidan, 5,4 bak. Framåtriktningen är kvar men sidosynen räcker för att hålla sällskap. Det bör också höja parningsfrekvensen, som legat på sex till sju procent av alla tillfällen då en partner setts, orörd av allt vi gjort.
+
+**Tidsskalan är knapp.** Vid 0,74 enheter per tick och sensing var tionde tick i vila förflyttar sig djuret 7,4 enheter mellan två sensingar — nästan hela synfältets längd. Alignmentfönstret är fyra och en halv enheter brett, vilket två djur på frontal kurs sluter på tre tick. De hinner ett enda samplingstillfälle per möte.
+
+`social_memory_ticks` låter en sedd artfrände minnas efter att den lämnat synfältet. Positionen dödräknas framåt längs dess senast sedda kurs och tilltron avtar linjärt med åldern. Minnet styr **bara** — parning och predation kräver fortfarande en verkligt detekterad motpart.
+
+Sätt `social_memory_ticks = 0` för att pröva excentriciteten ensam. De två ändringarna är avsiktligt separerbara.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*
