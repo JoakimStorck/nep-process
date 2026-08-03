@@ -140,6 +140,11 @@ class PopParams:
     # Sätts värdet får alla grundare samma. Locus muteras normalt vidare, så
     # avkomman kan avvika — det är startfördelningen som styrs, inte taket.
     sociability_init: float | None = None
+    # Spridning kring `sociability_init`, i logit-rymden. 0 = alla identiska.
+    # Förvalet motsvarar ungefär ±0,08 i fenotyp kring 0,8 — samma
+    # storleksordning som den stående variation en verklig grundarpopulation
+    # bär, och drygt hundra gånger den effektiva mutations-sd:n per generation.
+    sociability_init_sd: float = 0.5
     max_pop: int = 500
     # Initial floramassa som multipel av faunans initiala massa.
     #
@@ -1288,10 +1293,30 @@ class Population:
             #
             # Samma logit-invers som ovan. Locus muteras normalt vidare, så
             # avkomman kan avvika — det är startfördelningen som styrs.
+            # Grundarnas sociability kan styras. Reflexen använder
+            # `soc_bias = 2·soc − 1`, så nollpunkten ligger vid 0,5: halva en
+            # uniformt slumpad startpopulation styr *bort* från artfränder.
+            #
+            # Värdet sätter **medelvärdet**, inte alla individers värde. Att ge
+            # varje grundare samma tal var fel: i p91 mättes standardavvikelsen
+            # bland 264 avkommor till 0,0017 efter hundra år, och de tre
+            # nivåerna i experimentet var därmed tre konstanter snarare än tre
+            # startfördelningar. Selektionen hade ingenting att arbeta på.
+            #
+            # `sociability_init_sd` är spridningen i **logit-rymden**, samma
+            # skala som mutationssteget. En grundarpopulation har en stående
+            # genetisk variation som speglar artens historia, och den ska vara
+            # väsentligt större än vad mutation hinner skapa: uppmätt effektiv
+            # mutations-sd är σ√p per generation, och startspridningen bör ligga
+            # en till två tiopotenser över.
             _soc0 = self.PP.sociability_init
             if _soc0 is not None:
                 _us = min(max(float(_soc0), 1e-4), 1.0 - 1e-4)
-                raw_traits[_T_SOC] = _np.float32(math.log(_us / (1.0 - _us)))
+                _sd = max(0.0, float(self.PP.sociability_init_sd))
+                _l = math.log(_us / (1.0 - _us))
+                if _sd > 0.0:
+                    _l += float(self.rng.normal(0.0, _sd))
+                raw_traits[_T_SOC] = _np.float32(_l)
 
             pheno_tmp  = derive_pheno(raw_traits)
             h1 = int(pheno_tmp.hidden_1)

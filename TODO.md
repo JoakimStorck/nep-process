@@ -1153,6 +1153,58 @@ Vid faktor 1 hamnar sådden på 94 782 kg mot jämviktens uppmätta 118 104, all
 
 Åttafaldig bördighet ger 657 608 plantor, alltså **åtta gånger fler och inte större**. Det är en första indikation på att antalet skalar linjärt med bördigheten och att en femdubbling därför kostar omkring 160 ms/tick — men det är sådden och inte jämvikten, och bördighetsstegen ska avgöra saken.
 
+### Mutationssteget och grundarspridningen
+
+*0095. Två fel som tillsammans gjorde evolutionen omöjlig på våra tidsskalor.*
+
+Analys av `life.jsonl` från p89 och p91 visade att fenotyperna är i praktiken kloner. I p89 hade 203 individer med kull och 158 utan **identisk median på tre decimaler** i `A_mature`, `M_target`, `sociability` och `mobility`. I p91 låg `median_M` fast på exakt 0,714 kg i varje mätpunkt från tick 540 och framåt.
+
+**Den verksamma mutationsstorheten är `σ√p`, inte `σ`.**
+
+```
+traits_sigma = 0,02   traits_p = 0,05   ->   σ√p = 0,0045 logit/generation
+                                        ->   0,0007 fenotypenheter
+```
+
+Uppmätt spridning bland 264 avkommor i p91: 0,0017 fenotypenheter. Vid mutation-drift-jämvikt `V = 2·Ne·σ_m²` svarar det mot **Ne ≈ 5** — i ett bestånd som räknade tjugo till femtio individer. Två grundarlinjer av tjugo tog 73 procent av avkommorna, och sex av tjugo lämnade ingen avkomma alls.
+
+Drift raderar dessutom startvariationen snabbare än den kan användas:
+
+```
+Ne =  5    kvar efter 70 generationer   0,1 %    halveringstid    7 gen
+Ne = 25                                24,3 %                    34 gen
+Ne = 50                                49,5 %                    69 gen
+```
+
+**Kravet.** För att flytta en egenskap en halv fenotypenhet över 200 generationer vid måttlig selektionsintensitet (i = 0,2) krävs σ_A ≈ 0,078 i logit-rymden, vilket vid Ne = 20–50 motsvarar σ_m mellan 0,008 och 0,018.
+
+```
+traits_sigma  0,02 -> 0,05        traits_p  0,05 -> 0,15
+σ√p           0,0045 -> 0,019     drygt fyra gånger
+```
+
+Högre än så är kontraproduktivt: mutationssteget börjar då konkurrera ut selektionen, och egenskaperna blir brus i stället för anpassningar.
+
+**Grundarspridningen.** `--sociability-init` satte alla grundare till samma tal, så p90 och p91 jämförde tre konstanter snarare än tre startfördelningar. `sociability_init_sd` gör värdet till ett medelvärde: vid 0,5 i logit-rymden blir fenotypspridningen 0,077 kring 0,8, alltså p10 0,685 och p90 0,873. Det är samma storleksordning som den stående variation en verklig grundarpopulation bär, och drygt hundra gånger den effektiva mutations-sd:n per generation.
+
+**Förbehåll.** Ne ≈ 20–50 är förutsättningen för att någotdera ska verka. Vid census 20–50 med skev reproduktion får vi Ne = 5, och då blir två linjer av tjugo två linjer av tjugo oavsett mutationstakt.
+
+### Reproduktionen är inte energibegränsad
+
+Ur `pop.jsonl` från p89, andel av energiintaget:
+
+```
+underhåll (basal)   77,8 %      termoreglering   60,1 %
+rörelse              7,0 %      tillväxt          0,0 %
+dräktighet           0,0 %
+```
+
+Dräktigheten är fem tiopotenser mindre än underhållet. Sjutton månader mellan kullar kan alltså inte förklaras av att spara ihop energi — kvar står dräktighetstiden och partnersökningen, och den senare är mätt till **fjorton månaders väntan efter mognad** med 42 procent som aldrig får någon kull.
+
+Underhåll och termoreglering summerar till 138 procent av intaget: beståndet går med underskott och lever på reserven mellan måltider. Tillväxten är nära noll, vilket förklarar varför medianindividen aldrig når mer än hälften av `M_target`. Att termoregleringen ensam tar 60 procent av intaget är värt en egen undersökning.
+
+`repro_cooldown_s = 8,0` binder aldrig: median kullintervall är 16,2–17,3 månader och **noll procent** av intervallen ligger under parametern.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*

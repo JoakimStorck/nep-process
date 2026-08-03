@@ -57,8 +57,26 @@ class MutationConfig:
     """
 
     # traits mutation
-    traits_sigma: float = 0.02
-    traits_p: float = 0.05
+    #
+    # Den verksamma storheten är `sigma * sqrt(p)`, inte `sigma`. Vid 0,02 och
+    # 0,05 blir den 0,0045 per generation i logit-rymden, alltså 0,0007
+    # fenotypenheter genom sigmoidens derivata.
+    #
+    # Uppmätt i p91: standardavvikelsen bland 264 avkommor låg på 0,0017
+    # fenotypenheter, vilket vid mutation-drift-jämvikt `V = 2·Ne·σ_m²` svarar
+    # mot en effektiv populationsstorlek omkring fem — i ett bestånd som
+    # räknade tjugo till femtio individer. Två grundarlinjer av tjugo tog 73
+    # procent av avkommorna.
+    #
+    # Kravet: för att flytta en egenskap en halv fenotypenhet över 200
+    # generationer vid måttlig selektionsintensitet (i = 0,2) krävs σ_A ≈ 0,078
+    # i logit-rymden, vilket vid Ne = 20–50 motsvarar σ_m i intervallet
+    # 0,008–0,018. Talen nedan ger σ√p = 0,019.
+    #
+    # Högre än så är kontraproduktivt: mutationssteget börjar då konkurrera ut
+    # selektionen, och egenskaperna blir brus i stället för anpassningar.
+    traits_sigma: float = 0.05
+    traits_p: float = 0.15
     traits_clip: float = 2.0  # clip to [-clip, clip]
 
     # trophic traits mutation (diet/predation)

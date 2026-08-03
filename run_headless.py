@@ -364,6 +364,8 @@ def parse_args() -> argparse.Namespace:
                     help="AgentParams.sense_idle_steps — tick mellan sensingar i vila")
     ap.add_argument("--sense-alert", type=int, default=None,
                     help="AgentParams.sense_alert_steps — tick mellan sensingar i beredskap")
+    ap.add_argument("--sociability-init-sd", type=float, default=None,
+                    help="spridning kring --sociability-init, i logit-rymden; 0 = identiska")
     ap.add_argument("--sociability-init", type=float, default=None,
                     help="grundarnas sociability, 0..1; nollpunkten i reflexen är 0,5")
     ap.add_argument("--fauna-at", type=int, default=None,
@@ -428,6 +430,8 @@ def build_population(a: argparse.Namespace, seed: int, hub=None) -> Population:
         PP.flora_init_plant_mass = float(a.flora_plant_mass)
     if getattr(a, "sociability_init", None) is not None:
         PP.sociability_init = float(a.sociability_init)
+    if getattr(a, "sociability_init_sd", None) is not None:
+        PP.sociability_init_sd = float(a.sociability_init_sd)
     if getattr(a, "fauna_at", None) is not None:
         PP.fauna_at = int(a.fauna_at)
     if getattr(a, "fauna_spawn_radius", None) is not None:
