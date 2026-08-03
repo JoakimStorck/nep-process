@@ -354,6 +354,10 @@ def parse_args() -> argparse.Namespace:
                     help="bredare diagnostikrad och sammanfattning vid slut")
     ap.add_argument("--seeds", type=str, default=None,
                     help="kommaseparerad lista, t.ex. 1,2,3 — kör flera och jämför")
+    ap.add_argument("--fauna-at", type=int, default=None,
+                    help="tick då faunan sätts in; 0 = vid start")
+    ap.add_argument("--fauna-spawn-radius", type=float, default=None,
+                    help="radie för insättningsfläcken; 0 = jämn utspridning")
     ap.add_argument("--flora-plant-mass", type=float, default=None,
                     help="PopParams.flora_init_plant_mass, medelmassa per sådd planta")
     ap.add_argument("--flora-ratio", type=float, default=None,
@@ -395,6 +399,10 @@ def build_population(a: argparse.Namespace, seed: int, hub=None) -> Population:
         PP.flora_init_mass_ratio = float(a.flora_ratio)
     if getattr(a, "flora_plant_mass", None) is not None:
         PP.flora_init_plant_mass = float(a.flora_plant_mass)
+    if getattr(a, "fauna_at", None) is not None:
+        PP.fauna_at = int(a.fauna_at)
+    if getattr(a, "fauna_spawn_radius", None) is not None:
+        PP.fauna_spawn_radius = float(a.fauna_spawn_radius)
     return Population(WP=WP, AP=AP, PP=PP, seed=int(seed), hub=hub)
 
 

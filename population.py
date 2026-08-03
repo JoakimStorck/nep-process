@@ -117,6 +117,17 @@ def _occupied_cells(store, fl) -> int:
 @dataclass
 class PopParams:
     init_pop: int = 12
+    # Tick då faunan sätts in. 0 = vid start.
+    #
+    # Floran behöver omkring 15 000 tick för att nå jämvikt från sådd. Sätts
+    # faunan in före det möter den en halvfärdig värld: sådden ger 56 procent
+    # av jämviktens stående gröda, produktionen skalar med den, och ett bestånd
+    # som ligger under bärkraften i den färdiga världen ligger över den i den
+    # halvfärdiga.
+    fauna_at: int = 0
+    # Radie i kontinuerliga enheter för insättningsfläcken. 0 = jämn
+    # utspridning över hela världen. Se `_fauna_spawn_pos`.
+    fauna_spawn_radius: float = 0.0
     max_pop: int = 500
     # Initial floramassa som multipel av faunans initiala massa.
     #
@@ -328,120 +339,28 @@ class Population:
         out_dim = int(Agent.OUT_DIM) + _h_dim
 
         self.agents = []
-        for _ in range(int(self.PP.init_pop)):
-            # Initiera traits först, härleda fenotyp för att få rätt arkitektur,
-            # skapa sedan nätverket med korrekt form.
-            import numpy as _np
-            # Initiera traits med uniform fördelning i FENOTYPRYMDEN (u-domänen).
-            # Standardmetoden uniform(-1,1) + sigmoid komprimerar till u∈(0.27,0.73)
-            # och gör extremfenotyper (litet nätverk, hög reparation, etc.) praktiskt
-            # omöjliga vid start. Med logit-transformationen är alla fenotypvärden
-            # lika sannolika, vilket ger en verkligt diversifierad startpopulation.
-            #
-            # u ~ uniform(eps, 1-eps)  →  trait = logit(u) = log(u/(1-u))
-            # sigmoid(trait) = u  →  lerp(min, max, u) är uniformt fördelat i [min,max]
-            _eps = 0.02   # marginaler för att undvika logit(0) och logit(1)
-            _u   = self.rng.uniform(_eps, 1.0 - _eps, int(self.PP.n_traits)).astype(_np.float64)
-            raw_traits = _np.log(_u / (1.0 - _u)).astype(_np.float32)  # logit
-            pheno_tmp  = derive_pheno(raw_traits)
-            h1 = int(pheno_tmp.hidden_1)
-            h2 = int(pheno_tmp.hidden_2)
-
-            g = MLPGenome(
-                layer_sizes=[in_dim, h1, h2, out_dim],
-                act="tanh",
-                h_dim=_h_dim,
-            )
-            g.traits = raw_traits
-            g.init_random(self.rng, init_traits_if_missing=False)
-
-            # Sprid ut agenter över hela världen
-            x, y = self.grid.random_position(self.rng)
-
-            a = Agent(
-                AP=self.AP,
-                genome=g,
-                x=x,
-                y=y,
-                heading=float(self.rng.uniform(-math.pi, math.pi)),
-            )
-            a.bind_grid(self.grid)
-            a.bind_world(self.world)
-            a.bind_store(self.store)
-            a.bind_wrapper_lookup(self._agent_for_slot)
-
-            # --- Warm start: åldersstrukturerad population ---
-            # Ålder uniform från nyfödd till 3× mognadsåldern —
-            # ger realistisk blandning av unga, vuxna och gamla.
-            A_mature  = float(a.pheno.A_mature)
-            age_s     = float(self.rng.uniform(0.0, 3.0 * A_mature))
-            a.birth_t = float(self.t - age_s)
-
-            # Massa korrelerad med ålder och M_target
-            child_M_mid = 0.12
-            # Vuxenmassa hämtas från agentens genetiska program
-            adult_M = float(getattr(a.pheno, "M_target", float(self.AP.M0)))
-            adult_M *= float(self.rng.uniform(0.7, 1.0))  # lite variation
-            if age_s < A_mature:
-                frac = age_s / max(A_mature, 1e-9)
-                M0   = child_M_mid + frac * (adult_M - child_M_mid)
-            elif age_s < 2.0 * A_mature:
-                M0 = adult_M
-            else:
-                shrink = (age_s - 2.0 * A_mature) / max(A_mature, 1e-9)
-                M0     = adult_M * max(0.5, 1.0 - 0.2 * shrink)
-            a.body.M = max(float(self.AP.M_min),
-                           M0 * float(self.rng.uniform(0.9, 1.1)))
-
-            # Slitage W: ackumulerat vid denna ålder
-            a.body.W = (float(self.AP.wear_a0) * age_s
-                        * float(self.rng.uniform(0.8, 1.2)))
-
-            # Skada D: låg för unga, stigande för gamla
-            import math as _math
-            R_frac = _math.exp(-float(self.AP.repair_W_decay) * a.body.W)
-            D_bg   = max(0.0, 1.0 - R_frac) * float(self.rng.uniform(0.0, 0.5))
-            a.body.D = min(float(self.AP.D_max) * 0.8, D_bg)
-
-            # Energi: varierat
-            a.body.scale_energy(self.rng.uniform(0.4, 0.95))
-            a.body.clamp_energy_to_cap()
-
-            # Cooldown: spridd
-            init_repro_cd = float(
-                self.rng.uniform(0.0, float(self.AP.repro_cooldown_s)))
-
-            # allocate slot in bank and write genome params once
-            key = (tuple(g.layer_sizes), str(g.act))
-            bank = self._banks.get(key)
-            if bank is None:
-                bank = ParamBank.create(key[0], key[1], capacity=int(self.PP.max_pop))
-                self._banks[key] = bank
-
-            slot = bank.alloc()
-            bank.write_genome(slot, g)
-
-            a._policy_key = key
-            a._policy_slot = slot
-
-            self._ensure_store_capacity(1)
-            store_slot = self.store.alloc_slot()
-            a.store_slot = int(store_slot)
-            self.store.write_agent(store_slot, a, self.grid)
-            self._write_spatial_to_store(store_slot, a.x, a.y)
-            self.store.age[store_slot] = np.float32(age_s)
-            self._slot_to_agent[int(store_slot)] = a
-
-            self.store.repro_cd[store_slot] = np.float32(init_repro_cd)
-            self._write_gestation_to_store(store_slot, a)
-
-            self._emit_birth(self.t, a, parent=None)
-            self.agents.append(a)
+        self._tick = 0
+        self._fauna_spawn_centre = None
+        # Faunan kan hållas tillbaka tills floran nått jämvikt.
+        self._fauna_pending = int(self.PP.init_pop) if int(self.PP.fauna_at) > 0 else 0
+        if self._fauna_pending == 0:
+            self.seed_fauna(int(self.PP.init_pop))
 
         fauna_mass0 = float(sum(
             float(x.body.M) + x.body.M_reserve()
             for x in self.agents if x.body.alive
         ))
+        if fauna_mass0 <= 0.0 and int(self.PP.init_pop) > 0:
+            # Faunan är fördröjd och har ingen massa att skala sådden mot. Att
+            # låta målet bli noll vore tyst katastrofalt — floran uteblir helt.
+            # Skalan tas i stället ur den fauna som *kommer*, med samma
+            # nominella vuxenmassa som sådden använder.
+            #
+            # Kopplingen är i grunden fel: sådden ska inte skalas mot
+            # konsumenterna alls, utan mot markens bördighet. Sedan 0087 kapas
+            # den ändå av vad marken kan betala, så talet nedan sätter bara ett
+            # tak som näringsbudgeten sänker till rätt nivå.
+            fauna_mass0 = float(self.PP.init_pop) * float(self.WP.B_K)
         _ = self._seed_initial_flora(
             target_mass=float(self.PP.flora_init_mass_ratio) * fauna_mass0,
         )
@@ -1275,6 +1194,186 @@ class Population:
         self.store.flood_tolerance[slot] = np.float32(0.0)
         self.store.buoyancy[slot] = np.float32(0.0)
         
+    def _fauna_spawn_pos(self) -> tuple[float, float]:
+        """
+        Var ett insatt djur hamnar.
+
+        Jämn utspridning garanterar Allee-fällan från tick noll. Synellipsen
+        täcker 38 celler av 16 384 — 0,23 procent — så tjugo djur utspridda
+        över hela världen ser varandra fyra procent av tickarna. Uppmätt i
+        rökprovet: 99,3 procent av agenttickarna utan en enda artfrände i
+        sikte, och reproduktionen upphör under omkring tio individer.
+
+        Ett grundarbestånd anländer tillsammans. Med `fauna_spawn_radius` satt
+        sätts djuren i en fläck, och den lokala tätheten blir världens täthet
+        gånger kvoten mellan världsarea och fläckarea. Tjugo djur i tusen
+        celler ger ungefär femtio procents mötesfrekvens i stället för fyra.
+
+        Fläcken köper ett etableringsfönster, inte en lösning: tusen celler
+        producerar omkring 3 400 kg per år och bär ett par individer, så
+        beståndet måste sprida ut sig och möter då samma geometri igen. Vad
+        den gör är att skilja de två felen åt — dör beståndet trots parningar
+        under fönstret är det spridningen och inte fodret.
+
+        Radie <= 0 ger jämn utspridning över hela världen.
+        """
+        r = float(self.PP.fauna_spawn_radius)
+        if r <= 0.0:
+            return self.grid.random_position(self.rng)
+
+        if self._fauna_spawn_centre is None:
+            self._fauna_spawn_centre = self.grid.random_position(self.rng)
+        cx, cy = self._fauna_spawn_centre
+
+        # Likformigt i skivan, inte i polära koordinater — sqrt-transformen
+        # hindrar klumpning mot centrum.
+        ang = float(self.rng.uniform(0.0, 2.0 * math.pi))
+        rad = r * math.sqrt(float(self.rng.uniform(0.0, 1.0)))
+        return self.grid.wrap_pos(cx + rad * math.cos(ang), cy + rad * math.sin(ang))
+
+    def seed_fauna(self, n: int) -> int:
+        """
+        Skapa `n` djur och sätt in dem i världen. Returnerar antalet skapade.
+
+        Bruten ut ur `__init__` för att insättningen ska kunna fördröjas.
+        Faunan mätt mot en halvfärdig flora mäter fel sak: sådden gav 56
+        procent av jämviktens stående gröda, produktionen skalar med den, och
+        tjugo djur låg därför över bärkraften just då fastän de legat under
+        den i den färdiga världen.
+        """
+        _h_dim = max(0, int(self.PP.h_dim))
+        in_dim = int(Agent.OBS_DIM) + _h_dim
+        out_dim = int(Agent.OUT_DIM) + _h_dim
+        made = 0
+        for _ in range(int(n)):
+            # Initiera traits först, härleda fenotyp för att få rätt arkitektur,
+            # skapa sedan nätverket med korrekt form.
+            import numpy as _np
+            # Initiera traits med uniform fördelning i FENOTYPRYMDEN (u-domänen).
+            # Standardmetoden uniform(-1,1) + sigmoid komprimerar till u∈(0.27,0.73)
+            # och gör extremfenotyper (litet nätverk, hög reparation, etc.) praktiskt
+            # omöjliga vid start. Med logit-transformationen är alla fenotypvärden
+            # lika sannolika, vilket ger en verkligt diversifierad startpopulation.
+            #
+            # u ~ uniform(eps, 1-eps)  →  trait = logit(u) = log(u/(1-u))
+            # sigmoid(trait) = u  →  lerp(min, max, u) är uniformt fördelat i [min,max]
+            _eps = 0.02   # marginaler för att undvika logit(0) och logit(1)
+            _u   = self.rng.uniform(_eps, 1.0 - _eps, int(self.PP.n_traits)).astype(_np.float64)
+            raw_traits = _np.log(_u / (1.0 - _u)).astype(_np.float32)  # logit
+            pheno_tmp  = derive_pheno(raw_traits)
+            h1 = int(pheno_tmp.hidden_1)
+            h2 = int(pheno_tmp.hidden_2)
+
+            g = MLPGenome(
+                layer_sizes=[in_dim, h1, h2, out_dim],
+                act="tanh",
+                h_dim=_h_dim,
+            )
+            g.traits = raw_traits
+            g.init_random(self.rng, init_traits_if_missing=False)
+
+            # Sprid ut agenter över hela världen
+            x, y = self._fauna_spawn_pos()
+
+            a = Agent(
+                AP=self.AP,
+                genome=g,
+                x=x,
+                y=y,
+                heading=float(self.rng.uniform(-math.pi, math.pi)),
+            )
+            a.bind_grid(self.grid)
+            a.bind_world(self.world)
+            a.bind_store(self.store)
+            a.bind_wrapper_lookup(self._agent_for_slot)
+
+            # --- Warm start: åldersstrukturerad population ---
+            # Ålder uniform från nyfödd till 3× mognadsåldern —
+            # ger realistisk blandning av unga, vuxna och gamla.
+            A_mature  = float(a.pheno.A_mature)
+            age_s     = float(self.rng.uniform(0.0, 3.0 * A_mature))
+            a.birth_t = float(self.t - age_s)
+
+            # Massa korrelerad med ålder och M_target
+            child_M_mid = 0.12
+            # Vuxenmassa hämtas från agentens genetiska program
+            adult_M = float(getattr(a.pheno, "M_target", float(self.AP.M0)))
+            adult_M *= float(self.rng.uniform(0.7, 1.0))  # lite variation
+            if age_s < A_mature:
+                frac = age_s / max(A_mature, 1e-9)
+                M0   = child_M_mid + frac * (adult_M - child_M_mid)
+            elif age_s < 2.0 * A_mature:
+                M0 = adult_M
+            else:
+                shrink = (age_s - 2.0 * A_mature) / max(A_mature, 1e-9)
+                M0     = adult_M * max(0.5, 1.0 - 0.2 * shrink)
+            a.body.M = max(float(self.AP.M_min),
+                           M0 * float(self.rng.uniform(0.9, 1.1)))
+
+            # Slitage W: ackumulerat vid denna ålder
+            a.body.W = (float(self.AP.wear_a0) * age_s
+                        * float(self.rng.uniform(0.8, 1.2)))
+
+            # Skada D: låg för unga, stigande för gamla
+            import math as _math
+            R_frac = _math.exp(-float(self.AP.repair_W_decay) * a.body.W)
+            D_bg   = max(0.0, 1.0 - R_frac) * float(self.rng.uniform(0.0, 0.5))
+            a.body.D = min(float(self.AP.D_max) * 0.8, D_bg)
+
+            # Energi: varierat
+            a.body.scale_energy(self.rng.uniform(0.4, 0.95))
+            a.body.clamp_energy_to_cap()
+
+            # Cooldown: spridd
+            init_repro_cd = float(
+                self.rng.uniform(0.0, float(self.AP.repro_cooldown_s)))
+
+            # allocate slot in bank and write genome params once
+            key = (tuple(g.layer_sizes), str(g.act))
+            bank = self._banks.get(key)
+            if bank is None:
+                bank = ParamBank.create(key[0], key[1], capacity=int(self.PP.max_pop))
+                self._banks[key] = bank
+
+            slot = bank.alloc()
+            bank.write_genome(slot, g)
+
+            a._policy_key = key
+            a._policy_slot = slot
+
+            self._ensure_store_capacity(1)
+            store_slot = self.store.alloc_slot()
+            a.store_slot = int(store_slot)
+            self.store.write_agent(store_slot, a, self.grid)
+            self._write_spatial_to_store(store_slot, a.x, a.y)
+            self.store.age[store_slot] = np.float32(age_s)
+            self._slot_to_agent[int(store_slot)] = a
+
+            self.store.repro_cd[store_slot] = np.float32(init_repro_cd)
+            self._write_gestation_to_store(store_slot, a)
+
+            self._emit_birth(self.t, a, parent=None)
+            self.agents.append(a)
+            made += 1
+
+        if made > 0 and int(getattr(self, "_tick", 0)) > 0:
+            # Djur som sätts in efter tick noll får sin massa gratis, precis
+            # som utgångstillståndet gör. Utan den här posten ser insättningen
+            # ut som en läcka i näringsbalansen — invariantsviten fångade det
+            # på 2,2e-4 relativt första gången.
+            add = 0.0
+            for a in self.agents[-made:]:
+                if not a.body.alive:
+                    continue
+                slot = int(getattr(a, "store_slot", -1))
+                st = float(self.store.structure[slot]) if slot >= 0 else 0.25
+                add += float(a.body.M) * nutrient_content(st)
+                add += a.body.M_reserve() * NUTRIENT_PER_KG_LABILE
+                add += float(a.body.gest_M) * NUTRIENT_PER_KG_LABILE
+            self.world._nutrient_added_total += add
+
+        return made
+
     def _seed_initial_flora(
         self,
         n_flora: int | None = None,
@@ -1320,6 +1419,16 @@ class Population:
             # sätter därför bara en rimlig plantstorlek och låter antalet följa.
             per_plant = max(1e-9, float(self.PP.flora_init_plant_mass))
             n_flora = max(1, int(round(want / per_plant)))
+
+            # Allokera inte plantor marken inte kan betala för. Sådden köps ur
+            # den fria näringspoolen, så taket är känt i förväg: fri näring
+            # dividerat med vad en planta av den här storleken binder. Utan
+            # kapet allokerades 333 333 slots för en sådd som marken sänkte
+            # till 82 885 plantor, och store:n växte till en halv miljon.
+            free = float(np.sum(np.asarray(self.world.nutrient), dtype=np.float64))
+            cost_each = per_plant * nutrient_content(0.5)
+            if cost_each > 0.0:
+                n_flora = min(n_flora, max(1, int(free / cost_each)))
             spread_mean = want / n_flora
         elif n_flora is None:
             n_flora = max(16, int(self.PP.max_pop) // 2)
@@ -3117,7 +3226,18 @@ class Population:
         dt = float(self.WP.dt)
         self.t += dt
         ctx = StepCtx(t=float(self.t), dt=dt, rng=self.rng)
-    
+
+        # Fördröjd insättning. Sker före världspasset, så att djuren möter en
+        # värld i samma tillstånd som om de stått där hela tiden.
+        if self._fauna_pending > 0 and self._tick >= int(self.PP.fauna_at):
+            n = self._fauna_pending
+            self._fauna_pending = 0
+            made = self.seed_fauna(n)
+            print(f"[fauna] {made} djur insatta vid tick {self._tick}"
+                  + (f" i en fläck med radie {float(self.PP.fauna_spawn_radius):.1f}"
+                     if float(self.PP.fauna_spawn_radius) > 0.0 else " jämnt utspridda"))
+        self._tick += 1
+
         dM_growth_flora, flora_established, flora_dispersed_mass = self._step_world_and_flora()
 
         self._step_metabolism_system(ctx)

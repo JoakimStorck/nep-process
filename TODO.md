@@ -980,6 +980,30 @@ Med tjugo djur i den nya sådden håller sig beståndet på 17–26 över 3 000 
 
 **Kvar:** sådd flora har fortfarande slumpade traits och ingen rumslig struktur — inga fläckar, ingen släktskapsstruktur, ingen selektionshistoria. En kort inkörning behövs fortfarande, men några tusen tick i stället för tjugotusen.
 
+### Fördröjd insättning och grundarfläck
+
+*0088. Två fel som båda gjorde faunakörningar ogiltiga.*
+
+**Faunan mätte en halvfärdig värld.** Sådden ger 56 procent av jämviktens stående gröda, produktionen skalar med den, och ett bestånd som ligger under bärkraften i den färdiga världen ligger över den i den halvfärdiga. Tjugo djur betade ner floran, tappade kondition — medelmassa 1,75 → 1,05 kg — och när floran väl växte tillbaka var beståndet redan för litet. `--fauna-at N` håller tillbaka insättningen tills floran nått jämvikt.
+
+**Jämn utspridning garanterar Allee-fällan.** Synellipsen med `r_front = 7` och excentricitet 0,7 täcker `π r² (1-e)² / (1-e²)^{3/2}` = **38 celler** av 16 384, alltså 0,23 procent:
+
+```
+ 20 djur  ->  0,04 i synfältet  ->   4 % av tickarna med någon i sikte
+100 djur  ->  0,23              ->  21 %
+300 djur  ->  0,69              ->  50 %
+```
+
+Bärkraften är tjugo djur; mötesfrekvensen kräver trehundra. Vid jämn utspridning är talen femton gånger isär, och beståndet kan inte samtidigt vara stort nog att hitta varandra och litet nog att få mat. Under omkring tio individer upphör reproduktionen helt — uppmätt: 24 födslar mellan tick 1000 och 3000, en enda mellan 6000 och 12000.
+
+`--fauna-spawn-radius` sätter djuren i en fläck. Tjugo djur i tusen celler ger sexton gånger den globala tätheten och ungefär femtio procents mötesfrekvens i stället för fyra. Fläcken köper ett etableringsfönster, inte en lösning: tusen celler producerar omkring 3 400 kg per år och bär ett par individer, så beståndet måste sprida ut sig och möter då samma geometri igen. Vad den gör är att **skilja de två felen åt** — dör beståndet trots parningar under fönstret är det spridningen och inte fodret.
+
+Tre följdfel som ändringen blottade, alla fångade av invariantsviten eller av synliga tal:
+
+- Med fördröjd fauna är `fauna_mass0` noll, och florasådden — som skalas mot den — blev noll. Floran uteblev helt. Skalan tas nu ur den fauna som kommer.
+- Djur som sätts in efter tick noll får sin massa gratis och måste bokföras som tillförd näring, precis som utgångstillståndet. Utan det drev balansen 2,2e-4.
+- Sådden allokerade 333 333 slots för en sådd som marken sänkte till 82 885 plantor, och store:n växte till en halv miljon. Antalet kapas nu av vad den fria näringspoolen kan betala.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*
