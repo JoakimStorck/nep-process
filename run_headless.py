@@ -354,6 +354,16 @@ def parse_args() -> argparse.Namespace:
                     help="bredare diagnostikrad och sammanfattning vid slut")
     ap.add_argument("--seeds", type=str, default=None,
                     help="kommaseparerad lista, t.ex. 1,2,3 — kör flera och jämför")
+    ap.add_argument("--drag-lin", type=float, default=None,
+                    help="AgentParams.drag_lin — linjärt motstånd; sätter farten")
+    ap.add_argument("--drag-quad", type=float, default=None,
+                    help="AgentParams.drag_quad — kvadratiskt motstånd")
+    ap.add_argument("--v-max", type=float, default=None,
+                    help="AgentParams.v_max — hårt farttak; binder inte vid förval")
+    ap.add_argument("--sense-idle", type=int, default=None,
+                    help="AgentParams.sense_idle_steps — tick mellan sensingar i vila")
+    ap.add_argument("--sense-alert", type=int, default=None,
+                    help="AgentParams.sense_alert_steps — tick mellan sensingar i beredskap")
     ap.add_argument("--sociability-init", type=float, default=None,
                     help="grundarnas sociability, 0..1; nollpunkten i reflexen är 0,5")
     ap.add_argument("--fauna-at", type=int, default=None,
@@ -396,6 +406,21 @@ def build_population(a: argparse.Namespace, seed: int, hub=None) -> Population:
     else:
         WP = WorldParams(width=int(a.width), height=int(a.height), dt=float(a.dt), **wp_over)
     AP = AgentParams(dt=WP.dt)
+    # Rörelse- och perceptionsparametrar som kommandoradsflaggor. Det som
+    # avgör om perceptionen hinner med är dimensionslöst: sträcka per
+    # sensingintervall genom synvidd. Vid förval är den 0,88 · 10 / 7,0 = 1,26,
+    # alltså rör sig djuret längre mellan två sensingar än synfältet är långt.
+    # Kvoten går att sänka från båda hållen, och båda vägarna ska kunna prövas
+    # utan kodändring.
+    for _cli, _name in (
+        (a.drag_lin, "drag_lin"),
+        (a.drag_quad, "drag_quad"),
+        (a.v_max, "v_max"),
+        (a.sense_idle, "sense_idle_steps"),
+        (a.sense_alert, "sense_alert_steps"),
+    ):
+        if _cli is not None:
+            setattr(AP, _name, type(getattr(AP, _name))(_cli))
     PP = PopParams(init_pop=int(a.init_pop), max_pop=int(a.max_pop))
     if getattr(a, "flora_ratio", None) is not None:
         PP.flora_init_mass_ratio = float(a.flora_ratio)

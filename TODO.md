@@ -1096,6 +1096,45 @@ Sedan 0084 läser världskanalerna sitt grannskap isotropt via sektoraggregat, s
 
 Sätt `social_memory_ticks = 0` för att pröva excentriciteten ensam. De två ändringarna är avsiktligt separerbara.
 
+### Rörelse- och perceptionsflaggor
+
+*0093. Verktyg, inte beteende. Förvalen är oförändrade.*
+
+Efter 0092 syntes fortfarande ingen flockning, varken vid ekologisk täthet eller i ett tätt visuellt test med `sociability = 0,9`. Mätning av reflexen visade att den **verkar**: den utlöses i 63 procent av anropen, flyttar styrkommandot med median 0,128 och klipps aldrig av mättnad. Men var tredje detektion gäller en **annan individ**, och var sjätte byter den sociala termen tecken. Nettoeffekten över ett möte är en slumpvandring i kurs.
+
+Orsaken är dimensionslös och räknebar:
+
+```
+fart median 44 per månad  ->  0,88 enheter per tick
+sensing var 10:e tick i vila
+sträcka mellan två sensingar   8,80 enheter
+synvidd                        7,00 enheter
+kvot                           1,26
+```
+
+**Djuret förflyttar sig längre mellan två sensingar än synfältet är långt.** En granne som syns vid en sensing är ofta utanför räckhåll vid nästa — inte för att den flyttat sig, utan för att observatören gjort det. Vid det täta testet fanns bara två kandidater inom synvidd i median, så grannbytena beror på att den gamla grannen lämnat synfältet, inte på att kandidaterna är många.
+
+Kvoten går att sänka från två håll, och båda ska kunna prövas utan kodändring:
+
+```
+--drag-lin      farten sätts av kraftbalansen F0·M^(2/3) mot drag_lin·v + drag_quad·v²
+--drag-quad     vid v = 44 dominerar den linjära termen fyra mot ett
+--v-max         binder inte vid förval: taket är 100, realiserad fart 44
+--sense-idle    tick mellan sensingar i vila, förval 10
+--sense-alert   tick mellan sensingar i beredskap, förval 3
+```
+
+Uppmätt:
+
+```
+drag_lin  220    fart 44,0    8,80 enh mellan sensingar    kvot 1,26
+drag_lin 1350    fart  8,3    1,65 enh mellan sensingar    kvot 0,24
+```
+
+1350 ger alltså 81 procents fartsänkning och fyra observationer per gång en granne passerar synfältet.
+
+Att räkna med vid sänkt fart: rörelse kostar energi, så åtta gånger långsammare djur betalar långt mindre för locomotion och energibudgeten ändras kraftigt. Betningsräckvidden `ceil(v·dt)` förblir 1 i båda fallen.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*
