@@ -39,7 +39,7 @@ from population import Population, PopParams
 
 import numpy as np
 
-from invariants import check_all, diagnostics, nutrient_balance
+from invariants import check_all, diagnostics, fauna_spacing, nutrient_balance
 
 
 # ---------------------------------------------------------------------------
@@ -453,6 +453,15 @@ def print_summary(pop: Population, d0: dict, nb0: dict, unika: int, worst_drift:
                   "inte ett flödesjämviktstal")
 
     if _R["agenttick"]:
+        sp = fauna_spacing(pop)
+        if sp["fauna_nn_mean"] == sp["fauna_nn_mean"]:   # inte NaN
+            print(f"\n  utbredning   avstånd till närmaste artfrände: "
+                  f"medel {sp['fauna_nn_mean']:.2f}, median {sp['fauna_nn_median']:.2f}")
+            print(f"               {100 * sp['fauna_in_range_frac']:.1f} % har någon inom "
+                  f"synhåll ({float(pop.agents[0].AP.ray_len_front):.0f}); "
+                  f"synellipsen täcker {sp['fauna_sense_area']:.0f} av "
+                  f"{int(pop.grid.n_cells)} celler")
+
         print(f"\n  reproduktion {100 * _R['redo'] / _R['agenttick']:.1f} % av agenttickarna är klara")
         print(f"    ser ingen alls {100 * _R['ser_ingen'] / redo:5.1f} %"
               f"   utanför parningsradie {100 * _R['utanfor_radie'] / redo:5.1f} %")

@@ -1004,6 +1004,22 @@ Tre följdfel som ändringen blottade, alla fångade av invariantsviten eller av
 - Djur som sätts in efter tick noll får sin massa gratis och måste bokföras som tillförd näring, precis som utgångstillståndet. Utan det drev balansen 2,2e-4.
 - Sådden allokerade 333 333 slots för en sådd som marken sänkte till 82 885 plantor, och store:n växte till en halv miljon. Antalet kapas nu av vad den fria näringspoolen kan betala.
 
+### Utbredningsmåttet
+
+*0089. Litet, men det skiljer två fel som ser likadana ut i populationskurvan.*
+
+Ett bestånd som diffunderar fritt sprids som roten ur tiden och tappar mötesfrekvens tills reproduktionen upphör. Ett som håller ihop planar ut på ett avstånd satt av kohesionen. Båda kan sluta i noll djur, men bara det första är ett geometriproblem.
+
+`--stats` rapporterar nu avstånd till närmaste artfrände — medel och median, toroidalt — och andelen djur som har någon inom `ray_len_front`. Den andelen är den storhet som direkt förklarar parningsfrekvensen.
+
+Referenspunkten är jämn utspridning. Synellipsen täcker `π r² (1-e)² / (1-e²)^{3/2}` = 38 areaenheter av 16 384 vid r = 7 och e = 0,7, alltså 0,23 procent, och tjugo djur ser då varandra fyra procent av tickarna. Ligger andelen väsentligt högre håller beståndet ihop.
+
+Första mätningen, 800 tick efter insättning i en fläck med radie 20: **19 procent har någon inom synhåll** mot fyra vid jämn utspridning. Fläcken finns alltså kvar men glesnar.
+
+**Och kohesion kräver inte ett grannskap.** Reynolds tre regler använder ett, men det är alignment och formationens stabilitet som behöver det. Aggregering — attraktion på avstånd, repulsion på nära håll — fungerar med den närmaste grannen, och den informationen finns redan i percepten som `N_ag`, `pred_bearing` och `pred_dist`. Sektorutvidgningen är därför inte en förutsättning för flockning, vilket jag felaktigt hävdade. Den ger jämnare alignment och en känsla för lokal täthet.
+
+Sektoraggregat ökar inte heller synvidden: sex sektorer över samma ellips ser samma 38 celler. Detektionsproblemet löses varken av en granne eller av ett grannskap — det är radien som sätter det. Vad som kan lösas är att hålla ihop när man väl är tillsammans, och för det räcker en granne.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*

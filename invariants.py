@@ -24,6 +24,7 @@ och energi som diagnostik i `diagnostics()`, inte som assertions.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -887,6 +888,59 @@ def nutrient_balance(pop) -> dict[str, float]:
         "lost": lost,
         "unaccounted": total - (added - lost),
     }
+
+
+def fauna_spacing(pop) -> dict[str, float]:
+    """
+    Hur tätt faunan står, mätt som avstånd till närmaste artfrände.
+
+    Måttet finns för att skilja två fel åt som annars ser likadana ut i
+    populationskurvan. Ett bestånd som diffunderar fritt sprids som roten ur
+    tiden och tappar mötesfrekvens tills reproduktionen upphör; ett som håller
+    ihop planar ut på ett avstånd satt av kohesionen. Båda kan sluta i noll
+    djur, men bara det första är ett geometriproblem.
+
+    Räckviddsandelen är den storhet som direkt förklarar parningsfrekvensen.
+    Synellipsen med `r_front` och excentricitet `e` täcker
+    `π r² (1-e)² / (1-e²)^{3/2}` areaenheter — 38 av 16 384 vid r=7 och e=0,7,
+    alltså 0,23 procent. Vid jämn utspridning ser tjugo djur varandra fyra
+    procent av tickarna. Ligger andelen väsentligt högre håller beståndet ihop.
+
+    Avstånden är toroidala. Kostnaden är O(n²) men beräknas bara när
+    diagnostiken efterfrågas, och n är hundratal.
+    """
+    ag = [a for a in getattr(pop, "agents", ()) if a.body.alive]
+    n = len(ag)
+    out = {"fauna_nn_mean": float("nan"), "fauna_nn_median": float("nan"),
+           "fauna_in_range_frac": float("nan"), "fauna_sense_area": float("nan")}
+    if n < 2:
+        return out
+
+    g = pop.grid
+    xs = np.fromiter((a.x for a in ag), dtype=np.float64, count=n)
+    ys = np.fromiter((a.y for a in ag), dtype=np.float64, count=n)
+    ex, ey = float(g.extent_x), float(g.extent_y)
+
+    dx = np.abs(xs[:, None] - xs[None, :])
+    dy = np.abs(ys[:, None] - ys[None, :])
+    np.minimum(dx, ex - dx, out=dx)
+    np.minimum(dy, ey - dy, out=dy)
+    d = np.sqrt(dx * dx + dy * dy)
+    np.fill_diagonal(d, np.inf)
+    nn = d.min(axis=1)
+
+    AP = ag[0].AP
+    rf = float(AP.ray_len_front)
+    e = max(0.0, min(0.999, float(AP.ray_eccentricity)))
+    area = math.pi * rf * rf * (1.0 - e) ** 2 / (1.0 - e * e) ** 1.5
+
+    out["fauna_nn_mean"] = float(np.mean(nn))
+    out["fauna_nn_median"] = float(np.median(nn))
+    # Andel med minst en artfrände inom den längsta synriktningen. Grov mot
+    # ellipsen, men den är riktningsoberoende och därför jämförbar över tid.
+    out["fauna_in_range_frac"] = float(np.mean(nn <= rf))
+    out["fauna_sense_area"] = float(area)
+    return out
 
 
 def diagnostics(pop) -> dict[str, Any]:
