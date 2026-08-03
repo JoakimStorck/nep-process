@@ -362,20 +362,26 @@ class Population:
             float(x.body.M) + x.body.M_reserve()
             for x in self.agents if x.body.alive
         ))
-        if fauna_mass0 <= 0.0 and int(self.PP.init_pop) > 0:
-            # Faunan är fördröjd och har ingen massa att skala sådden mot. Att
-            # låta målet bli noll vore tyst katastrofalt — floran uteblir helt.
-            # Skalan tas i stället ur den fauna som *kommer*, med samma
-            # nominella vuxenmassa som sådden använder.
+        if fauna_mass0 <= 0.0:
+            # Sådden skalas mot **markens bördighet**, inte mot konsumenterna.
             #
-            # Kopplingen är i grunden fel: sådden ska inte skalas mot
-            # konsumenterna alls, utan mot markens bördighet. Sedan 0087 kapas
-            # den ändå av vad marken kan betala, så talet nedan sätter bara ett
-            # tak som näringsbudgeten sänker till rätt nivå.
-            fauna_mass0 = float(self.PP.init_pop) * float(self.WP.B_K)
-        _ = self._seed_initial_flora(
-            target_mass=float(self.PP.flora_init_mass_ratio) * fauna_mass0,
-        )
+            # Kopplingen till `fauna_mass0` har nu brustit fyra gånger: vid
+            # fördröjd fauna, vid ändrad världsstorlek, vid ändrad init_pop och
+            # senast vid `--init_pop 0`, där en floraköring utan djur sådde en
+            # enda planta på 7,64 kg och därmed mätte ingenting alls.
+            #
+            # Rätt storhet fanns hela tiden. Sedan 0087 köps sådden ur den fria
+            # näringspoolen, så taket är redan bördigheten — det här gör det
+            # till *målet* i stället för till en spärr. En värld med
+            # `nutrient_init` = 0,117 och 16 384 celler bär 1 917 kg näring,
+            # vilket vid typisk stökiometri räcker till omkring 108 000 kg
+            # vävnad mot jämviktens uppmätta 118 100.
+            free_n = float(np.sum(np.asarray(self.world.nutrient), dtype=np.float64))
+            target = free_n / max(1e-9, nutrient_content(0.5))
+        else:
+            target = float(self.PP.flora_init_mass_ratio) * fauna_mass0
+
+        _ = self._seed_initial_flora(target_mass=target)
         self.store.rebuild_spatial_index()
 
         self._book_initial_nutrient()

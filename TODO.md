@@ -1135,6 +1135,24 @@ drag_lin 1350    fart  8,3    1,65 enh mellan sensingar    kvot 0,24
 
 Att räkna med vid sänkt fart: rörelse kostar energi, så åtta gånger långsammare djur betalar långt mindre för locomotion och energibudgeten ändras kraftigt. Betningsräckvidden `ceil(v·dt)` förblir 1 i båda fallen.
 
+### Sådden mot marken, inte mot konsumenterna
+
+*0094. Samma koppling har nu brustit fyra gånger.*
+
+`target_mass = flora_init_mass_ratio · fauna_mass0` kräver att det finns fauna att skala mot. Bristerna i tur och ordning: vid ändrad världsstorlek gav samma ratio hundra gånger fel födotäthet; vid ändrad `init_pop` likaså; vid fördröjd fauna blev målet noll och floran uteblev; och senast vid `--init_pop 0` sådde en bördighetsstege med tolv körningar **en enda planta på 7,64 kg** och mätte därmed ingenting alls.
+
+Rätt storhet fanns hela tiden. Sedan 0087 köps sådden ur den fria näringspoolen, så bördigheten var redan taket — nu blir den **målet** i stället för en spärr.
+
+```
+init_pop=0   nutrient_init=0,117   ->   82 201 plantor,  94 782 kg
+init_pop=0   nutrient_init=0,936   ->  657 608 plantor, 851 541 kg
+init_pop=20  nutrient_init=0,117   ->   51 588 plantor,  65 807 kg
+```
+
+Vid faktor 1 hamnar sådden på 94 782 kg mot jämviktens uppmätta 118 104, alltså i rätt storleksordning utan att någon parameter behöver ställas per körning. `flora_init_mass_ratio` används fortfarande när fauna finns, så befintliga körningar är oförändrade.
+
+Åttafaldig bördighet ger 657 608 plantor, alltså **åtta gånger fler och inte större**. Det är en första indikation på att antalet skalar linjärt med bördigheten och att en femdubbling därför kostar omkring 160 ms/tick — men det är sådden och inte jämvikten, och bördighetsstegen ska avgöra saken.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*
