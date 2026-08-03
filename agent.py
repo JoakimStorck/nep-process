@@ -2503,6 +2503,7 @@ class Agent:
         best_threat,
         best_threat_score: float,
         best_mate,
+        neighbour_heading: float | None = None,
     ) -> tuple[float, float, float, float, float]:
         hunt_state = 0.0
         flee_state = 0.0
@@ -2554,17 +2555,46 @@ class Agent:
             biasN = clamp(errN / math.pi, -1.0, 1.0)
             Nd_f = float(Nd)
     
+            # Reynolds tre regler, med var sin räckvidd. Separation nära,
+            # alignment på mellanavstånd, kohesion långt bort.
+            #
+            # Tidigare fanns bara två av dem, och kohesionen var dessutom
+            # viktad tvärtom: `wdist = 1 - Nd` är störst på nära håll, alltså
+            # starkast precis där separationen borde ta över och svagast där
+            # gruppen behöver dras ihop. Två djur svängde mot varandra, möttes,
+            # stöttes isär i repulsionszonen och divergerade omedelbart —
+            # eftersom ingenting sa åt dem att fortsätta åt samma håll. Det
+            # ger möten, inte flockar, och kohesionskvoten mot Poisson mättes
+            # till 1,0 oavsett `sociability`: ingen aggregering alls.
+            #
+            # Alignment är regeln som omvandlar ett möte till ett sällskap.
+            # Riktningen ett djur rör sig i är observerbar — den läses ur
+            # motpartens kurs, inte ur dess arvsmassa.
             REP_ZONE = 0.35
+            soc_bias = 2.0 * soc - 1.0
             if Nd_f < REP_ZONE:
                 rs = 1.0 - (Nd_f / REP_ZONE)
                 turn = clamp(turn - 0.70 * rs * biasN, -1.0, 1.0)
                 explore_drive = explore_drive * (1.0 - 0.3 * rs)
-            else:
-                soc_bias = 2.0 * soc - 1.0
-                if abs(soc_bias) > 1e-6:
-                    wdist = clamp(1.0 - Nd_f, 0.0, 1.0)
-                    turn = clamp(turn + 0.70 * soc_bias * wdist * biasN, -1.0, 1.0)
-                    explore_drive = explore_drive * (1.0 - 0.60 * abs(soc_bias) * wdist)
+            elif abs(soc_bias) > 1e-6:
+                # Kohesion: verkar på avstånd och tonar ut när man närmar sig.
+                wcoh = clamp((Nd_f - REP_ZONE) / max(1e-6, 1.0 - REP_ZONE), 0.0, 1.0)
+                turn = clamp(turn + 0.70 * soc_bias * wcoh * biasN, -1.0, 1.0)
+
+                # Alignment: starkast på mellanavstånd, där grannen är nära nog
+                # att vara värd att följa men inte så nära att man måste väja.
+                if neighbour_heading is not None and soc_bias > 0.0:
+                    w = clamp((Nd_f - REP_ZONE) / max(1e-6, 1.0 - REP_ZONE), 0.0, 1.0)
+                    walign = 4.0 * w * (1.0 - w)          # topp vid halva vägen
+                    errA = self._signed_angle(float(neighbour_heading) - self.heading)
+                    turn = clamp(turn + 0.70 * soc_bias * walign
+                                 * clamp(errA / math.pi, -1.0, 1.0), -1.0, 1.0)
+
+                # Utforskningen dämpas bara av att *söka sällskap*. Tidigare
+                # användes abs(soc_bias), så även ett djur som undviker
+                # artfränder slutade söka föda.
+                if soc_bias > 0.0:
+                    explore_drive = explore_drive * (1.0 - 0.60 * soc_bias * wcoh)
     
         return turn, thrust, explore_drive, flee_state, hunt_state
     
@@ -2908,6 +2938,7 @@ class Agent:
             best_threat=best_threat,
             best_threat_score=best_threat_score,
             best_mate=best_mate,
+            neighbour_heading=(float(detected.heading) if detected is not None else None),
         )
     
         turn, thrust, explore_drive = self._apply_food_steering(

@@ -1034,6 +1034,43 @@ Utbredningsmåttet från 0089 fick samtidigt sin **Poissonreferens**. Utan den �
 
 Den kvarvarande flaskhalsen är inte detektion utan vad som händer efter den: 5 276 tillfällen då en partner sågs gav 364 parningar, alltså sju procent.
 
+### Alignment — den tredje regeln
+
+*0091. Mekanismen som saknades för att flockning ska vara möjlig.*
+
+0090 visade att `sociability` inte producerar aggregering: kohesionskvoten mot Poisson mättes till 1,02, 0,98 och 1,10 för base, 0,65 och 0,80 — alla ett. Höga värden skadade dessutom: vid 0,95 dog två av tre populationer ut och medelbeståndet föll till 14 mot baslinjens 30.
+
+Djuren betalade alltså kostnaden utan att få nyttan, och koden visar varför.
+
+```python
+REP_ZONE = 0.35
+if Nd_f < REP_ZONE:                     # separation
+    turn -= 0.70 * rs * biasN
+else:                                    # kohesion
+    wdist = clamp(1.0 - Nd_f, 0.0, 1.0)
+    turn += 0.70 * soc_bias * wdist * biasN
+```
+
+Två av Reynolds tre regler fanns. **Alignment saknades helt**, och det är den regel som omvandlar ett möte till ett sällskap: två djur som möts och sedan matchar kurs färdas tillsammans, två som möts utan att matcha divergerar omedelbart.
+
+Viktningen var dessutom omvänd. `wdist = 1 − Nd` är störst på nära håll, alltså starkast precis där separationen borde ta över och svagast där gruppen behöver dras ihop. Hos Reynolds verkar kohesionen på lång räckvidd.
+
+Ändringen ger de tre reglerna var sin räckvidd:
+
+```
+nära      separation     stöt bort
+mellan    alignment      matcha kurs      w = 4·x·(1−x), topp vid halva vägen
+långt     kohesion       dra ihop         w stiger med avståndet
+```
+
+Alignment läser motpartens **kurs**, inte dess arvsmassa — en observerbar storhet. Den hämtas i reflexen från den redan detekterade agenten, så `OBS_DIM` är oförändrad.
+
+En tredje rättelse: utforskningsdriften dämpades med `abs(soc_bias)`, så även ett djur som *undviker* artfränder slutade söka föda. Dämpningen gäller nu bara den som söker sällskap.
+
+**Mekanismen, inte beteendet.** Vad som kodas är att alignment är möjlig; `sociability` styr styrkan och är evolverbar. `--sociability-init` är fusket vi mäter med under utvecklingen, och locus släpps fritt när mekanismen visat sig fungera.
+
+**Overifierad.** Sandlådan hinner inte en giltig körning: faunan måste sättas in i en flora vid jämvikt, alltså tidigast tick 15 000, och 40 000 tick tar tjugo minuter. Kohesionskvoten mot Poisson är måttet som avgör om alignment gör skillnad.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*
