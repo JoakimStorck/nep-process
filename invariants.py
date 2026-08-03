@@ -939,6 +939,13 @@ def fauna_spacing(pop) -> dict[str, float]:
     # Andel med minst en artfrände inom den längsta synriktningen. Grov mot
     # ellipsen, men den är riktningsoberoende och därför jämförbar över tid.
     out["fauna_in_range_frac"] = float(np.mean(nn <= rf))
+    # Poissonförväntan vid samma täthet. Utan den är andelen inte tolkbar:
+    # den stiger med beståndets storlek även vid helt slumpmässig fördelning,
+    # och 70 procent vid femtio djur är 62 vid slump. Kvoten mot förväntan är
+    # det som säger om beståndet faktiskt håller ihop.
+    lam = n / max(1.0, float(pop.grid.n_cells))
+    out["fauna_in_range_poisson"] = float(1.0 - math.exp(-lam * math.pi * rf * rf))
+    out["fauna_nn_poisson"] = float(0.5 / math.sqrt(max(lam, 1e-12)))
     out["fauna_sense_area"] = float(area)
     return out
 

@@ -19,6 +19,7 @@ from genetics import (
     mutate_trait_vector,
 )
 from phenotype import (
+    _T_SOC,
     derive_pheno,
     flora_adult_mass,
     dispersal_scale,
@@ -128,6 +129,17 @@ class PopParams:
     # Radie i kontinuerliga enheter för insättningsfläcken. 0 = jämn
     # utspridning över hela världen. Se `_fauna_spawn_pos`.
     fauna_spawn_radius: float = 0.0
+    # Startvärde för `sociability` hos grundarna. None = normal slumpning.
+    #
+    # Reflexen använder `soc_bias = 2·soc − 1`, så nollpunkten ligger vid 0,5:
+    # halva en uniformt slumpad startpopulation styr *bort* från artfränder.
+    # Med detektion i storleksordningen tre procent av agenttickarna uttrycks
+    # driften sällan nog att selektionen ska hinna verka, så egenskapen driver
+    # i praktiken neutralt medan beståndet avgörs.
+    #
+    # Sätts värdet får alla grundare samma. Locus muteras normalt vidare, så
+    # avkomman kan avvika — det är startfördelningen som styrs, inte taket.
+    sociability_init: float | None = None
     max_pop: int = 500
     # Initial floramassa som multipel av faunans initiala massa.
     #
@@ -1260,6 +1272,21 @@ class Population:
             _eps = 0.02   # marginaler för att undvika logit(0) och logit(1)
             _u   = self.rng.uniform(_eps, 1.0 - _eps, int(self.PP.n_traits)).astype(_np.float64)
             raw_traits = _np.log(_u / (1.0 - _u)).astype(_np.float32)  # logit
+
+            # Grundarnas sociability kan sättas explicit. Reflexen använder
+            # `soc_bias = 2·soc − 1`, så nollpunkten ligger vid 0,5: halva en
+            # uniformt slumpad startpopulation styr *bort* från artfränder.
+            # Vid detektion i storleksordningen tre procent av agenttickarna
+            # uttrycks driften för sällan för att selektionen ska hinna verka
+            # innan beståndets öde avgjorts, så locus driver neutralt.
+            #
+            # Samma logit-invers som ovan. Locus muteras normalt vidare, så
+            # avkomman kan avvika — det är startfördelningen som styrs.
+            _soc0 = self.PP.sociability_init
+            if _soc0 is not None:
+                _us = min(max(float(_soc0), 1e-4), 1.0 - 1e-4)
+                raw_traits[_T_SOC] = _np.float32(math.log(_us / (1.0 - _us)))
+
             pheno_tmp  = derive_pheno(raw_traits)
             h1 = int(pheno_tmp.hidden_1)
             h2 = int(pheno_tmp.hidden_2)
@@ -1272,7 +1299,6 @@ class Population:
             g.traits = raw_traits
             g.init_random(self.rng, init_traits_if_missing=False)
 
-            # Sprid ut agenter över hela världen
             x, y = self._fauna_spawn_pos()
 
             a = Agent(

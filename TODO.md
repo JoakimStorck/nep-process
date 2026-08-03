@@ -1020,6 +1020,20 @@ Första mätningen, 800 tick efter insättning i en fläck med radie 20: **19 pr
 
 Sektoraggregat ökar inte heller synvidden: sex sektorer över samma ellips ser samma 38 celler. Detektionsproblemet löses varken av en granne eller av ett grannskap — det är radien som sätter det. Vad som kan lösas är att hålla ihop när man väl är tillsammans, och för det räcker en granne.
 
+### Sociability som startvillkor
+
+*0090. Kontrollerat experiment, inte en mekanismändring.*
+
+Reflexen finns redan: `soc_bias = 2·soc − 1` svänger mot artfränden när `sociability` är hög och bort när den är låg. Men **nollpunkten ligger vid 0,5**, så halva en uniformt slumpad startpopulation styr aktivt bort från artfränder. Och driften uttrycks bara när någon syns — i storleksordningen tre procent av agenttickarna — så selektionen på locus hinner inte verka innan beståndets öde avgjorts. Egenskapen driver i praktiken neutralt.
+
+`--sociability-init` sätter grundarnas värde. Locus muteras normalt vidare, så avkomman kan avvika; det är startfördelningen som styrs, inte taket.
+
+Utbredningsmåttet från 0089 fick samtidigt sin **Poissonreferens**. Utan den är andelen inte tolkbar: den stiger med beståndets storlek även vid helt slumpmässig fördelning. I p89-körningen såg 70 procent någon inom synhåll vid femtio djur — men Poissonförväntan vid samma täthet är 62, och medelavståndet 8,58 mot 9,05 vid slump. Beståndet var alltså bara marginellt klumpat, och de 70 procenten kom av täthet och inte av kohesion. Kvoten mot förväntan är det tal som säger om djuren håller ihop.
+
+**Baslinjen att jämföra mot är p89**, som är den första körning där beståndet bar sig självt: insatt vid tick 15 000 i en fläck med radie 20, oscillerande mellan 22 och 50 över 25 000 tick, 341 födslar och 361 unika individer, med floran i motfas — en rovdjur–bytesdjur-cykel. Bärkraften ser ut att ligga på 35–50, högre än den skattning på 15–25 som gjordes ur kollapskörningen.
+
+Den kvarvarande flaskhalsen är inte detektion utan vad som händer efter den: 5 276 tillfällen då en partner sågs gav 364 parningar, alltså sju procent.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*

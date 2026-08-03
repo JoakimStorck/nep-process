@@ -354,6 +354,8 @@ def parse_args() -> argparse.Namespace:
                     help="bredare diagnostikrad och sammanfattning vid slut")
     ap.add_argument("--seeds", type=str, default=None,
                     help="kommaseparerad lista, t.ex. 1,2,3 — kör flera och jämför")
+    ap.add_argument("--sociability-init", type=float, default=None,
+                    help="grundarnas sociability, 0..1; nollpunkten i reflexen är 0,5")
     ap.add_argument("--fauna-at", type=int, default=None,
                     help="tick då faunan sätts in; 0 = vid start")
     ap.add_argument("--fauna-spawn-radius", type=float, default=None,
@@ -399,6 +401,8 @@ def build_population(a: argparse.Namespace, seed: int, hub=None) -> Population:
         PP.flora_init_mass_ratio = float(a.flora_ratio)
     if getattr(a, "flora_plant_mass", None) is not None:
         PP.flora_init_plant_mass = float(a.flora_plant_mass)
+    if getattr(a, "sociability_init", None) is not None:
+        PP.sociability_init = float(a.sociability_init)
     if getattr(a, "fauna_at", None) is not None:
         PP.fauna_at = int(a.fauna_at)
     if getattr(a, "fauna_spawn_radius", None) is not None:
@@ -458,9 +462,12 @@ def print_summary(pop: Population, d0: dict, nb0: dict, unika: int, worst_drift:
             print(f"\n  utbredning   avstånd till närmaste artfrände: "
                   f"medel {sp['fauna_nn_mean']:.2f}, median {sp['fauna_nn_median']:.2f}")
             print(f"               {100 * sp['fauna_in_range_frac']:.1f} % har någon inom "
-                  f"synhåll ({float(pop.agents[0].AP.ray_len_front):.0f}); "
-                  f"synellipsen täcker {sp['fauna_sense_area']:.0f} av "
-                  f"{int(pop.grid.n_cells)} celler")
+                  f"synhåll ({float(pop.agents[0].AP.ray_len_front):.0f}), "
+                  f"mot {100 * sp['fauna_in_range_poisson']:.1f} % vid slumpmässig "
+                  f"fördelning")
+            print(f"               medelavstånd {sp['fauna_nn_mean']:.2f} mot "
+                  f"{sp['fauna_nn_poisson']:.2f} vid slump; synellipsen täcker "
+                  f"{sp['fauna_sense_area']:.0f} av {int(pop.grid.n_cells)} celler")
 
         print(f"\n  reproduktion {100 * _R['redo'] / _R['agenttick']:.1f} % av agenttickarna är klara")
         print(f"    ser ingen alls {100 * _R['ser_ingen'] / redo:5.1f} %"
