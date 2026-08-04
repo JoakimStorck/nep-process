@@ -1,0 +1,15 @@
+namn: f4-flock
+varld:
+  bredd: 64
+  hojd: 256
+  bordighet: 4.0
+fauna:
+  antal: 80
+  insatts_vid: jamvikt
+  flackar: 3
+  flackradie: 20.0
+  max_antal: 8192
+fysiologi:
+  fartskala: 0.5
+  sociability: 0.8
+  sociability_sd: 0.5
