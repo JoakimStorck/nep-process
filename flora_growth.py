@@ -53,6 +53,22 @@ except Exception:  # pragma: no cover - beror på miljön
 
         return deco
 
+# Sätts av en senare patch som lägger till en parallelliserad kärna. Att låta
+# den finnas som en flagga i stället för att låta anropare gissa gör att
+# mätverktyget kan räkna upp vägarna utan att veta vilka som byggts.
+HAVE_PARALLEL = False
+
+
+def available_backends() -> tuple[str, ...]:
+    """Vägar som går att välja i den här miljön, i stigande förväntad fart."""
+    out = ["numpy"]
+    if HAVE_NUMBA:
+        out.append("numba")
+    if HAVE_PARALLEL:
+        out.append("parallel")
+    return tuple(out)
+
+
 from phenotype import (
     FLORA_LIFESPAN_MAX,
     FLORA_LIFESPAN_MIN,

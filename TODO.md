@@ -1771,7 +1771,7 @@ passet totalt   113,8 ms/tick   54,3 % av takten
 
 Två fällor som bara syns i en elementvis jämförelse: strukturandelen används **klippt** i näringsinnehåll, omsättning och livslängd men **oklippt** i areorna och energitätheten, och rotmassan går via en float32-rundtur i store:n mellan avsnitt 1 och 3.
 
-**Verifieringen är två identiska världar med var sin bakända**, jämförda fält för fält över hela slot- och cellrymden efter varje tick. `run_headless.py --verify-flora-growth N`. Att invariantsviten går igenom säger för lite: den skulle godkänna ett pass som fördelade upptaget fel mellan plantor så länge summan stämde.
+**Verifieringen är två identiska världar med var sin väg**, jämförda fält för fält över hela slot- och cellrymden efter varje tick. `run_headless.py --verify-flora-growth N`. Att invariantsviten går igenom säger för lite: den skulle godkänna ett pass som fördelade upptaget fel mellan plantor så länge summan stämde.
 
 ```
 400 tick, 64x64 med fauna, ingen strukturell avvikelse
@@ -1822,6 +1822,25 @@ uptake     flora   -0,107      0,168
 Två faunaloci över bruset, noll av tretton floraloci. Det är första gången faunans selektion är avgränsad mot brus i stället för rapporterad som en topplista.
 
 Rapporten är nu ett avsnitt per fråga: dödsorsaker över tid, energibudget per djur med kadaverandel, härstamning till grundargrupp, selektion per locus, rörelse över livstiden. `--run runs/pNNN` läser katalogen och skriver rapporten bredvid loggarna. 887 rader blir 426.
+
+### Vägarna mätta mot varandra
+
+*0116. `--bench-flora-growth`, och två rader i `kor.sh`.*
+
+En körnings `ms/tick` går inte att jämföra med en annan. Beståndet skiljer sig, maskinen skiljer sig, och tickens fasta del — världspassen över alla celler — gör att `us/planta` stiger när floran krymper. p114 slutade på 0,31 us/planta mot 0,823 före patchen, men vid 91 209 plantor mot 292 459, så talen mäter inte samma sak.
+
+Verktyget mäter i stället två vägar **i samma process med interfolierade varv**, under `pop.step()` och inte genom att anropa passet i en loop: upprepade anrop utan spridning låter floran krympa mellan mätpunkterna och mäter ett bestånd som inte finns. Passets egen tid tas med `perf_counter`, alltså samma oförvrängda metod som `--pass-timing`.
+
+```
+python run_headless.py --scenario scenarios/f4-flock.yaml \
+    --bench-flora-growth 17000 --bench-rounds 5 --bench-ticks 8
+```
+
+Uppvärmningen bär två saker som inte hör till den stationära kostnaden: kompileringen vid första anropet, och att floran ska hinna till det bestånd man vill mäta vid. Den bokfördes först på den väg som råkade vara vald och gav 1 286 procents passandel innan nollställningen kom på plats.
+
+Vägarna räknas upp ur `flora_growth.available_backends()`, så en tillkommande kärna syns i mätningen utan att verktyget rörs. `PopParams.flora_growth_backend` bär nu en sträng i stället för en boolesk flagga.
+
+**Två rader i `kor.sh`.** `--world-log` skrivs — utan den går florans selektion inte att mäta i efterhand, och det är Steg 4:s hela fråga. Och `NUMBA_NUM_THREADS=1` är borttagen ur miljöprefixet: så länge kärnan bara fanns i njit-form var en tråd rätt, men en hårdkodad etta framför en parallelliserad kärna är samma sak som att mäta parallelliseringen med den avstängd. BLAS-trådarna står kvar på ett.
 
 ## Steg 6c — Rörelsemotorn
 

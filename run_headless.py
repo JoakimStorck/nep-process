@@ -350,10 +350,17 @@ def parse_args() -> argparse.Namespace:
                     help="tick som räknas som uppvärmning och utesluts")
     ap.add_argument("--flora-growth", type=str, default=None,
                     choices=("numba", "numpy"),
-                    help="bakända för florans tillväxtpass; standard är numba "
+                    help="väg för florans tillväxtpass; standard är numba "
                          "när biblioteket finns")
+    ap.add_argument("--bench-flora-growth", type=int, default=0,
+                    help="mät tillväxtpassets vägar mot varandra efter N tick "
+                         "uppvärmning; interfolierade varv i samma process")
+    ap.add_argument("--bench-rounds", type=int, default=5,
+                    help="antal interfolierade varv i --bench-flora-growth")
+    ap.add_argument("--bench-ticks", type=int, default=8,
+                    help="tick per väg och varv i --bench-flora-growth")
     ap.add_argument("--verify-flora-growth", type=int, default=0,
-                    help="kör två identiska världar med var sin bakända i N tick "
+                    help="kör två identiska världar med var sin väg i N tick "
                          "och jämför tillståndet elementvis efter varje tick")
     ap.add_argument("--quiet", action="store_true")
 
@@ -849,6 +856,101 @@ def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
     return 0 if failures == 0 else 1
 
 
+def bench_flora_growth(a: argparse.Namespace, seed: int, warmup: int,
+                       rounds: int = 5, per: int = 8) -> int:
+    """
+    Tillväxtpassets vägar mätta mot varandra i samma process.
+
+    Absoluttal är inte jämförbara mellan sessioner, maskiner eller bestånd, så
+    ett tal ur en körning och ett ur en annan säger ingenting om varandra. Det
+    som går att jämföra är två vägar som räknat på samma värld i samma
+    process, med varven interfolierade så att drift i beståndet och i maskinens
+    tillstånd träffar båda lika.
+
+    Mätningen sker under `pop.step()`, inte genom att anropa passet i en loop.
+    Ett upprepat anrop utan spridning låter floran krympa mellan mätpunkterna
+    och mäter därmed ett bestånd som inte finns. Passets egen tid tas med
+    `perf_counter` runt anropet, alltså samma oförvrängda metod som
+    `--pass-timing` — `--profile` tredubblar körtiden och förvränger
+    fördelningen.
+
+    Uppvärmningen bär två saker som inte hör till den stationära kostnaden:
+    Numbas kompilering vid första anropet, och att floran ska hinna till det
+    bestånd man vill mäta vid.
+    """
+    import flora_growth
+
+    backends = list(flora_growth.available_backends())
+    if len(backends) < 2:
+        print("bara en väg byggd i den här miljön; inget att jämföra")
+        return 1
+
+    pop = build_population(a, seed)
+
+    acc = {b: 0.0 for b in backends}
+    wall = {b: 0.0 for b in backends}
+    flora = {b: 0.0 for b in backends}
+    calls = {b: 0 for b in backends}
+    state = {"mode": backends[-1]}
+
+    orig = pop._growth_system_flora
+
+    def timed():
+        t0 = time.perf_counter()
+        try:
+            return orig()
+        finally:
+            acc[state["mode"]] += time.perf_counter() - t0
+
+    pop._growth_system_flora = timed
+
+    print(f"värmer upp {warmup} tick (kompilering och beståndets bana)", flush=True)
+    for _ in range(int(warmup)):
+        pop.step()
+
+    # Uppvärmningen bokfördes på den väg som råkade vara vald, kompilering
+    # och allt. Nollställ innan mätningen börjar.
+    for d in (acc, wall, flora):
+        for k in d:
+            d[k] = 0.0
+    for k in calls:
+        calls[k] = 0
+
+    n0 = len(pop._flora_slots(rebuild=True))
+    print(f"mäter: {rounds} varv x {per} tick per väg, flora {n0}", flush=True)
+    for _ in range(int(rounds)):
+        for b in backends:
+            state["mode"] = b
+            pop._flora_growth_mode = b
+            t0 = time.perf_counter()
+            for _ in range(int(per)):
+                pop.step()
+                flora[b] += float(len(pop._flora_slots()))
+                calls[b] += 1
+            wall[b] += time.perf_counter() - t0
+
+    n1 = len(pop._flora_slots(rebuild=True))
+    print(f"\n--- tillväxtpassets vägar ---")
+    print(f"  flora {n0} -> {n1} under mätningen\n")
+    print(f"  {'väg':<10} {'passet':>10} {'hel tick':>10} {'us/planta':>11} "
+          f"{'passets andel':>14}")
+    for b in backends:
+        c = max(1, calls[b])
+        p_ms = acc[b] / c * 1e3
+        t_ms = wall[b] / c * 1e3
+        us = wall[b] / c / max(1.0, flora[b] / c) * 1e6
+        print(f"  {b:<10} {p_ms:8.2f} ms {t_ms:8.2f} ms {us:10.3f}  "
+              f"{acc[b] / max(1e-12, wall[b]) * 100:12.1f} %")
+    print()
+    base = backends[0]
+    for b in backends[1:]:
+        print(f"  {base} -> {b}: passet {acc[base] / max(1e-12, acc[b]):.2f}x, "
+              f"hel tick {wall[base] / max(1e-12, wall[b]):.2f}x")
+    print("\n  Talen gäller det här beståndet och den här maskinen. Kvoten är "
+          "det som bär\n  mellan körningar; millisekunderna gör det inte.")
+    return 0
+
+
 # Fält som tillväxtpasset skriver, plus de världsfält det rör. Jämförelsen
 # gäller hela slotrymden och hela cellrymden, inte ett urval — ett fel som bara
 # syns i en död slot är fortfarande ett fel, eftersom sloten återanvänds.
@@ -883,7 +985,7 @@ def _max_rel(a_arr, b_arr) -> tuple[float, float]:
 
 def verify_flora_growth(a: argparse.Namespace, seed: int, ticks: int) -> int:
     """
-    Två identiska världar, en per bakända, jämförda elementvis varje tick.
+    Två identiska världar, en per väg, jämförda elementvis varje tick.
 
     Det här är verifieringen som säger något. Att invariantsviten går igenom
     betyder bara att kärnan inte bryter mot bevarandelagarna — den skulle göra
@@ -897,10 +999,10 @@ def verify_flora_growth(a: argparse.Namespace, seed: int, ticks: int) -> int:
     """
     ref = build_population(a, seed)
     ref.PP.flora_growth_backend = "numpy"
-    ref._flora_growth_numba = False
+    ref._flora_growth_mode = "numpy"
     new = build_population(a, seed)
     new.PP.flora_growth_backend = "numba"
-    new._flora_growth_numba = None
+    new._flora_growth_mode = None
 
     print(f"verifierar florans tillväxtpass: {ticks} tick, seed {seed}", flush=True)
     worst: dict[str, tuple[float, float]] = {
@@ -946,6 +1048,12 @@ def verify_flora_growth(a: argparse.Namespace, seed: int, ticks: int) -> int:
 def main() -> int:
     a = parse_args()
     apply_scenario(a)
+
+    if int(getattr(a, "bench_flora_growth", 0) or 0) > 0:
+        sd = int(str(a.seeds).split(",")[0]) if a.seeds else 1
+        return bench_flora_growth(a, seed=sd, warmup=int(a.bench_flora_growth),
+                                  rounds=int(a.bench_rounds),
+                                  per=int(a.bench_ticks))
 
     if int(getattr(a, "verify_flora_growth", 0) or 0) > 0:
         sd = int(str(a.seeds).split(",")[0]) if a.seeds else 1

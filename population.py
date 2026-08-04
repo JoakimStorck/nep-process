@@ -214,7 +214,7 @@ class PopParams:
     # Andel av propagulmassan under vilken en groddplanta räknas som förlorad.
     flora_seedling_floor: float = 0.5
 
-    # Tillväxtpassets bakända. "numba" kompilerar kärnan vid första anropet;
+    # Tillväxtpassets väg. "numba" kompilerar kärnan vid första anropet;
     # "numpy" kör referensvägen. Båda ska ge samma utfall — flaggan finns för
     # att kunna jämföra dem elementvis på samma tillstånd, vilket är den enda
     # verifiering som säger något. Faller tillbaka på numpy om numba saknas.
@@ -332,11 +332,11 @@ class Population:
     _last_gate_all: int = 0
     _flora_slots_cache: object = None
     _fauna_slots_cache: object = None
-    # Vald bakända för tillväxtpasset, avgjord vid första anropet, och de
+    # Vald väg för tillväxtpasset, avgjord vid första anropet, och de
     # cellindexerade skrivbuffertar kärnan strör ut i. Buffertarna återanvänds
     # mellan tick: fyra allokeringar med längd n_cells per tick är gratis vid
     # sextontusen celler men inte vid en miljon.
-    _flora_growth_numba: object = None
+    _flora_growth_mode: object = None
     _flora_cell_buf: object = None
     
     _flora_summary_cache: dict[str, float] | None = field(init=False, default=None)
@@ -2253,18 +2253,20 @@ class Population:
 
     def _growth_system_flora(self) -> tuple[float, float, float]:
         """
-        Florans tillväxtpass. Väljer bakända och delegerar.
+        Florans tillväxtpass. Väljer väg och delegerar.
 
         Semantiken ägs av `_growth_system_flora_numpy`; `_growth_system_flora_numba`
         är samma pass med aritmetiken i en kompilerad kärna. Valet görs en gång
-        och faller tillbaka på numpy om numba saknas i miljön.
+        och faller tillbaka på den snabbaste byggda vägen om den begärda
+        saknas i miljön — se `flora_growth.available_backends`.
         """
-        if self._flora_growth_numba is None:
+        if self._flora_growth_mode is None:
             want = str(getattr(self.PP, "flora_growth_backend", "numba")).strip().lower()
-            self._flora_growth_numba = bool(want == "numba" and flora_growth.HAVE_NUMBA)
-        if self._flora_growth_numba:
-            return self._growth_system_flora_numba()
-        return self._growth_system_flora_numpy()
+            ok = flora_growth.available_backends()
+            self._flora_growth_mode = want if want in ok else ok[-1]
+        if self._flora_growth_mode == "numpy":
+            return self._growth_system_flora_numpy()
+        return self._growth_system_flora_numba()
 
     def _growth_system_flora_numba(self) -> tuple[float, float, float]:
         """
