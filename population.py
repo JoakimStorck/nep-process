@@ -18,6 +18,7 @@ from genetics import (
     init_organism_traits,
     mutate_trait_vector,
 )
+import flora_growth
 from phenotype import (
     _T_SOC,
     derive_pheno,
@@ -213,6 +214,12 @@ class PopParams:
     # Andel av propagulmassan under vilken en groddplanta räknas som förlorad.
     flora_seedling_floor: float = 0.5
 
+    # Tillväxtpassets bakända. "numba" kompilerar kärnan vid första anropet;
+    # "numpy" kör referensvägen. Båda ska ge samma utfall — flaggan finns för
+    # att kunna jämföra dem elementvis på samma tillstånd, vilket är den enda
+    # verifiering som säger något. Faller tillbaka på numpy om numba saknas.
+    flora_growth_backend: str = "numba"
+
     store_growth_min_chunk: int = 256
     store_growth_factor: float = 2.0
     
@@ -325,6 +332,12 @@ class Population:
     _last_gate_all: int = 0
     _flora_slots_cache: object = None
     _fauna_slots_cache: object = None
+    # Vald bakända för tillväxtpasset, avgjord vid första anropet, och de
+    # cellindexerade skrivbuffertar kärnan strör ut i. Buffertarna återanvänds
+    # mellan tick: fyra allokeringar med längd n_cells per tick är gratis vid
+    # sextontusen celler men inte vid en miljon.
+    _flora_growth_numba: object = None
+    _flora_cell_buf: object = None
     
     _flora_summary_cache: dict[str, float] | None = field(init=False, default=None)
 
@@ -1900,9 +1913,12 @@ class Population:
                 ).astype(np.int64, copy=False)
         return self._flora_slots_cache
 
-    def _growth_system_flora(self) -> tuple[float, float, float]:
+    def _growth_system_flora_numpy(self) -> tuple[float, float, float]:
         """
         Florans livscykel i ett pass: förnafall, död, upptag, allokering, tillväxt.
+
+        Referensimplementationen. `_growth_system_flora_numba` gör samma sak
+        med en kompilerad kärna och ska ge samma utfall; se `flora_growth.py`.
 
         **Inkomst skild från allokering.** En planta tog tidigare upp exakt den
         näring den i samma tick kunde omsätta till massa, och kunde därför
@@ -2227,19 +2243,163 @@ class Population:
 
         return float(produced), float(taken), float(died)
 
-    def _release_flora_slot(self, slot: int) -> None:
+    def _flora_cell_buffers(self, n_cells: int) -> tuple:
+        """Fyra återanvända cellindexerade skrivbuffertar åt tillväxtkärnan."""
+        buf = self._flora_cell_buf
+        if buf is None or int(buf[0].shape[0]) != int(n_cells):
+            buf = tuple(np.zeros(int(n_cells), dtype=np.float64) for _ in range(4))
+            self._flora_cell_buf = buf
+        return buf
+
+    def _growth_system_flora(self) -> tuple[float, float, float]:
+        """
+        Florans tillväxtpass. Väljer bakända och delegerar.
+
+        Semantiken ägs av `_growth_system_flora_numpy`; `_growth_system_flora_numba`
+        är samma pass med aritmetiken i en kompilerad kärna. Valet görs en gång
+        och faller tillbaka på numpy om numba saknas i miljön.
+        """
+        if self._flora_growth_numba is None:
+            want = str(getattr(self.PP, "flora_growth_backend", "numba")).strip().lower()
+            self._flora_growth_numba = bool(want == "numba" and flora_growth.HAVE_NUMBA)
+        if self._flora_growth_numba:
+            return self._growth_system_flora_numba()
+        return self._growth_system_flora_numpy()
+
+    def _growth_system_flora_numba(self) -> tuple[float, float, float]:
+        """
+        Tillväxtpasset som skal, kärna och efterspel.
+
+        Skalet plockar ut slots och celltillstånd, kärnan i `flora_growth.py`
+        räknar per planta, och efterspelet deponerar till detritus och skriver
+        tillbaka. Uppdelningen följer av att kärnan inte får göra världsanrop:
+        `world.temperature_of_cells()` hissas hit, och `world.excrete_cells()`
+        skjuts till efterspelet. Det senare är säkert eftersom passet aldrig
+        läser `detritus` — bara `nutrient`, som kärnan muterar på plats i den
+        ordning numpy-vägen gör det, så att näring från en död planta hinner
+        bli tillgänglig för grannarna samma tick.
+
+        Returnerar (producerad kg, upptagen näring kg, död massa kg).
+        """
+        dt = float(self.WP.dt)
+        BK = float(self.WP.B_K)
+        if BK <= 0.0 or dt <= 0.0:
+            self.store.clear_flora_claims()
+            return 0.0, 0.0, 0.0
+
+        fl = self._flora_slots(rebuild=True)
+        if fl.size == 0:
+            self.store.clear_flora_claims()
+            return 0.0, 0.0, 0.0
+
+        world = self.world
+        store = self.store
+        n = int(fl.size)
+        n_cells = int(world.nutrient.shape[0])
+
+        cells = store.cell_idx[fl].astype(np.int64, copy=False)
+        struct32 = store.structure[fl]
+        temp = world.temperature_of_cells(cells).astype(np.float64, copy=False)
+        draws = self.rng.random(n)
+
+        mass_out = np.empty(n, dtype=np.float32)
+        root_out = np.empty(n, dtype=np.float32)
+        energy_out = np.empty(n, dtype=np.float32)
+        reserve_out = np.empty(n, dtype=np.float64)
+        pool_out = np.empty(n, dtype=np.float64)
+        carbon_out = np.empty(n, dtype=np.float64)
+        shed_out = np.empty(n, dtype=np.float64)
+        dying_out = np.zeros(n, dtype=np.uint8)
+        claimed, lam, hsum, cellacc = self._flora_cell_buffers(n_cells)
+
+        (shed_total, n_age, n_starve, produced, taken, died, light_lim,
+         row_plant, row_cell, row_share) = flora_growth.growth_kernel(
+            store.mass[fl], struct32, store.flora_adult_mass[fl],
+            store.flora_root_mass[fl], store.flora_seed_mass[fl], store.energy[fl],
+            store.flora_temp_opt[fl], store.flora_temp_width[fl],
+            store.uptake_capacity[fl], store.flora_repro_alloc[fl],
+            store.repro_capacity[fl], store.flora_root_alloc[fl],
+            store.flora_reserve[fl], store.flora_repro_pool[fl],
+            store.flora_carbon_pool[fl],
+            cells, temp, draws,
+            world.nutrient, self.grid.neighbor_idx,
+            dt, BK,
+            float(self.WP.uptake_rate_max),
+            float(self.WP.root_area_per_kg),
+            float(self.WP.leaf_area_per_kg),
+            float(self.WP.light_extinction),
+            max(1e-12, float(self.WP.light_height_ref)),
+            float(self.WP.light_input) * dt,
+            float(self.PP.flora_min_mass_frac) * BK,
+            float(self.PP.flora_seedling_floor),
+            float(self.PP.flora_max_seeds_per_tick),
+            float(self.WP.E_labile_J_per_kg),
+            mass_out, root_out, energy_out,
+            reserve_out, pool_out, carbon_out,
+            shed_out, dying_out,
+            claimed, lam, hsum, cellacc,
+        )
+
+        store.mass[fl] = mass_out
+        store.flora_root_mass[fl] = root_out
+        store.energy[fl] = energy_out
+        store.flora_reserve[fl] = reserve_out
+        store.flora_repro_pool[fl] = pool_out
+        store.flora_carbon_pool[fl] = carbon_out
+
+        # Förnafallet först, kadavret sedan: strukturandelen blandas massviktat
+        # per cell, och ordningen mellan de två deponeringarna följer med.
+        # `excrete_cells` filtrerar själv bort noll och negativa, så hela
+        # vektorn kan skickas in — urvalet blir detsamma.
+        world.excrete_cells(cells, shed_out, struct32)
+        self._last_flora_shed = float(shed_total)
+        self._last_flora_died_age = int(n_age)
+        self._last_flora_died_starve = int(n_starve)
+
+        dyi = np.flatnonzero(dying_out)
+        if dyi.size:
+            world.excrete_cells(
+                cells[dyi], mass_out[dyi].astype(np.float64), struct32[dyi]
+            )
+            for slot in fl[dyi]:
+                # Reserven och poolen är redan återförda av kärnan, i rätt läge
+                # i passet. Här återstår bara bokföringen i store:n.
+                self._release_flora_slot(int(slot), return_nutrient=False)
+
+        if row_plant.size == 0:
+            store.clear_flora_claims()
+            if died > 0.0:
+                self._flora_summary_cache = None
+            return 0.0, 0.0, float(died)
+
+        store.set_flora_claims(claimed, fl[row_plant], row_cell, row_share)
+        self._last_flora_light_limited = float(light_lim)
+
+        if produced > 0.0 or died > 0.0 or shed_total > 0.0:
+            self._flora_summary_cache = None
+
+        return float(produced), float(taken), float(died)
+
+    def _release_flora_slot(self, slot: int, return_nutrient: bool = True) -> None:
         """
         Avregistrera en floraindivid och frigör dess slot.
 
         Reserven och reproduktionspoolen är löst näring i plantans vävnader och
         återförs till cellen. Utan det försvinner de ur balansen, och sedan
         reserven finns är det den vanligaste vägen ut ur systemet.
+
+        `return_nutrient=False` när återföringen redan skett på annat håll.
+        Tillväxtkärnan gör den inuti passet, före anspråksberäkningen, eftersom
+        det är där numpy-vägen gör den — näringen ska hinna bli tillgänglig för
+        grannarna samma tick.
         """
         s = int(slot)
-        held = float(self.store.flora_reserve[s]) + float(self.store.flora_repro_pool[s])
-        cell = int(self.store.cell_idx[s])
-        if held > 0.0 and cell >= 0:
-            self.world.add_nutrient(cell, held)
+        if return_nutrient:
+            held = (float(self.store.flora_reserve[s])
+                    + float(self.store.flora_repro_pool[s]))
+            cell = int(self.store.cell_idx[s])
+            if held > 0.0 and cell >= 0:
+                self.world.add_nutrient(cell, held)
         self.store.flora_reserve[s] = 0.0
         self.store.flora_repro_pool[s] = 0.0
         # Kolpoolen är inte näring och har ingen ledger att återföras till.

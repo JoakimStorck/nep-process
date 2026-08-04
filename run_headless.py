@@ -348,6 +348,13 @@ def parse_args() -> argparse.Namespace:
                          "kostar mer och bör köras separat")
     ap.add_argument("--pass-timing-warmup", type=int, default=50,
                     help="tick som räknas som uppvärmning och utesluts")
+    ap.add_argument("--flora-growth", type=str, default=None,
+                    choices=("numba", "numpy"),
+                    help="bakända för florans tillväxtpass; standard är numba "
+                         "när biblioteket finns")
+    ap.add_argument("--verify-flora-growth", type=int, default=0,
+                    help="kör två identiska världar med var sin bakända i N tick "
+                         "och jämför tillståndet elementvis efter varje tick")
     ap.add_argument("--quiet", action="store_true")
 
     ap.add_argument("--stats", action="store_true",
@@ -428,6 +435,8 @@ def build_population(a: argparse.Namespace, seed: int, hub=None) -> Population:
         if _cli is not None:
             setattr(AP, _name, type(getattr(AP, _name))(_cli))
     PP = PopParams(init_pop=int(a.init_pop), max_pop=int(a.max_pop))
+    if getattr(a, "flora_growth", None) is not None:
+        PP.flora_growth_backend = str(a.flora_growth)
     if getattr(a, "flora_ratio", None) is not None:
         PP.flora_init_mass_ratio = float(a.flora_ratio)
     if getattr(a, "flora_plant_mass", None) is not None:
@@ -840,9 +849,107 @@ def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
     return 0 if failures == 0 else 1
 
 
+# Fält som tillväxtpasset skriver, plus de världsfält det rör. Jämförelsen
+# gäller hela slotrymden och hela cellrymden, inte ett urval — ett fel som bara
+# syns i en död slot är fortfarande ett fel, eftersom sloten återanvänds.
+_VERIFY_STORE_FIELDS = (
+    "mass", "energy", "alive", "cell_idx",
+    "flora_root_mass", "flora_reserve", "flora_repro_pool", "flora_carbon_pool",
+    "flora_cell_claimed", "flora_claim_share", "flora_claim_cell",
+)
+_VERIFY_WORLD_FIELDS = ("nutrient", "detritus", "detritus_structure")
+
+
+def _max_rel(a_arr, b_arr) -> tuple[float, float]:
+    """
+    Största absoluta avvikelsen, och samma tal mot fältets egen skala.
+
+    Elementvis relativfel är missvisande här: en reserv som råkar stå på 1e-11
+    ger relativfel 1e-8 av en avvikelse i sista biten, vilket säger något om
+    talets storlek och ingenting om räkningen. Nämnaren är därför fältets
+    största magnitud, vilket är det mått som faktiskt svarar på frågan om
+    avvikelsen är avrundning eller fel.
+    """
+    x = np.asarray(a_arr, dtype=np.float64).ravel()
+    y = np.asarray(b_arr, dtype=np.float64).ravel()
+    if x.shape != y.shape:
+        return (float("inf"), float("inf"))
+    if x.size == 0:
+        return (0.0, 0.0)
+    d = float(np.abs(x - y).max())
+    scale = float(np.abs(x).max())
+    return (d, d / scale if scale > 0.0 else 0.0)
+
+
+def verify_flora_growth(a: argparse.Namespace, seed: int, ticks: int) -> int:
+    """
+    Två identiska världar, en per bakända, jämförda elementvis varje tick.
+
+    Det här är verifieringen som säger något. Att invariantsviten går igenom
+    betyder bara att kärnan inte bryter mot bevarandelagarna — den skulle göra
+    det även om upptaget fördelades fel mellan plantor, så länge summan stämde.
+    Här jämförs i stället varje skrivet fält, i hela slot- och cellrymden.
+
+    Bitidentitet är inte målet och inte möjlig: `exp` och `pow` skiljer sig i
+    sista biten mellan numpys vektoriserade och libms skalära variant, och de
+    tre returnerade skalärerna summeras i olika ordning. Det som prövas är att
+    avvikelsen stannar på den nivån och inte växer till något strukturellt.
+    """
+    ref = build_population(a, seed)
+    ref.PP.flora_growth_backend = "numpy"
+    ref._flora_growth_numba = False
+    new = build_population(a, seed)
+    new.PP.flora_growth_backend = "numba"
+    new._flora_growth_numba = None
+
+    print(f"verifierar florans tillväxtpass: {ticks} tick, seed {seed}", flush=True)
+    worst: dict[str, tuple[float, float]] = {
+        name: (0.0, 0.0)
+        for name in _VERIFY_STORE_FIELDS + _VERIFY_WORLD_FIELDS
+        if hasattr(ref.store, name) or hasattr(ref.world, name)
+    }
+    for t in range(1, int(ticks) + 1):
+        ref.step()
+        new.step()
+
+        n_ref = len(ref._flora_slots(rebuild=True))
+        n_new = len(new._flora_slots(rebuild=True))
+        if n_ref != n_new:
+            print(f"  tick {t}: STRUKTURELL AVVIKELSE, flora {n_ref} mot {n_new}")
+            return 1
+
+        for name in _VERIFY_STORE_FIELDS:
+            x = getattr(ref.store, name, None)
+            y = getattr(new.store, name, None)
+            if x is None or y is None:
+                continue
+            d = _max_rel(x, y)
+            if d > worst.get(name, (0.0, 0.0)):
+                worst[name] = d
+        for name in _VERIFY_WORLD_FIELDS:
+            d = _max_rel(getattr(ref.world, name), getattr(new.world, name))
+            if d > worst.get(name, (0.0, 0.0)):
+                worst[name] = d
+
+    print(f"  {ticks} tick utan strukturell avvikelse, flora {n_new}")
+    print(f"  {'fält':<24} {'max abs':>12} {'mot skalan':>12}")
+    bad = 0
+    for name in sorted(worst):
+        ab, rel = worst[name]
+        flag = "" if rel <= 1e-12 else "   <-- över 1e-12"
+        if rel > 1e-12:
+            bad += 1
+        print(f"  {name:<24} {ab:12.3e} {rel:12.3e}{flag}")
+    return 1 if bad else 0
+
+
 def main() -> int:
     a = parse_args()
     apply_scenario(a)
+
+    if int(getattr(a, "verify_flora_growth", 0) or 0) > 0:
+        sd = int(str(a.seeds).split(",")[0]) if a.seeds else 1
+        return verify_flora_growth(a, seed=sd, ticks=int(a.verify_flora_growth))
 
     if a.seeds:
         seeds = [int(x) for x in str(a.seeds).split(",") if x.strip()]

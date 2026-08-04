@@ -1749,6 +1749,53 @@ partition                240 anrop = 8 per tick
 
 Den sista är troligen den billigaste riktiga vinsten: om partitioneringen bara behövs när diagnostik efterfrågas är det sju procent för ingenting.
 
+### Tillväxtpasset som kompilerad kärna
+
+*0114. Skal, kärna och efterspel.*
+
+Avsnittsprofilen inuti passet visade att det inte finns någon enskild dyr del att angripa. Vid 310 240 plantor:
+
+```
+passet totalt   113,8 ms/tick   54,3 % av takten
+  1 förnafall     16,5   14,5 %      5 allokering    5,2    4,6 %
+  2 dödlighet     11,4   10,0 %      6 ljus         21,6   19,0 %
+  3 anspråk       12,6   11,0 %      7 tillväxt     29,8   26,1 %
+  4 inkomst       13,5   11,8 %      0 uppsättning   3,3    2,9 %
+```
+
+**Fördelningen är platt**, så en partiell konvertering hade gett lite. Hela passets aritmetik ligger nu i `flora_growth.growth_kernel`, en njit-kärna som bara tar arrayer och skalärer. `Population._growth_system_flora` är en dispatcher; `_growth_system_flora_numpy` är kvar som referens och väljs med `PopParams.flora_growth_backend` eller `--flora-growth numpy`.
+
+**Två världsanrop måste ligga utanför, men bara det ena kunde skjutas upp.** `world.temperature_of_cells()` hissas till skalet. `world.excrete_cells()` flyttar till efterspelet, vilket är säkert eftersom passet aldrig läser `detritus` — bara `nutrient`. Näringsåterföringen från döende plantor kan däremot **inte** vänta: `_release_flora_slot` gör den i avsnitt 2 och avsnitt 3 läser `nutrient`, så grannarna ska hinna ta upp den samma tick. Kärnan gör den därför på plats, och `_release_flora_slot` har fått `return_nutrient=False` för bokföringen efteråt.
+
+**Reduktionerna ackumuleras i radordning.** `np.bincount` summerar i indataordning, så en utströdd addition i samma ordning ger samma avrundning. Det är därför anspråk, upptag och bladarea kan flytta in i kärnan utan att sista biten flyttar med.
+
+Två fällor som bara syns i en elementvis jämförelse: strukturandelen används **klippt** i näringsinnehåll, omsättning och livslängd men **oklippt** i areorna och energitätheten, och rotmassan går via en float32-rundtur i store:n mellan avsnitt 1 och 3.
+
+**Verifieringen är två identiska världar med var sin bakända**, jämförda fält för fält över hela slot- och cellrymden efter varje tick. `run_headless.py --verify-flora-growth N`. Att invariantsviten går igenom säger för lite: den skulle godkänna ett pass som fördelade upptaget fel mellan plantor så länge summan stämde.
+
+```
+400 tick, 64x64 med fauna, ingen strukturell avvikelse
+  mass, energy, flora_root_mass, detritus, detritus_structure,
+  flora_cell_claimed, flora_claim_share, alive, cell_idx      0
+  flora_reserve, flora_repro_pool, flora_carbon_pool, nutrient
+                                     ~1e-18 abs, ~2e-16 mot faltets skala
+```
+
+Massan är alltså bitidentisk. Kvar står float64-ackumulatorerna på sista bitens nivå — `exp` och `pow` skiljer sig mellan numpys vektoriserade och libms skalära variant, och bitidentitet var aldrig möjlig.
+
+Uppmätt i samma process med interfolierade varv, 316 503 plantor:
+
+```
+                 passet          hel tick        us/planta
+numpy           127,7 ms         261,1 ms          0,825
+numba            60,4 ms         174,9 ms          0,552
+kvot              2,12x            1,49x
+```
+
+**Kärnan är nu bara hälften av det som är kvar** i passet. Resten är skalets minnestrafik: gathers 8,4 ms, `excrete_cells` 3,6, scatters och `set_flora_claims` omkring 7, `rng.random` 0,8.
+
+Två mätvärden inför `prange`: att allokera åtta n-långa arbetsvektorer i kärnan kostar mätbart noll, och att fylla dem 0,69 ms — bandbredden är alltså fortfarande inte flaskhalsen, vilket stämmer med float32-utfallet i 0113. Däremot är `40,0**s` i livslängden 4,7 ms av kärnans 30, eftersom `pow` är 2,4 gånger dyrare än `exp` utan SVML. Att skriva den som `exp(s·ln 40)` sparar omkring tre millisekunder men bryter den elementvisa jämförelsen, och är därför inte gjord.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*
