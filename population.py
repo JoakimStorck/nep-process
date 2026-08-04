@@ -2312,10 +2312,15 @@ class Population:
         carbon_out = np.empty(n, dtype=np.float64)
         shed_out = np.empty(n, dtype=np.float64)
         dying_out = np.zeros(n, dtype=np.uint8)
+        dm_out = np.empty(n, dtype=np.float64)
+        grow_out = np.zeros(n, dtype=np.uint8)
         claimed, lam, hsum, cellacc = self._flora_cell_buffers(n_cells)
+        kernel = (flora_growth.growth_kernel_par
+                  if self._flora_growth_mode == "parallel"
+                  else flora_growth.growth_kernel)
 
         (shed_total, n_age, n_starve, produced, taken, died, light_lim,
-         row_plant, row_cell, row_share) = flora_growth.growth_kernel(
+         row_plant, row_cell, row_share) = kernel(
             store.mass[fl], struct32, store.flora_adult_mass[fl],
             store.flora_root_mass[fl], store.flora_seed_mass[fl], store.energy[fl],
             store.flora_temp_opt[fl], store.flora_temp_width[fl],
@@ -2338,7 +2343,7 @@ class Population:
             float(self.WP.E_labile_J_per_kg),
             mass_out, root_out, energy_out,
             reserve_out, pool_out, carbon_out,
-            shed_out, dying_out,
+            shed_out, dying_out, dm_out, grow_out,
             claimed, lam, hsum, cellacc,
         )
 

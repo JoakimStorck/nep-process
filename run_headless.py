@@ -349,7 +349,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--pass-timing-warmup", type=int, default=50,
                     help="tick som räknas som uppvärmning och utesluts")
     ap.add_argument("--flora-growth", type=str, default=None,
-                    choices=("numba", "numpy"),
+                    choices=("numpy", "numba", "parallel"),
                     help="väg för florans tillväxtpass; standard är numba "
                          "när biblioteket finns")
     ap.add_argument("--bench-flora-growth", type=int, default=0,
@@ -1000,11 +1000,15 @@ def verify_flora_growth(a: argparse.Namespace, seed: int, ticks: int) -> int:
     ref = build_population(a, seed)
     ref.PP.flora_growth_backend = "numpy"
     ref._flora_growth_mode = "numpy"
+    want = str(getattr(a, "flora_growth", None) or "numba")
+    if want == "numpy":
+        want = "numba"
     new = build_population(a, seed)
-    new.PP.flora_growth_backend = "numba"
+    new.PP.flora_growth_backend = want
     new._flora_growth_mode = None
 
-    print(f"verifierar florans tillväxtpass: {ticks} tick, seed {seed}", flush=True)
+    print(f"verifierar florans tillväxtpass: numpy mot {want}, "
+          f"{ticks} tick, seed {seed}", flush=True)
     worst: dict[str, tuple[float, float]] = {
         name: (0.0, 0.0)
         for name in _VERIFY_STORE_FIELDS + _VERIFY_WORLD_FIELDS

@@ -1842,6 +1842,29 @@ Vägarna räknas upp ur `flora_growth.available_backends()`, så en tillkommande
 
 **Två rader i `kor.sh`.** `--world-log` skrivs — utan den går florans selektion inte att mäta i efterhand, och det är Steg 4:s hela fråga. Och `NUMBA_NUM_THREADS=1` är borttagen ur miljöprefixet: så länge kärnan bara fanns i njit-form var en tråd rätt, men en hårdkodad etta framför en parallelliserad kärna är samma sak som att mäta parallelliseringen med den avstängd. BLAS-trådarna står kvar på ett.
 
+### Tillväxtkärnan parallelliserad
+
+*0117. `prange` på samma källa.*
+
+**En källa, två kompilat.** `_growth_kernel_impl` dekoreras två gånger, med och utan `parallel=True`. `prange` beter sig som `range` när parallelliseringen är av, så den seriella varianten är oförändrad i allt utom formen och de två kan inte glida isär. Vägen väljs med `--flora-growth parallel`.
+
+**Ingen `prange` bär en reduktionsvariabel.** Varje parallell loop skriver bara per-planta-fält; allt som ackumulerar — summor, räknare och de utströdda additionerna till cellfälten — ligger i korta seriella svep emellan. Det kostar några extra genomlöpningar men ger två saker som är värda mer. Reduktionerna behåller sin ordning, så `np.bincount`-avrundningen följer med och den elementvisa jämförelsen står kvar. Och resultatet är bitidentiskt oavsett trådantal, vilket följer av konstruktionen och inte av tur: parallella loopar rör bara egna index, seriella svep har fast ordning.
+
+Tre omflyttningar krävdes. Näringsåterföringen från döende plantor ligger nu i det seriella svepet efter dödlighetsloopen — den måste ändå ske före anspråken, och en utströdd addition till `nutrient` går inte att parallellisera. Bladarean per cell och den skuggvägda arean strös ut seriellt efter var sin parallell loop. Och tillväxten skriver `dm_out` och en flagga i stället för att summera på plats, så att `produced`, `taken` och andelen ljusbegränsade räknas i slotordning efteråt.
+
+**Parallellt:** dödlighet med `exp` och areorna, inkomsten, allokeringen med skuggans `exp`, samt ljus och tillväxt. **Seriellt:** räknarna, radbygget, tre utströdda additioner och slutsummorna. Alla transcendentaler ligger i den parallella delen.
+
+Verifierat elementvis mot numpy-vägen, 200 tick med fauna:
+
+```
+mass, energy, flora_root_mass, detritus, anspråken     0
+flora_reserve, flora_repro_pool, nutrient              ~2e-16 mot fältets skala
+```
+
+Alltså samma nivå som den seriella kärnan, och ingen strukturell avvikelse.
+
+**Farten är inte mätt.** Sandlådan har en kärna, och där kostar parallellversionen 8 procent extra i ren trådhantering — vilket är precis vad man ska se. Talet måste tas med `--bench-flora-growth` på tolvkärningsmaskinen. Räkna inte med tolv gånger: de seriella svepen är fortfarande O(n), och kärnan var redan bara hälften av passets tid efter 0114. Amdahl gäller på båda nivåerna.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*
