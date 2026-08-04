@@ -2088,6 +2088,10 @@ class Agent:
     _follow_id: int = field(init=False, default=0)
     # (antal, kurs-x, kurs-y) per riktningssektor i kroppsram.
     _soc_sectors: object = field(init=False, default=None, repr=False, compare=False)
+    # id -> affinitet. Flocken som relation; se `_acquire_neighbours`.
+    _flock: object = field(init=False, default=None, repr=False, compare=False)
+    # Medlemsviktad medelkurs i kroppsram, (x, y).
+    _flock_align: object = field(init=False, default=None, repr=False, compare=False)
     # Temperatur per riktningssektor i kroppsram, satt av sensingpasset.
     _temp_sectors: object = field(init=False, default=None, repr=False, compare=False)
     _cached_B0: float = field(init=False, default=0.0)
@@ -2668,9 +2672,15 @@ class Agent:
                             turn = clamp(turn + 0.40 * soc_bias * wcoh
                                          * clamp(_e / math.pi, -1.0, 1.0), -1.0, 1.0)
                             did_group = True
-                        # Alignment mot grannskapets medelkurs. Vektorerna är
-                        # redan i kroppsram, så nollriktningen är egen kurs.
-                        _hx = float(np.sum(_HX)); _hy = float(np.sum(_HY))
+                        # Alignment mot **flockens** medelkurs, viktad med
+                        # affinitet. Man dras mot främlingar men följer bara
+                        # sina egna. Faller tillbaka på det oviktade
+                        # sektoraggregatet om medlemskap saknas.
+                        _fa = getattr(self, "_flock_align", None)
+                        if _fa is not None and (abs(_fa[0]) + abs(_fa[1])) > 1e-9:
+                            _hx, _hy = float(_fa[0]), float(_fa[1])
+                        else:
+                            _hx = float(np.sum(_HX)); _hy = float(np.sum(_HY))
                         if abs(_hx) + abs(_hy) > 1e-9:
                             _ea = self._signed_angle(math.atan2(_hy, _hx))
                             turn = clamp(turn + 0.20 * soc_bias

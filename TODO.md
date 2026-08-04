@@ -1449,6 +1449,30 @@ Grenarna togs aldrig. Att låta dem ligga kvar dolde dessutom att metoderna var 
 
 Grenarna är borttagna. Metoddefinitionerna står kvar tills vidare men har nu bevisligen ingen väg in; de kan tas i en egen omgång tillsammans med `_rebuild_cache`, strålvikterna och `sample_flora_rays`, vilket är en större operation än den här. `ray_eccentricity` är satt till noll och märkt oanvänd sedan 0101.
 
+### Flocken som relation
+
+*0104. Alignment ger utslag för första gången.*
+
+"Alla inom synhåll" ger en flock som byter medlemmar varje gång någon passerar: två flockar som möts smälter omedelbart samman, och en ensam vandrare fångas av den första grupp den korsar. Ingen identitet över tid.
+
+Medlemskapet byggs nu upp som en **affinitet** — den stiger med `flock_gain` vid varje observation och avtar med `flock_decay` mellan dem. Vid 0,25 och 0,90 krävs ungefär fyra observationer för full medlem, och en granne som försvinner tappas efter ungefär trettio. En främling som passerar får låg vikt tills den varit där ett tag.
+
+**Kohesion och alignment behandlas olika.** Kohesionen behåller det täta per-cell-fältet — att dras mot där det finns artfränder alls är rimligt även för icke-medlemmar — medan alignment blir medlemsviktad. Det ger en naturlig asymmetri: man dras mot främlingar men följer bara sina egna.
+
+Aggregatet i `_build_sector_percept` kan inte viktas per observatör, eftersom alla läser samma fält. Alignment räknas därför i `_acquire_neighbours`, över varje djurs egna kandidater — listan finns redan efter filtreringen, så det är ingen ny gather.
+
+**Och måttet var fel.** Kursordningen beräknades globalt över hela populationen och blir låg även vid perfekt lokal samordning om flera flockar rör sig åt olika håll. Rätt mått är lokal ordning — medelkursen bland grannar inom synhåll — jämförd med samma mått i en slumpblandad population.
+
+```
+                 lokal kursordning   blandad kontroll   kvot
+soc 0,1                0,404              0,430         0,94
+soc 0,9                0,494              0,407         1,21
+```
+
+Tjugoen procents överskott vid hög sociability och inget vid låg. Medianflocken har 25 medlemmar över affinitetsgolvet. Kohesionskvoten ligger kvar på 1,07–1,08 med medelavstånd 3,79 mot Poisson-förväntan 4,68, alltså nitton procent tätare än slumpen.
+
+Flockning finns nu i mätbar form: djuren håller ihop tätare än slumpen och samordnar kurs med dem de känner.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*

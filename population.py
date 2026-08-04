@@ -129,6 +129,12 @@ class PopParams:
     # Radie i kontinuerliga enheter för insättningsfläcken. 0 = jämn
     # utspridning över hela världen. Se `_fauna_spawn_pos`.
     fauna_spawn_radius: float = 0.0
+    # Flockmedlemskap som relation: affiniteten stiger med `flock_gain` vid
+    # varje observation och avtar med `flock_decay` mellan dem. Vid 0,25 och
+    # 0,90 krävs ungefär fyra observationer för full medlem, och en granne som
+    # försvinner tappas efter ungefär trettio.
+    flock_gain: float = 0.25
+    flock_decay: float = 0.90
     # Startvärde för `sociability` hos grundarna. None = normal slumpning.
     #
     # Reflexen använder `soc_bias = 2·soc − 1`, så nollpunkten ligger vid 0,5:
@@ -2893,6 +2899,63 @@ class Population:
             # Halvt steg: går före andra kandidater med samma parningsprioritet,
             # men parningsvillighet väger tyngre än vanan.
             prio[same] -= 0.5
+
+        # Flocken som relation, inte som ögonblicksurval.
+        #
+        # "Alla inom synhåll" ger en flock som byter medlemmar varje gång någon
+        # passerar: två flockar som möts smälter omedelbart samman, och en
+        # ensam vandrare fångas av den första grupp den korsar. Det finns ingen
+        # identitet över tid.
+        #
+        # Med minne byggs medlemskapet upp — affiniteten stiger vid varaktig
+        # närhet och avtar när man skiljs åt. En främling som passerar får låg
+        # vikt tills den varit där ett tag. Det ger flockar som håller ihop
+        # genom möten, delas när de dras isär och gradvis blandas i stället för
+        # att slås samman. Medlemskapsmatrisen *är* flocken och går att mäta.
+        #
+        # Kohesionen behåller det täta per-cell-fältet — att dras mot där det
+        # finns artfränder alls är rimligt även för icke-medlemmar — medan
+        # alignment blir medlemsviktad. Det ger en naturlig asymmetri: man dras
+        # mot främlingar men följer bara sina egna.
+        #
+        # Aggregatet i `_build_sector_percept` kan inte viktas per observatör,
+        # eftersom alla läser samma fält. Därför räknas alignment här, över
+        # varje djurs egna kandidater — listan finns redan.
+        head_of = {}
+        for a in alive:
+            sl = int(getattr(a, "store_slot", -1))
+            if sl >= 0 and a.body.alive:
+                head_of[sl] = float(a.heading)
+
+        gain = float(getattr(self.PP, "flock_gain", 0.25))
+        decay = float(getattr(self.PP, "flock_decay", 0.90))
+        floor = 0.05
+        order_r = np.argsort(cand_row, kind="stable")
+        bounds = np.searchsorted(cand_row[order_r], np.arange(n + 1))
+        for r in range(n):
+            a = alive[idx[r]]
+            fl = getattr(a, "_flock", None)
+            if fl is None:
+                fl = {}
+                a._flock = fl
+            for k in list(fl):
+                v = fl[k] * decay
+                if v < floor:
+                    del fl[k]
+                else:
+                    fl[k] = v
+            hx = hy = 0.0
+            for t in order_r[bounds[r]:bounds[r + 1]]:
+                sl = int(cand_slot[t])
+                cid = int(st.id[sl])
+                w = min(1.0, fl.get(cid, 0.0) + gain)
+                fl[cid] = w
+                h = head_of.get(sl)
+                if h is not None:
+                    hx += w * math.cos(h)
+                    hy += w * math.sin(h)
+            ch = math.cos(-float(a.heading)); sh_ = math.sin(-float(a.heading))
+            a._flock_align = (hx * ch - hy * sh_, hx * sh_ + hy * ch)
 
         # Närmaste per djur: sortera på (rad, prioritet, avstånd).
         srt = np.lexsort((dist, prio, cand_row))
