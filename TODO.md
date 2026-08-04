@@ -1473,6 +1473,32 @@ Tjugoen procents överskott vid hög sociability och inget vid låg. Medianflock
 
 Flockning finns nu i mätbar form: djuren håller ihop tätare än slumpen och samordnar kurs med dem de känner.
 
+### Ett varmt bälte, inte två
+
+*0105. Ett räknefel som delade världen i två.*
+
+```python
+band_lat = -cos(2π · row / h)          # en cykel: -1 -> +1 -> -1
+T        = T_eq - dT_pole · |lat|^1.5   # absolutbeloppet dubblar frekvensen
+```
+
+`band_lat` gjorde **en** cykel över världen, men klimatet läser `|lat|`, och absolutbeloppet dubblar frekvensen. Resultatet blev två varma och två kalla band i stället för ett av varje — uppmätt profil över 256 rader hade period 128.
+
+Konsekvensen är värre än estetisk. **De två kalla banden delade den beboeliga världen i två frånskilda remsor.** Djur i den ena nådde inte den andra utan att korsa en zon där termokostnaden överstiger basalmetabolismen, och populationen fragmenterades i två delbestånd — i en modell där den effektiva populationsstorleken redan mätts till fem.
+
+Latituden är nu `(1 − cos(2π·row/h)) / 2`: noll vid rad 0, ett vid rad h/2, tillbaka till noll vid rad h. Ett sammanhängande varmt bälte och ett sammanhängande kallt, båda hela vägen runt torusen — den närmaste analogin till jordens ekvator och poler som en torus tillåter.
+
+```
+                    före        efter
+median              12,2 °C     19,4 °C
+andel över 15 °C     ~35 %       58 %
+andel över 20 °C     ~28 %       49 %
+```
+
+Medianen steg sju grader eftersom absolutbeloppet gav dubbelt så mycket kall yta. Termokostnaden i mediancellen faller därmed omkring tjugo procent.
+
+**All temperaturkalibrering gjord före den här patchen är oanvändbar**, och det gäller även bärkraftsmätningarna: en varmare värld med sammanhängande beboelig zon bär fler djur vid samma bördighet.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*

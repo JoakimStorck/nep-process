@@ -109,7 +109,27 @@ class Grid:
         # är den enhet klimatet varierar över, och att lagra profilen per band i
         # stället för per cell är skillnaden mellan O(H) och O(H*W) arbete varje
         # tick. cell_lat materialiseras för de anropare som behöver hela fältet.
-        band_lat = (-np.cos(2.0 * np.pi * np.arange(h, dtype=np.float64) / float(h))).astype(np.float32)
+        # Latitud som **en** cykel över världen, med noll vid ekvatorn och ett
+        # vid polbandet.
+        #
+        # Tidigare: `-cos(2π·row/h)`, alltså -1 → +1 → -1. Klimatet läser
+        # `|lat|`, och absolutbeloppet dubblar frekvensen — resultatet blev två
+        # varma och två kalla band i stället för ett av varje. Uppmätt profil
+        # över 256 rader hade period 128.
+        #
+        # Det är inte jordlikt, och konsekvensen är värre än estetisk: de två
+        # kalla banden delade den beboeliga världen i två frånskilda remsor.
+        # Djur i den ena nådde inte den andra utan att korsa en zon där
+        # termokostnaden överstiger basalmetabolismen, och populationen
+        # fragmenterades i två delbestånd — i en modell där den effektiva
+        # populationsstorleken redan mätts till fem.
+        #
+        # Formen nedan ger `|lat|` en enda cykel: noll vid rad 0, ett vid rad
+        # h/2, tillbaka till noll vid rad h. Ett sammanhängande varmt bälte och
+        # ett sammanhängande kallt, båda hela vägen runt torusen. Det är den
+        # närmaste analogin till jordens ekvator och poler som en torus tillåter.
+        _u = np.arange(h, dtype=np.float64) / float(h)
+        band_lat = ((1.0 - np.cos(2.0 * np.pi * _u)) * 0.5).astype(np.float32)
         lat = band_lat[row]
 
         cx = ((col.astype(np.float64) + 0.5 + 0.5 * odd) * self.COL_SPACING).astype(np.float32)
