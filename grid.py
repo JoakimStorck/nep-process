@@ -128,8 +128,13 @@ class Grid:
         # h/2, tillbaka till noll vid rad h. Ett sammanhängande varmt bälte och
         # ett sammanhängande kallt, båda hela vägen runt torusen. Det är den
         # närmaste analogin till jordens ekvator och poler som en torus tillåter.
+        # Kall vid kanterna, varm i mitten: två poler med en kontinent emellan.
+        # Formen `(1 − cos)/2` gav det omvända — varmt vid rad 0 och rad h,
+        # kallt i mitten — vilket blev en kall zon tvärs över kartans mitt.
+        # Torusen gör rad 0 och rad h−1 till grannar, så de två kalla halvorna
+        # möts och bildar ett enda smalt polband.
         _u = np.arange(h, dtype=np.float64) / float(h)
-        band_lat = ((1.0 - np.cos(2.0 * np.pi * _u)) * 0.5).astype(np.float32)
+        band_lat = ((1.0 + np.cos(2.0 * np.pi * _u)) * 0.5).astype(np.float32)
         lat = band_lat[row]
 
         cx = ((col.astype(np.float64) + 0.5 + 0.5 * odd) * self.COL_SPACING).astype(np.float32)

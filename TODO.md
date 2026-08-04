@@ -1677,6 +1677,38 @@ Kombinerat med den sociala fassynkroniseringen i 0110 blir isoleringen **dubbel*
 
 Scenariofilen beskriver därmed en **fauna** i stället för bara ett antal.
 
+### Polerna vid kanterna
+
+*0112. Kall zon överst och nederst, kontinent emellan.*
+
+`(1 − cos(2π·row/h))/2` gav varmt vid rad 0 och rad h och kallt i mitten — alltså en kall zon tvärs över kartans mitt. Formen är nu `(1 + cos)/2`: kallt vid kanterna, varmast vid rad h/2.
+
+Torusen gör rad 0 och rad h−1 till grannar, så de två kalla halvorna möts och bildar **ett** smalt polband. Det visuella intrycket blir två poler med en kontinent emellan.
+
+```
+rad     0   32   64   96  128  160  192  224
+temp    0    6   19   28   30   28   19    6
+```
+
+Medianen är oförändrad 19,4 grader — det är samma profil, bara förskjuten en halv cykel.
+
+### Profilering inför optimering
+
+Flora ensam, f4-bördighet, 292 459 plantor:
+
+```
+                          ms/tick   andel   us/planta
+totalt                      298,7             1,021
+_step_world_and_flora       222,6   74,5 %    0,761
+  _growth_system_flora      166,1   55,6 %    0,568
+  _rebuild_flora_summary     45,2   15,1 %    0,155
+  _dispersal_system_flora    28,8    9,7 %    0,099
+```
+
+Tillväxtpasset är över hälften av takten. Det är redan vektoriserat, så vinsten ligger i allokeringar snarare än algoritm: varje temporär mellanprodukt på 300 000 element kostar en full genomgång av minnet.
+
+`_rebuild_flora_summary` bygger om per-cell-cachen varje tick och bör kunna använda samma glesningstrick som `detritus_active`.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*
