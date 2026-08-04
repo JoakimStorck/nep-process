@@ -445,6 +445,11 @@ class Population:
             d = np.asarray(world.detritus)[act].astype(np.float64)
             ds = np.asarray(world.detritus_structure)[act].astype(np.float64)
             total += float(np.sum(d * nutrient_content_array(ds)))
+        cact = np.asarray(world.carcass_active_cells, dtype=np.int64)
+        if cact.size:
+            c = np.asarray(world.carcass)[cact].astype(np.float64)
+            cs = np.asarray(world.carcass_structure)[cact].astype(np.float64)
+            total += float(np.sum(c * nutrient_content_array(cs)))
 
         for slot in range(int(store.n)):
             if not bool(store.alive[slot]):
@@ -641,7 +646,8 @@ class Population:
             with_percentiles=self.world_log_with_percentiles,
         )
         if isinstance(payload, dict):
-            detritus_sum = float(np.nansum(self.world.detritus))
+            detritus_sum = float(np.nansum(self.world.detritus)) + float(
+                np.nansum(self.world.carcass))
             # Ledgerns energiskalor: nominell labil energitäthet vid
             # respektive ontologis initierade medelstrukturandel. Diagnostik,
             # inte fysik — den verkliga omvandlingen sker per organism.
@@ -720,6 +726,8 @@ class Population:
             fl = self._flora_slots()
             det = np.asarray(self.world.detritus, dtype=np.float64)
             det_s = np.asarray(self.world.detritus_structure, dtype=np.float64)
+            car = np.asarray(self.world.carcass, dtype=np.float64)
+            car_s = np.asarray(self.world.carcass_structure, dtype=np.float64)
             payload.update({
                 "nutrient_free": float(np.sum(self.world.nutrient, dtype=np.float64)),
                 "nutrient_in_flora": float(np.sum(
@@ -729,7 +737,11 @@ class Population:
                 )) if fl.size else 0.0,
                 "nutrient_in_detritus": float(np.sum(
                     det * nutrient_content_array(det_s), dtype=np.float64
+                )) + float(np.sum(
+                    car * nutrient_content_array(car_s), dtype=np.float64
                 )),
+                "M_carcass": float(np.sum(car, dtype=np.float64)),
+                "carcass_cells": int(np.count_nonzero(car)),
                 "nutrient_added": float(getattr(self.world, "_nutrient_added_total", 0.0)),
                 "nutrient_lost": float(getattr(self.world, "_nutrient_lost_total", 0.0)),
             })
@@ -2712,20 +2724,29 @@ class Population:
         v_detritus = assimilated_fraction(
             float(self.world.detritus_structure[cell]), scav_eff
         )
+        v_carcass = assimilated_fraction(
+            float(self.world.carcass_structure[cell]), scav_eff
+        )
         v_flora = assimilated_fraction(
             float(self.store.flora_cell_structure[cell]), herb_eff
         )
 
         got_l = got_d = e_l = e_d = 0.0
 
-        def take_detritus(want: float) -> float:
+        def take_pool(field, want: float) -> float:
             nonlocal got_d, e_d
             if want <= 0.0:
                 return 0.0
-            g, e = self.world._consume_from_field(self.world.detritus, x, y, want)
+            g, e = self.world._consume_from_field(field, x, y, want)
             got_d += g
             e_d += e
             return float(g)
+
+        def take_detritus(want: float) -> float:
+            return take_pool(self.world.detritus, want)
+
+        def take_carcass(want: float) -> float:
+            return take_pool(self.world.carcass, want)
 
         def take_flora(want: float) -> float:
             nonlocal got_l, e_l
@@ -2736,15 +2757,20 @@ class Population:
             e_l += e
             return float(g)
 
-        first, second = (
-            (take_flora, take_detritus)
-            if v_flora >= v_detritus
-            else (take_detritus, take_flora)
+        # Tre källor, tagna i värdeordning. Kadaver och förna är båda döda men
+        # inte längre samma sak: ett kadaver vid strukturandel 0,25 är värt
+        # mångdubbelt mer per kilo än förna vid 0,83, och det var just den
+        # skillnaden som försvann när de delade pool.
+        order = sorted(
+            ((v_flora, take_flora), (v_carcass, take_carcass),
+             (v_detritus, take_detritus)),
+            key=lambda kv: kv[0], reverse=True,
         )
-
-        left = amt - first(amt)
-        if left > 1e-15:
-            second(left)
+        left = amt
+        for _, take in order:
+            if left <= 1e-15:
+                break
+            left -= take(left)
 
         return float(got_l), float(got_d), float(e_l), float(e_d)
 
@@ -2931,7 +2957,8 @@ class Population:
             return v / (v + np.float32(K))
 
         Bu = sat(self.store.flora_cell_mass, Kb)
-        Cu = sat(np.asarray(self.world.detritus), Kc)
+        Cu = sat(np.asarray(self.world.detritus)
+                 + np.asarray(self.world.carcass), Kc)
 
         # Tredje världskanal: temperatur. Samma gather, ingen mättnad —
         # temperaturen är inte en mängd utan ett värde, och det som ska styra

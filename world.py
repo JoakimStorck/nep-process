@@ -139,6 +139,12 @@ class WorldParams:
     # Detritus / decay
     # -------------------------
     detritus_decay: float = 0.077
+    # Kadaver bryts ned åtta gånger snabbare än förna. Kött är inte lignin, och
+    # takten är det som avgör om en kollaps kan livnära sig på sina egna döda:
+    # med förnans takt låg kadavret kvar i månader och blev ett skafferi. Vid
+    # 0,62 är halveringstiden knappt en månad, alltså en resurs man måste hinna
+    # fram till.
+    carcass_decay: float = 0.62
     # Andel av frisatt näring som lämnar systemet (urlakning, denitrifikation).
     #
     # Var 0,10, vilket töms världen på 37 år simulerad tid: uppmätt förlust var
@@ -331,6 +337,19 @@ class World:
         self._detritus_pending: list[int] = []
         self._detritus_dirty = False
 
+        # Kadaver är en egen pool. Tidigare hälldes kroppar i `detritus`, och
+        # eftersom strukturandelen blandas massviktat drunknade ett kadaver vid
+        # 0,25 i cellens förna vid 0,83 och kom ut kring 0,80. Följden var att
+        # asätarnischen aldrig kunde löna sig: en ren asätare fick 0,087 ur
+        # detritus mot betarens 0,258 ur flora, alltså en enkelriktad nackdel
+        # och ingen avvägning. Samma glesa maskineri som förnan, egen takt.
+        self.carcass = np.zeros(nc, dtype=np.float64)
+        self.carcass_structure = np.zeros(nc, dtype=np.float64)
+        self._carcass_member = np.zeros(nc, dtype=bool)
+        self._carcass_active = np.zeros(0, dtype=np.int32)
+        self._carcass_pending: list[int] = []
+        self._carcass_dirty = False
+
         # --- härledda: flödesstyrkan är noll tills hydro räknar grannflöde ---
         self.flow_strength = 0.0
 
@@ -465,6 +484,77 @@ class World:
         """
         self._update_temperature()
 
+    # ---- glesa dödpooler ------------------------------------------------
+    #
+    # Förna och kadaver har samma form: massa och massviktad strukturandel per
+    # cell, nollskild i en bråkdel av cellerna. Maskineriet nedan är gemensamt
+    # och tar poolens arrayer som argument; `_detritus_*` och `_carcass_*` är
+    # tunna omslag. Skälet att inte lägga poolerna i en klass är att `detritus`
+    # och `detritus_structure` läses som attribut på `World` från ett dussin
+    # ställen — viewer, records, invariantsvit, kalibrering.
+
+    def _pool_activate(self, member, pending, cell: int) -> None:
+        c = int(cell)
+        if not member[c]:
+            member[c] = True
+            pending.append(c)
+
+    def _pool_add(self, v, st, member, pending, cell: int,
+                  amount: float, structure: float) -> None:
+        """
+        Lägg till massa i en cell och blanda in strukturandelen massviktat.
+        """
+        add = float(amount)
+        if not (math.isfinite(add) and add > 0.0):
+            return
+        c = int(cell)
+        old = float(v[c])
+        tot = old + add
+        if tot <= 0.0:
+            return
+        s_old = float(st[c])
+        st[c] = (s_old * old + float(structure) * add) / tot
+        v[c] = tot
+        self._pool_activate(member, pending, c)
+
+    def _pool_deactivate_if_empty(self, v, st, member, cell: int) -> bool:
+        c = int(cell)
+        if member[c] and float(v[c]) <= _DETRITUS_EPS:
+            v[c] = 0.0
+            st[c] = 0.0
+            member[c] = False
+            return True
+        return False
+
+    def _carcass_flush(self) -> None:
+        if self._carcass_pending:
+            add = np.asarray(self._carcass_pending, dtype=np.int32)
+            self._carcass_active = np.concatenate((self._carcass_active, add))
+            self._carcass_pending = []
+            self._carcass_dirty = True
+        if self._carcass_dirty:
+            act = self._carcass_active
+            if act.size:
+                act = act[self._carcass_member[act]]
+                self._carcass_active = np.unique(act).astype(np.int32, copy=False)
+            self._carcass_dirty = False
+
+    def _carcass_add(self, cell: int, amount: float, structure: float) -> None:
+        self._pool_add(self.carcass, self.carcass_structure,
+                       self._carcass_member, self._carcass_pending,
+                       cell, amount, structure)
+
+    def _carcass_deactivate_if_empty(self, cell: int) -> None:
+        if self._pool_deactivate_if_empty(self.carcass, self.carcass_structure,
+                                          self._carcass_member, cell):
+            self._carcass_dirty = True
+
+    @property
+    def carcass_active_cells(self) -> np.ndarray:
+        """Celler med nollskilt kadaver. Läsvy för pass och diagnostik."""
+        self._carcass_flush()
+        return self._carcass_active
+
     def _detritus_activate(self, cell: int) -> None:
         """Markera en cell som nollskild. Idempotent, O(1)."""
         c = int(cell)
@@ -495,32 +585,15 @@ class World:
     def _detritus_add(self, cell: int, amount: float, structure: float) -> None:
         """
         Lägg till massa i en cells detritus och blanda in dess strukturandel
-        massviktat.
-
-        En stor kadaver dominerar cellens sammansättning; en liten i mycket
-        förna späds ut. Det är cellen som är miljöns enhet — samma val som
-        ligger bakom att all perception och konsumtion är cellvis.
+        massviktat. Se `_pool_add`.
         """
-        c = int(cell)
-        add = float(amount)
-        if add <= 0.0:
-            return
-        old = float(self.detritus[c])
-        tot = old + add
-        if tot <= 0.0:
-            return
-        s_old = float(self.detritus_structure[c])
-        self.detritus_structure[c] = (s_old * old + float(structure) * add) / tot
-        self.detritus[c] = tot
-        self._detritus_activate(c)
+        self._pool_add(self.detritus, self.detritus_structure,
+                       self._detritus_member, self._detritus_pending,
+                       cell, amount, structure)
 
     def _detritus_deactivate_if_empty(self, cell: int) -> None:
-        """Nollställ exakt och lämna aktiva mängden om cellen tömts."""
-        c = int(cell)
-        if self._detritus_member[c] and float(self.detritus[c]) <= _DETRITUS_EPS:
-            self.detritus[c] = 0.0
-            self.detritus_structure[c] = 0.0
-            self._detritus_member[c] = False
+        if self._pool_deactivate_if_empty(self.detritus, self.detritus_structure,
+                                          self._detritus_member, cell):
             self._detritus_dirty = True
 
     @property
@@ -653,35 +726,25 @@ class World:
 
         return float(np.sum(np.abs(delta))) * 0.5
 
-    def decomposition_pass(self) -> tuple[float, float]:
+    def _decompose_pool(self, v, st, member, active, rate: float) -> tuple:
         """
-        Minimal decomposition för fas 1.5.
+        Nedbrytning av en dödpool. Returnerar (nedbruten massa, frisatt näring).
 
-        I patch 1 görs endast enkel decay av detritus. Ingen diffusion och ingen
-        överföring till nutrient ännu. Source of truth är self.detritus.
+        Nedbrytning per fraktion: labilt och strukturellt material bryts ner med
+        var sin takt, räknade ur massa och strukturandel utan ett andra fält.
+        Att sakta ner hela massan i stället lät strukturandelen skena — bara det
+        labila försvann, och kvarvarande material blev asymptotiskt ren struktur.
         """
-        self._detritus_flush()
-        act = self._detritus_active
-        if act.size == 0:
-            return 0.0, 0.0
-
+        if active.size == 0:
+            return 0.0, 0.0, False
         dt = float(self.WP.dt)
-        rate = float(self.WP.detritus_decay)
+        d = v[active]
+        sf = st[active]
 
-        d = self.detritus[act]
-        st = self.detritus_structure[act]
-
-        # Nedbrytning per fraktion. Labilt och strukturellt material bryts ner
-        # med var sin takt, räknade ur massa och strukturandel utan ett andra
-        # fält. Att sakta ner hela massan i stället lät strukturandelen skena:
-        # bara det labila försvann, och kvarvarande material blev asymptotiskt
-        # ren struktur.
-        lab = d * (1.0 - st)
-        stru = d * st
-
-        k_lab = dt * rate * float(DECAY_SCALE_LABILE)
-        k_str = dt * rate * float(DECAY_SCALE_STRUCT)
-
+        lab = d * (1.0 - sf)
+        stru = d * sf
+        k_lab = dt * float(rate) * float(DECAY_SCALE_LABILE)
+        k_str = dt * float(rate) * float(DECAY_SCALE_STRUCT)
         d_lab = np.minimum(lab, lab * k_lab)
         d_str = np.minimum(stru, stru * k_str)
 
@@ -689,37 +752,61 @@ class World:
         stru_new = stru - d_str
         new = lab_new + stru_new
 
-        dM_detritus_decay = float(np.sum(d_lab + d_str, dtype=np.float64))
-
-        # Frisatt näring är den nedbrutna massan gånger dess näringsinnehåll.
+        decayed = float(np.sum(d_lab + d_str, dtype=np.float64))
         released = float(
             np.sum(d_lab, dtype=np.float64) * NUTRIENT_PER_KG_LABILE
             + np.sum(d_str, dtype=np.float64) * NUTRIENT_PER_KG_STRUCT
         )
         retained = 1.0 - float(self.WP.nutrient_loss_frac)
-        np.add.at(self.nutrient, act,
+        np.add.at(self.nutrient, active,
                   (d_lab * NUTRIENT_PER_KG_LABILE
                    + d_str * NUTRIENT_PER_KG_STRUCT) * retained)
 
-        # Strukturandelen följer av vad som blev kvar.
         with np.errstate(invalid="ignore", divide="ignore"):
             st_new = np.where(new > 0.0, stru_new / np.maximum(new, 1e-300), 0.0)
-        self.detritus_structure[act] = np.clip(st_new, 0.0, 1.0)
+        st[active] = np.clip(st_new, 0.0, 1.0)
 
         # Celler under tröskeln nollställs exakt och lämnar den aktiva mängden,
         # så att kontraktet "inaktiv cell är noll" håller.
+        emptied = False
         empty = new <= float(_DETRITUS_EPS)
         if empty.any():
             new[empty] = 0.0
-            self.detritus_structure[act[empty]] = 0.0
-            self._detritus_member[act[empty]] = False
+            st[active[empty]] = 0.0
+            member[active[empty]] = False
+            emptied = True
+        v[active] = new
+        return decayed, released, emptied
+
+    def decomposition_pass(self) -> tuple[float, float]:
+        """
+        Nedbrytning av förna och kadaver, var och en med sin egen takt.
+
+        Kadaver bryts ned åtta gånger snabbare. Det är inte en detalj: så länge
+        de två låg i samma pool och samma takt kunde ett bestånd i kollaps leva
+        på sina egna döda i månader — i p114 åt faunan 4 594 kg kadaver mot
+        3 248 kg flora, med andelen stigande från 20 till 86 procent genom
+        förloppet. En stock som ruttnar bort kan inte bära den återkopplingen.
+        """
+        self._detritus_flush()
+        self._carcass_flush()
+
+        d_dec, d_rel, d_empty = self._decompose_pool(
+            self.detritus, self.detritus_structure, self._detritus_member,
+            self._detritus_active, float(self.WP.detritus_decay))
+        if d_empty:
             self._detritus_dirty = True
 
-        self.detritus[act] = new
+        c_dec, c_rel, c_empty = self._decompose_pool(
+            self.carcass, self.carcass_structure, self._carcass_member,
+            self._carcass_active, float(self.WP.carcass_decay))
+        if c_empty:
+            self._carcass_dirty = True
 
+        released = d_rel + c_rel
+        retained = 1.0 - float(self.WP.nutrient_loss_frac)
         self._nutrient_lost_total += released * (1.0 - float(retained))
-        dM_nutrient_from_detritus = released * float(retained)
-        return dM_detritus_decay, dM_nutrient_from_detritus
+        return d_dec + c_dec, released * float(retained)
 
     def update_flux(
         self,
@@ -779,8 +866,15 @@ class World:
     # Sampling (renodlad)
     # -------------------------
     def sample_carcass(self, x: float, y: float) -> float:
-        """Bilinear sampling of detritus field at a single point."""
-        return float(self.detritus[self.grid.cell_of(float(x), float(y))])
+        """
+        All död massa i cellen, förna plus kadaver.
+
+        Perceptionen skiljer inte på de två. Ett djur ser att här ligger något
+        dött; vad det är värt visar sig när det äter. Att ge kadavret en egen
+        sinneskanal vore en större ändring än den här defekten motiverar.
+        """
+        c = self.grid.cell_of(float(x), float(y))
+        return float(self.detritus[c]) + float(self.carcass[c])
 
     def sample_many_carcass(
         self,
@@ -797,8 +891,10 @@ class World:
         """
         cells = self.grid.cell_of_many(xs, ys)
         if outC is None:
-            return self.detritus[cells].astype(np.float32, copy=False)
-        outC[...] = self.detritus[cells].reshape(np.shape(outC))
+            return (self.detritus[cells] + self.carcass[cells]).astype(
+                np.float32, copy=False)
+        outC[...] = (self.detritus[cells] + self.carcass[cells]).reshape(
+            np.shape(outC))
         return outC
 
     def sample_flora_local(self, x: float, y: float) -> float:
@@ -861,6 +957,9 @@ class World:
         if field is self.detritus:
             struct = float(self.detritus_structure[cell])
             self._detritus_deactivate_if_empty(cell)
+        elif field is self.carcass:
+            struct = float(self.carcass_structure[cell])
+            self._carcass_deactivate_if_empty(cell)
 
         energy = got * float(self.WP.E_labile_J_per_kg) * (1.0 - struct)
         return float(got), float(energy)
@@ -953,7 +1052,10 @@ class World:
     def add_carcass(self, x: float, y: float, amount_kg: float, rad: int = 3,
                     structure: float = 0.45) -> None:
         """
-        Add carcass mass to detritus field (kg/cell).
+        Deponera kadavermassa i kadaverpoolen (kg/cell).
+
+        Spridningen över `rad` celler är deponering och inte transport: en kropp
+        skingras där den faller. Kadaver diffunderar inte efteråt.
         """
         amt = float(amount_kg)
         if not math.isfinite(amt) or amt <= 0.0:
@@ -970,7 +1072,7 @@ class World:
         # som var det sista geometriantagandet i world.py.
         cells = self.grid.cells_within(center, r)
         if not cells:
-            self.detritus[center] = float(self.detritus[center]) + amt
+            self._carcass_add(center, amt, structure)
             return
     
         sigma = max(0.75, 0.5 * r)
@@ -985,11 +1087,11 @@ class World:
             wsum += w
     
         if wsum <= 1e-12:
-            self.detritus[center] = float(self.detritus[center]) + amt
+            self._carcass_add(center, amt, structure)
             return
     
         scale = amt / wsum
         for cell, w in weights:
-            self._detritus_add(cell, scale * w, structure)
+            self._carcass_add(cell, scale * w, structure)
 
 

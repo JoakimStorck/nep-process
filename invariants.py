@@ -391,7 +391,7 @@ def check_body_store_mirror(pop) -> list[Violation]:
 
 
 # Fält som ska vara platta per-cell-arrayer.
-WORLD_CELL_FIELDS = ("water", "nutrient", "detritus")
+WORLD_CELL_FIELDS = ("water", "nutrient", "detritus", "carcass")
 
 # Fält som är rumsligt konstanta och därför lagras som skalär. De promoveras
 # till arrayer först när något faktiskt varierar dem — se
@@ -836,15 +836,27 @@ def nutrient_balance(pop) -> dict[str, float]:
 
     free = float(np.sum(np.asarray(world.nutrient), dtype=np.float64))
 
-    act = np.asarray(world.detritus_active_cells, dtype=np.int64)
-    if act.size:
-        d = np.asarray(world.detritus)[act].astype(np.float64)
-        ds = np.asarray(world.detritus_structure)[act].astype(np.float64)
-        from phenotype import NUTRIENT_PER_KG_LABILE, NUTRIENT_PER_KG_STRUCT
-        in_detritus = float(np.sum(d * (NUTRIENT_PER_KG_LABILE * (1.0 - ds)
-                                        + NUTRIENT_PER_KG_STRUCT * ds)))
-    else:
-        in_detritus = 0.0
+    from phenotype import NUTRIENT_PER_KG_LABILE, NUTRIENT_PER_KG_STRUCT
+
+    def _pool_nutrient(cells, v, st) -> float:
+        if cells.size == 0:
+            return 0.0
+        d = np.asarray(v)[cells].astype(np.float64)
+        ds = np.asarray(st)[cells].astype(np.float64)
+        return float(np.sum(d * (NUTRIENT_PER_KG_LABILE * (1.0 - ds)
+                                 + NUTRIENT_PER_KG_STRUCT * ds)))
+
+    # Två dödpooler sedan kadavret skildes från förnan. Missas den ena syns det
+    # som en läcka i takt med dödligheten, vilket är precis den storleksordning
+    # som är svårast att skilja från en verklig läcka.
+    in_detritus = _pool_nutrient(
+        np.asarray(world.detritus_active_cells, dtype=np.int64),
+        world.detritus, world.detritus_structure)
+    in_detritus += _pool_nutrient(
+        np.asarray(getattr(world, "carcass_active_cells", np.zeros(0, np.int64)),
+                   dtype=np.int64),
+        getattr(world, "carcass", np.zeros(0)),
+        getattr(world, "carcass_structure", np.zeros(0)))
 
     live = _live_slots(store)
     flora = live[store.kind[live] == 1] if live.size else live

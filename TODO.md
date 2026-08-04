@@ -1942,6 +1942,38 @@ Simuleringens utfall är oförändrat i båda fallen, och världsloggen skrivs m
 
 Mönstret gäller fler poster än den här. `_emit_population` är billig i dag men bygger också ovillkorligt, och samma fråga bör ställas där när den växer.
 
+### Kadaver skilt från förna
+
+*0121. Egen pool, egen strukturandel, egen nedbrytningstakt.*
+
+Kroppar hälldes i `detritus`. Eftersom strukturandelen blandas massviktat drunknade ett kadaver vid 0,25 i cellens förna vid 0,83 och kom ut kring 0,80. Tre följder på en gång, alla uppmätta i p114.
+
+**Asätarnischen kunde inte löna sig.** En ren asätare fick 0,087 ur detritus mot betarens 0,258 ur flora — en enkelriktad nackdel, inte en avvägning, och därmed ett brott mot regeln att varje trait ska ha motverkande konsekvenser. `_T_DIET` kunde straffa men aldrig belöna.
+
+**Dödsspiralen hade ett skafferi.** Faunan åt 4 594 kg kadaver mot 3 248 kg flora över hela sin livstid, med andelen stigande monotont från 20 till 86 procent genom kollapsen. Kadaver är en stock: varje dödsfall matar de överlevande en gång till, vilket fördröjer kollapsen och gör den brantare när stocken tar slut.
+
+**Och `M_detritus` mätte två saker.**
+
+Efter delningen har dietaxeln en verklig brytpunkt:
+
+```
+diet    flora   kadaver   förna     bäst
+0,00    0,258     —         —       flora
+0,25    0,211   0,202     0,033     flora
+0,50    0,159   0,329     0,053     kadaver
+1,00      —     0,534     0,087     kadaver
+```
+
+En ren asätare får alltså **0,534 per kilo mot betarens 0,258** — högre kvalitet, men mot en resurs som är fläckvis, kortlivad och beror av andras död. Det är avvägningen som saknades.
+
+**Tre designval.** Förnan är fortfarande ätbar; felet var aldrig att den var det utan att kadavret drunknade i den. Kadaver bryts ned åtta gånger snabbare, `carcass_decay = 0,62` mot förnans 0,077 — halveringstid knappt en månad i stället för nio, vilket är mekanismen som tar bort skafferiet. Och kadaver diffunderar inte; spridningen i `add_carcass` är deponering, en kropp som skingras där den faller.
+
+Perceptionen skiljer inte på poolerna. Ett djur ser att här ligger något dött; vad det är värt visar sig när det äter. En egen sinneskanal vore en större ändring än defekten motiverar.
+
+**Maskineriet är gemensamt, inte duplicerat.** `_pool_add`, `_pool_deactivate_if_empty` och `_decompose_pool` tar poolens arrayer som argument; `_detritus_*` och `_carcass_*` är tunna omslag. Poolerna ligger inte i en klass eftersom `detritus` och `detritus_structure` läses som attribut på `World` från ett dussin ställen.
+
+Näringsledgern räknar båda poolerna. Missas den ena syns det som en läcka i takt med dödligheten, vilket är den storleksordning som är svårast att skilja från en verklig läcka. Uppmätt drift efter delningen: −7,7e-10 relativt över 1 500 tick.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*
