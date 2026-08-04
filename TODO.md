@@ -1709,6 +1709,46 @@ Tillväxtpasset är över hälften av takten. Det är redan vektoriserat, så vi
 
 `_rebuild_flora_summary` bygger om per-cell-cachen varje tick och bör kunna använda samma glesningstrick som `detritus_active`.
 
+### Profilering av florapasset
+
+*0113. En liten säker vinst, och en tydlig karta över resten.*
+
+```
+                          ms/tick   andel   us/planta
+totalt                      298,7             1,021
+  _growth_system_flora      166,1   55,6 %    0,568
+  _rebuild_flora_summary     45,2   15,1 %    0,155
+  _dispersal_system_flora    28,8    9,7 %    0,099
+```
+
+cProfile inuti passet, 292 459 plantor:
+
+```
+_growth_system_flora   egen tid 125 ms/tick
+astype                 2 854 anrop / 30 tick = 95 per tick
+partition                240 anrop = 8 per tick
+```
+
+**Tillväxtpasset gör 29 `astype`-anrop.** Store:n är float32 och räkningen sker i float64, så varje läsning kopierar hela arrayen — 2,4 MB per anrop vid 300 000 plantor, alltså omkring 70 MB allokering per tick. Det är minnesbandbredd, inte aritmetik.
+
+`stored_left.astype(np.float64)` förekom fyra gånger på samma array. Hissad till en variabel ger det identiskt resultat och sparar tre fulla genomgångar.
+
+```
+1,021 -> 0,983 us/planta      hissad konvertering
+0,983 -> 0,823               kvantilerna gatade
+                             tillsammans 20 procent
+```
+
+**Kvantilerna var sju procent för statistik ingen läste.** `_rebuild_flora_summary` beräknade sex percentiler varje tick — sex fulla partitioneringar av hela floravektorn — men de konsumeras bara av `_emit_world`, som skrivs vid loggintervall. De räknas nu bara när posten faktiskt skrivs. Summorna och medelvärdena är enkla genomgångar och kostar en bråkdel; det är sorteringen som är dyr.
+
+**Tjugo procent, inte hälften.** De återstående vägarna är större och behöver var sin verifiering:
+
+- **Räkna i float32 genomgående.** Alla 29 konverteringar försvinner och varje temporär halveras. Men float32 ger sju siffrors precision, och ledgerns drift ska hållas under 1e-9 relativt — det kräver att summeringarna hålls kvar i float64 och att felfortplantningen mäts, inte antas.
+- **`_rebuild_flora_summary` på 15 procent** bygger om per-cell-cachen varje tick. Samma glesningstrick som `detritus_active` använder borde gå att tillämpa: bara de celler som faktiskt ändrats.
+- **`np.partition`, åtta anrop per tick** — det är `median` eller `percentile` någonstans i passet. Åtta fulla partitioneringar av 300 000 element är 0,68 sekunder av 30 tick, alltså sju procent, för statistik som kanske bara behövs vid rapportering.
+
+Den sista är troligen den billigaste riktiga vinsten: om partitioneringen bara behövs när diagnostik efterfrågas är det sju procent för ingenting.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*

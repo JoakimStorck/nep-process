@@ -592,6 +592,10 @@ class Population:
         self._emit("sample", t, records.sample_record(t, a, pop_n=len(self.agents)))
 
     def _emit_world(self, t: float) -> None:
+        # Kvantilerna behövs bara här, och bara när posten faktiskt skrivs.
+        # Cachen byggs om i samma anrop nedan om den är ogiltig.
+        self._flora_want_quantiles = True
+        self._flora_summary_cache = None
         payload = records.world_record(
             t,
             self.world,
@@ -691,6 +695,8 @@ class Population:
                 "nutrient_lost": float(getattr(self.world, "_nutrient_lost_total", 0.0)),
             })
         self._emit("world", t, payload)
+
+        self._flora_want_quantiles = False
 
     def _emit_step_if_tracked(self, t: float, a: Agent, B0: float, C0: float) -> None:
         if self.track_step_id is None:
@@ -1967,14 +1973,20 @@ class Population:
         shed_want = np.minimum(m, flora_turnover_rate(struct) * dt * m)
         m_left = m - shed_want
         stored_left = m_left.astype(np.float32)
-        up = stored_left.astype(np.float64) > m_left
+        # Samma konvertering användes fyra gånger. Varje `astype` från float32
+        # till float64 kopierar hela arrayen — vid 300 000 plantor är det 2,4 MB
+        # per anrop, och tillväxtpasset gjorde 29 sådana per tick. Att hissa den
+        # hit ger identiskt resultat och sparar tre fulla genomgångar av minnet.
+        stored_left64 = stored_left.astype(np.float64)
+        up = stored_left64 > m_left
         if np.any(up):
             stored_left[up] = np.nextafter(stored_left[up], np.float32(0.0))
-        shed = m - stored_left.astype(np.float64)
+            stored_left64 = stored_left.astype(np.float64)
+        shed = m - stored_left64
         # Förnafallet fäller proportionellt ur båda facken, så sammansättningen
         # är oförändrad. Fina rötter omsätts i verkligheten ungefär lika fort
         # som blad, så förenklingen håller hyggligt.
-        keep_frac = np.where(m > 0.0, stored_left.astype(np.float64) / np.maximum(m, 1e-30), 1.0)
+        keep_frac = np.where(m > 0.0, stored_left64 / np.maximum(m, 1e-30), 1.0)
         store.flora_root_mass[fl] = (
             store.flora_root_mass[fl].astype(np.float64, copy=False) * keep_frac
         ).astype(np.float32)
@@ -1983,7 +1995,7 @@ class Population:
         if np.any(shedding):
             store.mass[fl[shedding]] = stored_left[shedding]
             world.excrete_cells(cells[shedding], shed[shedding], struct[shedding])
-        m = stored_left.astype(np.float64)
+        m = stored_left64
 
         # --- 2. åldrande och svält -------------------------------------------
         hazard = dt / np.maximum(1e-6, flora_lifespan(struct))
@@ -2546,6 +2558,25 @@ class Population:
 
         return float(got_l), float(got_d), float(e_l), float(e_d)
 
+    @staticmethod
+    def _flora_quantiles(store, fl) -> dict:
+        """
+        Kvartiler och median, inte bara summan. En pool på 667 kg kan ligga
+        jämnt hos alla eller samlad hos några få stora plantor, och skillnaden
+        avgör om reproduktionen är strypt eller normal.
+
+        Dyr: varje anrop partitionerar hela floravektorn. Anropas bara när
+        `_flora_want_quantiles` är satt, alltså när diagnostiken efterfrågas.
+        """
+        return {
+            "flora_pool_p25": float(np.percentile(store.flora_repro_pool[fl], 25)),
+            "flora_pool_median": float(np.median(store.flora_repro_pool[fl])),
+            "flora_pool_p75": float(np.percentile(store.flora_repro_pool[fl], 75)),
+            "flora_carbon_median": float(np.median(store.flora_carbon_pool[fl])),
+            "flora_mass_median": float(np.median(store.mass[fl])),
+            "flora_mass_p90": float(np.percentile(store.mass[fl], 90)),
+        }
+
     def _rebuild_flora_summary(self) -> None:
         """
         Bygg flora-summary-cache för loggning och diagnostik.
@@ -2604,12 +2635,15 @@ class Population:
             # Kvartiler och median, inte bara summan. En pool på 667 kg kan
             # ligga jämnt hos alla eller samlad hos några få stora plantor, och
             # skillnaden avgör om reproduktionen är strypt eller normal.
-            "flora_pool_p25": float(np.percentile(store.flora_repro_pool[fl], 25)),
-            "flora_pool_median": float(np.median(store.flora_repro_pool[fl])),
-            "flora_pool_p75": float(np.percentile(store.flora_repro_pool[fl], 75)),
-            "flora_carbon_median": float(np.median(store.flora_carbon_pool[fl])),
-            "flora_mass_median": float(np.median(store.mass[fl])),
-            "flora_mass_p90": float(np.percentile(store.mass[fl], 90)),
+            # Kvantilerna beräknas bara när någon faktiskt läser dem.
+            #
+            # Sex percentiler är sex fulla partitioneringar av hela
+            # floravektorn. Vid 292 459 plantor mätte cProfile 240 anrop till
+            # `ndarray.partition` över 30 tick — 0,68 sekunder, alltså sju
+            # procent av takten — för statistik som bara skrivs vid
+            # rapportintervall. Summorna och medelvärdena är enkla genomgångar
+            # och kostar en bråkdel; det är sorteringen som är dyr.
+            **(self._flora_quantiles(store, fl) if getattr(self, "_flora_want_quantiles", False) else {}),
             "flora_carbon_pool_total": float(np.sum(store.flora_carbon_pool[fl], dtype=np.float64)),
             "flora_mean_root_alloc": float(np.mean(store.flora_root_alloc[fl], dtype=np.float64)),
             "flora_mean_maturity": float(np.mean(store.flora_maturity[fl], dtype=np.float64)),
