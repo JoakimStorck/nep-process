@@ -1312,6 +1312,33 @@ p97 visade självgallring rent: sådden gav 328 804 plantor på 1,27 kg, jämvik
 
 Praktisk följd: `flora_init_plant_mass = 1,32` sattes mot jämvikten vid f1, men vid f4 är den 3,42. Skalas plantmassan med bördigheten hamnar sådden nära jämvikt direkt, och inkörningen kortas från fjortontusen tick till några tusen.
 
+### Följ samma individ
+
+*0099. Nödvändigt men inte tillräckligt.*
+
+Valet av artfrände var alltid "närmaste", och närmaste granne är en **instabil referens**: två djur på snarlikt avstånd byter plats i rangordningen vid minsta rörelse.
+
+```
+fart 37,5   sträcka/sensing 7,51   grannbyte 32,8 %
+fart 23,2   sträcka/sensing 4,65   grannbyte 32,9 %
+```
+
+Samplingskvoten förbättrades en tredjedel och grannbytet rörde sig inte alls. Förklaringen att grannen hann lämna synfältet mellan sensingar var alltså fel — det är måttet som är instabilt, inte perceptionen som är för gles.
+
+Följden var att den sociala reflexen svängde mot A, sedan B, sedan A. Amplituden var stor — median 0,128 i styrkommandot, aldrig mättad av klippning — men riktningen inkoherent. Kohesionskvoten mot Poisson har legat på 1,0 genom fyra patchar.
+
+Ändringen gör den tidigare följda individen till förstahandsval så länge den är synlig, som ett halvt steg i sorteringsnyckeln — parningsvillighet väger fortfarande tyngre än vanan. Ingen global koordination: samma celler, samma synellips, samma gather. Bara valet inom grannskapet ändras. Ballerini m.fl. 2008 visade att starar följer bestämda grannar över tid snarare än de närmaste.
+
+```
+grannbyte        32,9 %  ->   8,6 %
+kohesionskvot     1,00   ->   1,03
+medelavstånd      4,67   ->   4,06     (Poisson-förväntan 4,67)
+```
+
+**Stabiliteten var nödvändig men inte tillräcklig.** Målvalet är åtgärdat och flockningen uppstår ändå inte. Medelavståndet ligger något under förväntan, vilket är en antydan men inte mer.
+
+Nästa hypotes ska alltså sökas någon annanstans än i målvalet. Kvar står aggregat över grannskapet — tyngdpunkt för kohesion, medelkurs för alignment, närmaste avstånd för separation — som är vad Reynolds faktiskt gör. Medelvärden hoppar inte, men de bär också en riktning som en enskild granne inte kan ge: mot mitten av gruppen snarare än mot en individ.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*

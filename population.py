@@ -2801,6 +2801,37 @@ class Population:
         seeker_ready = want_mate[cand_row]
         prio[seeker_ready & ~cand_ready] = 1.0
 
+        # Följ samma individ. Valet var alltid "närmaste artfrände", och
+        # närmaste granne är en instabil referens: två djur på snarlikt avstånd
+        # byter plats i rangordningen vid minsta rörelse.
+        #
+        # Uppmätt: 32,8 procent grannbyte mellan på varandra följande
+        # detektioner vid fart 37,5, och 32,9 procent vid 23,2 — helt
+        # oberoende av samplingstätheten, som samtidigt förbättrades en
+        # tredjedel. Det är alltså inte perceptionen som är för gles utan
+        # måttet som är instabilt.
+        #
+        # Följden är att den sociala reflexen svänger mot A, sedan B, sedan A.
+        # Amplituden är stor — median 0,128 i styrkommandot, aldrig mättad —
+        # men riktningen inkoherent, och kohesionskvoten mot Poisson har legat
+        # på 1,0 genom fyra patchar.
+        #
+        # Ändringen gör den tidigare följda individen till förstahandsval så
+        # länge den är synlig. Målet blir stabilt över hela mötet i stället för
+        # att bytas var tredje gång. Ballerini m.fl. 2008 visade att starar
+        # följer bestämda grannar över tid snarare än de närmaste.
+        #
+        # Ingen global koordination: samma celler, samma synellips, samma
+        # gather. Bara valet inom grannskapet ändras.
+        prev = np.zeros(n, dtype=np.int64)
+        for k, i in enumerate(idx):
+            prev[k] = int(getattr(alive[i], "_follow_id", 0) or 0)
+        if np.any(prev > 0):
+            same = st.id[cand_slot].astype(np.int64, copy=False) == prev[cand_row]
+            # Halvt steg: går före andra kandidater med samma parningsprioritet,
+            # men parningsvillighet väger tyngre än vanan.
+            prio[same] -= 0.5
+
         # Närmaste per djur: sortera på (rad, prioritet, avstånd).
         srt = np.lexsort((dist, prio, cand_row))
         cand_row = cand_row[srt]
@@ -2816,6 +2847,7 @@ class Population:
             s_ = int(cand_slot[k])
             d = float(dist[k])
             j = min(int(AP0.n_rays) * 0 + int(d / max(step, 1e-9)), 10_000)
+            alive[idx[r]]._follow_id = int(st.id[s_])
             out[idx[r]] = (
                 1.0,
                 float(rel[k] / (2.0 * math.pi)),

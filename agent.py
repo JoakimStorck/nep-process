@@ -2081,6 +2081,9 @@ class Agent:
     _sense_cd: int = field(init=False, default=0)        # steg kvar tills nästa skanning
     # Minne av senast sedda artfrände: [x, y, kurs, ålder i tick]. None = tomt.
     _nb_mem: object = field(init=False, default=None, repr=False, compare=False)
+    # id på den artfrände djuret senast följde. Förstahandsval nästa gång den
+    # syns, så att den sociala reflexen får ett stabilt mål över hela mötet.
+    _follow_id: int = field(init=False, default=0)
     # Temperatur per riktningssektor i kroppsram, satt av sensingpasset.
     _temp_sectors: object = field(init=False, default=None, repr=False, compare=False)
     _cached_B0: float = field(init=False, default=0.0)
