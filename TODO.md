@@ -1796,6 +1796,33 @@ kvot              2,12x            1,49x
 
 Två mätvärden inför `prange`: att allokera åtta n-långa arbetsvektorer i kärnan kostar mätbart noll, och att fylla dem 0,69 ms — bandbredden är alltså fortfarande inte flaskhalsen, vilket stämmer med float32-utfallet i 0113. Däremot är `40,0**s` i livslängden 4,7 ms av kärnans 30, eftersom `pow` är 2,4 gånger dyrare än `exp` utan SVML. Att skriva den som `exp(s·ln 40)` sparar omkring tre millisekunder men bryter den elementvisa jämförelsen, och är därför inte gjord.
 
+### Efterhandsanalysen mot dagens loggar
+
+*0115. `genopheno_analyze.py` skrivet om.*
+
+Skriptet hade drivit ifrån både loggformatet och frågan. Tre fel gjorde det missvisande snarare än bara inaktuellt.
+
+**Halva filen läste ett event som inte skrivs.** All per-agent-statistik byggdes ur `event: "step"`. `steps_life: 0` stod i rapporten och samtliga härledda fält var tysta NaN.
+
+**Dödsorsaken lästes aldrig** — `cause` från Steg 5d, och `straightness` från Steg 5h som bär ett av Del E:s måltal.
+
+**Selektionsdifferentialen rankades i blandade enheter.** `reserve_cap` överst med −78 021 och `mobility` med +0,037 säger bara att den ena mäts i joule. Den är nu i spridningsenheter, och bredvid står en permutationsbaserad brusnivå: med 41 loci och 211 individer är en topplista utan nollhypotes garanterat brus.
+
+**Nollhypotesen finns dessutom i genomet.** Floraloci ärvs och muterar i faunans genom men har ingen läsare där, så de mäter vad urvalet ger av sig självt. Mot p114:
+
+```
+locus        differential   brusnivå   över brus
+m_target           +0,383      0,168      ja
+metab              -0,202      0,164      ja
+hidden_2           -0,150      0,173
+structure  flora   -0,115      0,164
+uptake     flora   -0,107      0,168
+```
+
+Två faunaloci över bruset, noll av tretton floraloci. Det är första gången faunans selektion är avgränsad mot brus i stället för rapporterad som en topplista.
+
+Rapporten är nu ett avsnitt per fråga: dödsorsaker över tid, energibudget per djur med kadaverandel, härstamning till grundargrupp, selektion per locus, rörelse över livstiden. `--run runs/pNNN` läser katalogen och skriver rapporten bredvid loggarna. 887 rader blir 426.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*
