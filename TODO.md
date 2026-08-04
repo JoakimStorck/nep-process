@@ -1544,6 +1544,45 @@ Skälet att detektera i stället för att gissa är mätt: faunan mot en halvfä
 
 **Overifierad i drift.** Sandlådan hinner inte fram till jämvikt inom sin tidsgräns; mekaniken är prövad men inte själva utlösningen. Raden `[flora] jämvikt vid tick N` i utskriften visar när den slår till, och det talet bör jämföras med de 12 000–15 000 där floraantalet planade ut i p94.
 
+### Jämvikten kräver att både massa och antal står still
+
+*0108. Detektorn från 0107 mätte fel storhet.*
+
+```
+tick 3000   flora 105 019   M_flora 237 156
+tick 4000   flora  84 720   M_flora 236 088   -> 0,45 %, utlöste
+```
+
+Massan låg still medan **antalet föll nitton procent**. Det är gallringsfasen: många små plantor dör bort medan de överlevande växer lika mycket som de döda tappar, så massan passerar en platå mitt i förloppet. Den verkliga jämvikten låg vid 316 000 kg i p97, alltså trettio procent högre.
+
+Djuren sattes därmed in i en värld som fortfarande krympte, och p107 blev ogiltig av samma skäl som p87 och p97 — bara med en annan orsak till feldateringen.
+
+Antalet är monotont under gallringen och avslöjar den direkt. Kriteriet kräver nu att **båda** står still: `max(rel_massa, rel_antal) <= flora_eq_tol`.
+
+Utskriften visar båda, så det går att se vilken som band:
+
+```
+[flora] jämvikt vid tick N: M kg i C plantor, ändring X % massa / Y % antal per 1000 tick
+```
+
+### Betning öppnar inga luckor
+
+*Observation från p107, ännu inte åtgärdad.*
+
+När växtligheten betas ner är det de **stora** plantorna som återhämtar sig, inte små snabbväxare som återetablerar sig. Orsaken är mekanisk.
+
+Betningen tar skott och lämnar rot, och `_release_flora_slot` anropas bara när massan går till noll — vilket kräver att plantan saknar rot helt. Betning dödar därför praktiskt taget aldrig. Det var med avsikt: rotrefugen var det som hindrade överbetningen i p87.
+
+Men rotanspråket på cellarean är `a_root = sra · rot · (1−struktur)`, och **roten rörs inte av betningen**. En hårt betad cell har alltså exakt samma totala anspråk som före. Ingen yta frigörs, inga luckor öppnas, och ett frö som landar där får andel noll.
+
+Återhämtningen kan därför bara ske genom att de sittande växer tillbaka ur sin reserv. **Rotrefugen som skyddar mot överbetning blockerar också successionen.**
+
+Följden är att det inte finns någon r-strategi att evolvera mot. Utan luckor betyder `dispersal` och `seed_mass` ingenting, och Smith–Fretwell-optimum i fröstorleken saknar mening — det finns ingen anledning att satsa på små frön om det aldrig finns någonstans att landa.
+
+**Åtgärden i naturen:** rotunderhåll kostar kol, och kolet kommer från bladen. En avlövad växt kan inte försörja sitt rotsystem och fäller rot. Det ger tre saker på en gång: luckor öppnas efter hård betning, snabbväxare får en verklig nisch, och strukturandelen får ännu en avvägning eftersom en vedartad planta har långsam återväxt och tappar mer när den betas hårt.
+
+Mekaniken finns till hälften: `root_alloc` sätter målandelen och massan faller vid betning, så ett målvärde som följer aktuell massa skulle få överskottsroten att fällas av sig själv.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*

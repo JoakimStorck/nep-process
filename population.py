@@ -1282,19 +1282,33 @@ class Population:
         if self._tick < win or (self._tick % win) != 0:
             return False
 
-        m = float(np.sum(self.store.mass[: self.store.n][
-            (self.store.alive[: self.store.n]) & (self.store.kind[: self.store.n] == 1)
-        ], dtype=np.float64))
-        prev = self._flora_eq_prev
-        self._flora_eq_prev = m
-        if prev is None or m <= 0.0:
-            return False
+        n_ = int(self.store.n)
+        fl = (self.store.alive[:n_]) & (self.store.kind[:n_] == 1)
+        m = float(np.sum(self.store.mass[:n_][fl], dtype=np.float64))
+        cnt = float(np.count_nonzero(fl))
 
-        rel = abs(m - prev) / max(m, 1e-9)
+        prev = self._flora_eq_prev
+        self._flora_eq_prev = (m, cnt)
+        if prev is None or m <= 0.0 or cnt <= 0.0:
+            return False
+        pm, pc = prev
+
+        # **Båda** måste stå still. Massan ensam räcker inte: under
+        # gallringsfasen dör många små plantor bort medan de överlevande växer
+        # lika mycket som de döda tappar, så massan passerar en platå mitt i
+        # förloppet. I p107 utlöste detektorn vid tick 4 000 på 0,45 procents
+        # massändring — medan antalet samtidigt föll nitton procent, och den
+        # verkliga jämvikten låg trettio procent högre i massa.
+        #
+        # Antalet är monotont under gallringen och avslöjar den direkt.
+        rel_m = abs(m - pm) / max(m, 1e-9)
+        rel_c = abs(cnt - pc) / max(cnt, 1e-9)
+        rel = max(rel_m, rel_c)
         hard = int(self.PP.flora_eq_max_ticks)
         if rel <= float(self.PP.flora_eq_tol) or (hard > 0 and self._tick >= hard):
-            print(f"[flora] jämvikt vid tick {self._tick}: "
-                  f"{m:.0f} kg, relativ ändring {100*rel:.2f} % per {win} tick",
+            print(f"[flora] jämvikt vid tick {self._tick}: {m:.0f} kg i "
+                  f"{int(cnt)} plantor, ändring {100*rel_m:.2f} % massa / "
+                  f"{100*rel_c:.2f} % antal per {win} tick",
                   flush=True)
             return True
         return False
