@@ -1405,6 +1405,32 @@ Tre åtgärder, i ordning:
 2. **Sänk bruset när djuret följer någon.** `tau_dir` interpolerar redan mot `explore_drive`; att låta flockning räknas som "har ett mål" är en rad och är biologiskt riktig — ett djur som följer flocken irrar inte.
 3. **Låt alignment verka mellan sensingar.** Grannarnas medelkurs finns i `_soc_sectors` och skulle kunna appliceras varje tick, precis som `_nb_mem` bär position mellan observationer.
 
+### Avståndsberoende sensing och lugnare kurs i flock
+
+*0102. Kohesionen svarar tydligare. Alignment fortfarande inte.*
+
+**Sensingfrekvensen blir avståndsberoende**, som ekolokalisering: långsamma ping när ingenting är i närheten, tätare ju närmare grannen kommer. Intervallet interpolerar linjärt mellan `sense_alert_steps` och `sense_idle_steps` efter grannens avstånd i förhållande till synvidden.
+
+Två fasta steg räckte inte. Riktningsbruset verkar varje tick och ackumulerar 61 grader över tio, mot en alignmentkorrigering på två grader per sensing — kursen randomiseras helt mellan två observationer. Sensing kostar energi, så avvägningen finns redan: ett djur som ständigt har grannar nära betalar mer.
+
+**Riktningsbruset sänks när djuret följer flocken.** `tau_dir` interpolerade redan mot `explore_drive` — låg utforskning ger rakare färd — och att följa en granne är lika mycket "har ett mål" som att stå på föda. Ett djur som följer flocken irrar inte.
+
+```
+                 0100      0101      0102
+kohesionskvot    1,07      1,03      1,11    (soc 0,9)
+                 1,03      —         1,08    (soc 0,1)
+medelavstånd  4,06/4,66  4,14/4,74  3,95/4,73
+kursordning      0,065     0,097     0,025
+```
+
+Kohesionen har nu stigit tre mätningar i rad och medelavståndet ligger sexton procent under Poisson-förväntan. Djuren håller ihop mer än slumpen — svagt, men konsekvent.
+
+**Alignment ger fortfarande ingenting**, och kursordningen svänger mellan 0,025 och 0,097 kring slumpvärdet 0,074 utan mönster.
+
+**Måttet är dessutom fel.** Kursordningen beräknas globalt över hela populationen. Finns flera flockar som rör sig åt olika håll blir den låg även vid perfekt lokal samordning. Det som ska mätas är **lokal** ordning — medelkursen bland grannar inom synhåll, jämförd med samma mått i en slumpblandad population. Innan det är gjort vet vi inte om alignment är trasig eller osynlig.
+
+**Kvar att göra:** låta alignment verka mellan sensingar, och städa strålmodellens rester. `RaySensors.sense`, `see_agent_first_hit` och `ray_eccentricity` har alla noll verkliga anropare sedan 0084, 0085 och 0101 — men reservgrenarna i `_run_full_sensing` gör att en borttagning behöver verifieras med omsorg snarare än göras blint.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*

@@ -2343,10 +2343,32 @@ class Agent:
         """
         Uppdatera adaptiv sensingfrekvens och nästa effektiva djup.
         """
-        if food_near or agent_near:
-            j_det = int(j_agent) if agent_near else 0
+        # Avståndsberoende frekvens, som ekolokalisering: långsamma ping när
+        # ingenting är i närheten, tätare ju närmare grannen kommer.
+        #
+        # Två fasta steg — tio i vila, tre i beredskap — räcker inte för
+        # alignment. Riktningsbruset verkar varje tick och ackumulerar 61
+        # grader över tio tick, mot en alignmentkorrigering på två grader per
+        # sensing. Kursen randomiseras helt mellan två observationer, och den
+        # regeln kan därför inte verka oavsett vikt.
+        #
+        # Med avståndsberoende intervall betalar djuret för upplösning bara när
+        # den behövs. Sensing kostar energi, så avvägningen finns redan: ett
+        # djur som ständigt har grannar nära betalar mer.
+        if agent_near:
+            j_det = max(0, int(j_agent))
             self._last_detect_j = j_det
             self._sense_m_eff = min(m_full, max(2, j_det + 3))
+            # Linjär interpolation mellan alert och idle efter hur nära
+            # grannen är i förhållande til synvidden.
+            idle = max(1, int(self.AP.sense_idle_steps))
+            alert = max(1, int(self.AP.sense_alert_steps))
+            frac = clamp(float(j_det) / max(1.0, float(m_full)), 0.0, 1.0)
+            steps = alert + (idle - alert) * frac
+            self._sense_cd = max(0, int(round(steps)) - 1)
+        elif food_near:
+            self._last_detect_j = 0
+            self._sense_m_eff = min(m_full, 3)
             self._sense_cd = max(0, int(self.AP.sense_alert_steps) - 1)
         else:
             self._last_detect_j = -1
@@ -2824,6 +2846,19 @@ class Agent:
         tau_local = max(1e-6, float(self.AP.dir_tau_local))
         tau_run = max(tau_local, float(self.pheno_dir_tau()))
         e = clamp(float(explore_drive), 0.0, 1.0)
+
+        # Ett djur som följer flocken irrar inte. `tau_dir` interpolerar redan
+        # mot `explore_drive` — låg utforskning ger rakare färd — och att följa
+        # en granne är lika mycket "har ett mål" som att stå på föda.
+        #
+        # Utan det raderas alignment av bruset mellan två observationer: 19
+        # grader per tick mot en korrigering på två.
+        _soc = getattr(self, "_soc_sectors", None)
+        if _soc is not None and float(getattr(self.pheno, "sociability", 0.0)) > 0.5:
+            _F = _soc[0]
+            if len(_F) and float(np.sum(_F)) > 0.0:
+                e *= 1.0 - clamp(2.0 * (float(self.pheno.sociability) - 0.5), 0.0, 1.0)
+
         tau_dir = tau_local + (tau_run - tau_local) * e
 
         d_noise = math.sqrt(2.0 * dt / tau_dir) * float(ctx.rng.normal(0.0, 1.0))
