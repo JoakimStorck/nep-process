@@ -1974,6 +1974,18 @@ Perceptionen skiljer inte på poolerna. Ett djur ser att här ligger något döt
 
 Näringsledgern räknar båda poolerna. Missas den ena syns det som en läcka i takt med dödligheten, vilket är den storleksordning som är svårast att skilja från en verklig läcka. Uppmätt drift efter delningen: −7,7e-10 relativt över 1 500 tick.
 
+### Förna och kadaver var för sig i loggen
+
+*0122. Två pooler, två kurvor.*
+
+`M_C` blev summan av båda dödpoolerna i 0121, vilket stänger ledgern men döljer just det som är intressant: poolerna har olika strukturandel, olika nedbrytningstakt och olika roll i födovalet. En gemensam kurva kan inte skilja ett bestånd som betar från ett som lever på sina egna döda.
+
+Världsposten bär nu `M_detritus` och `M_carcass` var för sig, plus `nutrient_in_litter` och `nutrient_in_carcass` samt cellräknare för båda. `M_C` och `nutrient_in_detritus` är kvar som totalsiffror så att summan fri + flora + fauna + detritus stänger som förut för läsare som inte känner till delningen.
+
+`live_world_plot.py` ritar kadavret som egen kurva i massapanelen och som eget skikt i näringsstacken. Skiktet är tunt — vid 1 200 tick står kadavret på 0,10 kg mot förnans 85 152 — men det är det som växer under en kollaps.
+
+**Äldre loggar fungerar oförändrat.** Saknas de nya fälten blir kadaverserien NaN och ritas inte, medan förnan faller tillbaka på `M_C`, alltså exakt den kurva som ritades förut. Verifierat mot en logg med fälten borttagna.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*

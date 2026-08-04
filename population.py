@@ -646,8 +646,13 @@ class Population:
             with_percentiles=self.world_log_with_percentiles,
         )
         if isinstance(payload, dict):
-            detritus_sum = float(np.nansum(self.world.detritus)) + float(
-                np.nansum(self.world.carcass))
+            litter_sum = float(np.nansum(self.world.detritus))
+            carcass_sum = float(np.nansum(self.world.carcass))
+            # `M_C` är summan av båda dödpoolerna och behålls som totalsiffra;
+            # `M_detritus` och `M_carcass` är de två var för sig. Poolerna har
+            # olika strukturandel, olika nedbrytningstakt och olika roll i
+            # födovalet, så en gemensam kurva döljer det som är intressant.
+            detritus_sum = litter_sum + carcass_sum
             # Ledgerns energiskalor: nominell labil energitäthet vid
             # respektive ontologis initierade medelstrukturandel. Diagnostik,
             # inte fysik — den verkliga omvandlingen sker per organism.
@@ -668,6 +673,8 @@ class Population:
                 "BC_sum": flora_mass + detritus_sum,
                 "M_B": flora_mass,
                 "M_C": detritus_sum,
+                "M_detritus": litter_sum,
+                "M_carcass": carcass_sum,
     
                 "flora_n": flora_n,
                 "flora_mass_store": flora_mass,
@@ -735,13 +742,23 @@ class Population:
                     * nutrient_content_array(self.store.structure[fl]),
                     dtype=np.float64,
                 )) if fl.size else 0.0,
+                # `nutrient_in_detritus` är fortfarande båda poolerna, så att
+                # summan fri + flora + fauna + detritus stänger som förut för
+                # läsare som inte känner till delningen. `nutrient_in_litter`
+                # och `nutrient_in_carcass` är de två var för sig.
                 "nutrient_in_detritus": float(np.sum(
                     det * nutrient_content_array(det_s), dtype=np.float64
                 )) + float(np.sum(
                     car * nutrient_content_array(car_s), dtype=np.float64
                 )),
-                "M_carcass": float(np.sum(car, dtype=np.float64)),
+                "nutrient_in_litter": float(np.sum(
+                    det * nutrient_content_array(det_s), dtype=np.float64
+                )),
+                "nutrient_in_carcass": float(np.sum(
+                    car * nutrient_content_array(car_s), dtype=np.float64
+                )),
                 "carcass_cells": int(np.count_nonzero(car)),
+                "detritus_cells": int(np.count_nonzero(det)),
                 "nutrient_added": float(getattr(self.world, "_nutrient_added_total", 0.0)),
                 "nutrient_lost": float(getattr(self.world, "_nutrient_lost_total", 0.0)),
             })

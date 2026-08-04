@@ -63,6 +63,15 @@ class WorldSeries:
     kadaverfältet. `B` ersattes av diskret flora i Fas 2 och `C` av `detritus`
     i näringsstängningen, så panelerna visade fält som inte längre finns medan
     hela florapayloaden i loggen låg oanvänd.
+
+    Sedan kadavret skildes från förnan är `M_C` två pooler i en kurva. De ritas
+    var för sig här: de har olika strukturandel, olika nedbrytningstakt och
+    olika roll i födovalet, och det är just skillnaden mellan dem som säger om
+    ett bestånd betar eller lever på sina egna döda.
+
+    Äldre loggar saknar de nya fälten. Då blir kadaverserien NaN och ritas inte,
+    medan förnan faller tillbaka på `M_C` — alltså samma kurva som förut, vilket
+    är rätt för en logg där poolerna faktiskt var en.
     """
 
     t: List[float] = field(default_factory=list)
@@ -71,12 +80,14 @@ class WorldSeries:
     flora_n: List[float] = field(default_factory=list)
     flora_mass: List[float] = field(default_factory=list)
     detritus_mass: List[float] = field(default_factory=list)
+    carcass_mass: List[float] = field(default_factory=list)
     established: List[float] = field(default_factory=list)
 
     # näringskretsloppet
     nut_free: List[float] = field(default_factory=list)
     nut_flora: List[float] = field(default_factory=list)
     nut_detritus: List[float] = field(default_factory=list)
+    nut_carcass: List[float] = field(default_factory=list)
     nut_added: List[float] = field(default_factory=list)
     nut_lost: List[float] = field(default_factory=list)
 
@@ -142,12 +153,18 @@ class WorldSeries:
         self.t.append(tt)
         self.flora_n.append(g("flora_n"))
         self.flora_mass.append(g("flora_mass_store"))
-        self.detritus_mass.append(g("M_C"))
+        # Förnan: nytt fält om det finns, annars den gamla totalsumman.
+        litter = g("M_detritus")
+        self.detritus_mass.append(litter if np.isfinite(litter) else g("M_C"))
+        self.carcass_mass.append(g("M_carcass"))
         self.established.append(g("flora_established"))
 
         self.nut_free.append(g("nutrient_free"))
         self.nut_flora.append(g("nutrient_in_flora"))
-        self.nut_detritus.append(g("nutrient_in_detritus"))
+        nut_litter = g("nutrient_in_litter")
+        self.nut_detritus.append(
+            nut_litter if np.isfinite(nut_litter) else g("nutrient_in_detritus"))
+        self.nut_carcass.append(g("nutrient_in_carcass"))
         self.nut_added.append(g("nutrient_added"))
         self.nut_lost.append(g("nutrient_lost"))
 
@@ -245,16 +262,22 @@ def _status(series: WorldSeries, *, size: int) -> str:
         return "no world events yet"
 
     i = -1
+    car = series.nut_carcass[i] if series.nut_carcass else float("nan")
     tot = series.nut_free[i] + series.nut_flora[i] + series.nut_detritus[i]
+    if np.isfinite(car):
+        tot += car
     bal = series.nut_added[i] - series.nut_lost[i]
     drift = (tot - bal) / bal if (np.isfinite(bal) and abs(bal) > 1e-12) else float("nan")
 
     return "\n".join([
         f"t={series.t[i]:.1f}  n={len(series.t)}",
         f"flora={_fmt(series.flora_n[i],0)}  massa={_fmt(series.flora_mass[i],2)} kg"
-        f"  detritus={_fmt(series.detritus_mass[i],3)} kg",
+        f"  förna={_fmt(series.detritus_mass[i],3)} kg"
+        + (f"  kadaver={_fmt(series.carcass_mass[i],3)} kg"
+           if series.carcass_mass and np.isfinite(series.carcass_mass[i]) else ""),
         f"näring: fri={_fmt(series.nut_free[i],5)}  flora={_fmt(series.nut_flora[i],5)}"
-        f"  detritus={_fmt(series.nut_detritus[i],5)}",
+        f"  förna={_fmt(series.nut_detritus[i],5)}"
+        + (f"  kadaver={_fmt(car,5)}" if np.isfinite(car) else ""),
         f"drift={drift:.2e} rel   (fauna ingår ej i world-loggen)",
     ])
 
@@ -287,19 +310,39 @@ def run_ui_loop(fig, ax_pool, ax_mix, ax_dist, ax_life, txt, series: WorldSeries
 
         ax_mass = ax_pool.twinx()
         ax_mass.plot(t, series.flora_mass, label="floramassa kg", color="tab:olive", linestyle="--")
-        ax_mass.plot(t, series.detritus_mass, label="detritus kg", color="tab:brown", linestyle=":")
+        ax_mass.plot(t, series.detritus_mass, label="förna kg", color="tab:brown", linestyle=":")
+        if np.any(np.isfinite(series.carcass_mass)):
+            # Kadaverkurvan ligger normalt flera tiopotenser under förnan och
+            # syns knappt i samma skala. Den ritas ändå här och inte i en egen
+            # panel, eftersom det är förhållandet mellan de två som är frågan.
+            ax_mass.plot(t, series.carcass_mass, label="kadaver kg",
+                         color="tab:red", linewidth=1.2, alpha=0.85)
         ax_mass.set_ylabel("kg")
         ax_mass.legend(loc="upper right", fontsize="small")
 
         # Panel 2: näringskretsloppet. Summan ska följa tillfört minus
         # förlorat — avvikelsen är bokföringens drift.
-        ax_mix.stackplot(
-            t,
-            series.nut_free, series.nut_flora, series.nut_detritus,
-            labels=["fri", "i flora", "i detritus"],
-            colors=["tab:blue", "tab:green", "tab:brown"],
-            alpha=0.75,
-        )
+        # Kadavret läggs som eget skikt när loggen bär det. Skiktet är tunt men
+        # det är det som växer under en kollaps: i p114 gick kadavrets andel av
+        # födan från 20 till 86 procent medan totalen såg lugn ut.
+        nut_car = np.asarray(series.nut_carcass, dtype=float)
+        if np.any(np.isfinite(nut_car)):
+            ax_mix.stackplot(
+                t,
+                series.nut_free, series.nut_flora,
+                series.nut_detritus, np.nan_to_num(nut_car),
+                labels=["fri", "i flora", "i förna", "i kadaver"],
+                colors=["tab:blue", "tab:green", "tab:brown", "tab:red"],
+                alpha=0.75,
+            )
+        else:
+            ax_mix.stackplot(
+                t,
+                series.nut_free, series.nut_flora, series.nut_detritus,
+                labels=["fri", "i flora", "i detritus"],
+                colors=["tab:blue", "tab:green", "tab:brown"],
+                alpha=0.75,
+            )
         ax_mix.set_ylabel("näring (kg)")
         ax_mix.set_title("Näringskretsloppet")
         ax_mix.legend(loc="upper left", fontsize="small", ncol=3)
