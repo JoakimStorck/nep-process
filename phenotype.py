@@ -82,6 +82,7 @@ class Phenotype:
     cold_aversion: float
     breed_phase: float
     breed_sync: float
+    breed_pull: float
     sense_strength: float
 
     # Vävnadens strukturandel. Body behöver den för katabolismens utbyte och
@@ -196,6 +197,31 @@ _T_MATURITY        = 37
 _T_BREED_PHASE     = 38
 _T_BREED_SYNC      = 39
 
+# Social synkronisering av häckningsfasen.
+#
+# Spridningen i `breed_phase` är ±0,19 år mot ett fönster på 2,7 månader vid
+# skärpa 3 — spridningen är alltså **större än fönstret**, och bara halva
+# överlappningen återstår: 10,9 procent mot de 22 som identiska faser skulle
+# ge. Att stänga glappet genom smalare spridning eller bredare fönster är
+# kalibrering.
+#
+# Social synkronisering av brunst är väldokumenterad hos får, getter, möss och
+# flera flockdjur: kemisk signalering mellan individer som ofta är nära drar
+# gruppens honor mot en gemensam cykel. Affinitetsmatrisen är precis den
+# viktning det ska ske över — ett djur drar sin fas mot dem det verkligen
+# umgås med, inte mot vem som helst som passerar.
+#
+# Locus behåller individens *anlag*; det som styr grinden är anlaget plus
+# flockdragningen. Tre saker som kalibrering inte kan ge: synkroniseringen
+# blir lokal, så varje flock konvergerar mot sin egen fas och två flockar i
+# olika delar av världen får reproduktiv isolering; slingan är
+# självförstärkande, eftersom de som synkroniserar får fler parningar och
+# avkomman ärver dragningen; och avvägningen finns inbyggd, eftersom stark
+# dragning betyder att man följer flocken även när dess fas är dålig för den
+# egna konditionen — och en ensam individ med hög dragning har ingen att dra
+# mot.
+_T_BREED_PULL      = 40
+
 @dataclass(frozen=True)
 class PhenoRanges:
     # maturity
@@ -223,6 +249,10 @@ class PhenoRanges:
     # Intervallet spänner en fjärdedels år åt vardera hållet kring toppen.
     breed_offset_min: float = -0.25
     breed_offset_max: float = 0.25
+
+    # Andel av avståndet till flockens fas som stängs per observation.
+    breed_pull_min: float = 0.0
+    breed_pull_max: float = 0.20
 
     breed_sync_min: float = 0.0
     breed_sync_max: float = 6.0    # von Mises-liknande skärpa; 0 = ingen säsong
@@ -385,6 +415,8 @@ def derive_pheno(traits: np.ndarray | None, R: PhenoRanges = PhenoRanges()) -> P
         cold_aversion=float(_lerp(R.cold_aversion_min, R.cold_aversion_max, u_cold)),
         breed_phase=float(_lerp(R.breed_offset_min, R.breed_offset_max,
                                 _sigmoid(_get_trait(traits, _T_BREED_PHASE)))),
+        breed_pull=float(_lerp(R.breed_pull_min, R.breed_pull_max,
+                               _sigmoid(_get_trait(traits, _T_BREED_PULL)))),
         breed_sync=float(_lerp(R.breed_sync_min, R.breed_sync_max,
                                _sigmoid(_get_trait(traits, _T_BREED_SYNC)))),
         sense_strength=float(u_sense),
@@ -426,6 +458,7 @@ def phenotype_summary(p: Phenotype) -> dict[str, float]:
         "cold_aversion": float(p.cold_aversion),
         "breed_phase": float(p.breed_phase),
         "breed_sync": float(p.breed_sync),
+        "breed_pull": float(p.breed_pull),
         "sense_strength": float(p.sense_strength),
         "hidden_1": int(p.hidden_1),
         "hidden_2": int(p.hidden_2),

@@ -1622,6 +1622,34 @@ Och aversionen bör kunna uppstå av att se **andra** angripas, inte bara av ege
 
 Det ger också ett selektionstryck mot att jaga i en flocks åsyn: ju fler som ser, desto fler undviker. Jaktbeteende som uppstår ur bandmekaniken i stället för att kodas.
 
+### Social synkronisering av häckningsfasen
+
+*0110. Flocken blir en reproduktiv enhet.*
+
+Spridningen i `breed_phase` är ±0,19 år mot ett fönster på 2,7 månader vid skärpa 3 — **spridningen är större än fönstret**, och därför återstår bara halva överlappningen: 10,9 procent mot de 22 som identiska faser skulle ge. Att stänga glappet genom smalare spridning eller bredare fönster är kalibrering.
+
+Social synkronisering av brunst är väldokumenterad hos får, getter, möss och flera flockdjur: kemisk signalering mellan individer som ofta är nära drar gruppens honor mot en gemensam cykel. **Affinitetsmatrisen är precis den viktning det ska ske över** — ett djur drar sin fas mot dem det verkligen umgås med, inte mot vem som helst som passerar.
+
+`_T_BREED_PULL` kodar hur stor andel av avståndet till flockens fas som stängs per observation, 0 till 0,20. Locus behåller individens anlag; det som styr grinden är anlaget plus dragningen. Faser är cirkulära och medelvärdesbildas som vektorer, med kortaste vägen runt.
+
+Konvergens vid 30 djur, full affinitet och dragning 0,10:
+
+```
+utgångsläge (±0,19 år)   R = 0,78
+efter  1 observation     R = 0,79
+efter  5                 R = 0,91
+efter 10                 R = 0,97
+efter 20                 R = 1,00
+```
+
+Tjugo observationer räcker för fullständig samling. Vid avståndsberoende sensing kring var åttonde tick är det omkring 160 tick, alltså drygt tre månader — snabbare än ett år, så synkroniseringen hinner verka innan första säsongen.
+
+**Tre saker kalibrering inte kan ge.** Synkroniseringen blir **lokal**, så varje flock konvergerar mot sin egen fas — två flockar i olika delar av världen får därmed reproduktiv isolering, vilket är begynnande artbildning ur en mekanism som inte kodar den. Slingan är **självförstärkande**, eftersom de som synkroniserar får fler parningar och avkomman ärver dragningen. Och **avvägningen finns inbyggd**: stark dragning betyder att man följer flocken även när dess fas är dålig för den egna konditionen, och en ensam individ med hög dragning har ingen att dra mot.
+
+Parbildningen faller ut som konsekvens i stället för som egen mekanism: flocken blir en reproduktiv enhet, inte bara en rumslig.
+
+`n_traits` 40 → 41.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*

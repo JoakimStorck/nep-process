@@ -2090,6 +2090,9 @@ class Agent:
     _soc_sectors: object = field(init=False, default=None, repr=False, compare=False)
     # id -> affinitet. Flocken som relation; se `_acquire_neighbours`.
     _flock: object = field(init=False, default=None, repr=False, compare=False)
+    # Realiserad häckningsfas: anlaget plus flockdragningen. Sätts vid födsel
+    # till pheno.breed_phase och glider sedan mot flockens.
+    _breed_phase_real: float = field(init=False, default=-1.0)
     # Medlemsviktad medelkurs i kroppsram, (x, y).
     _flock_align: object = field(init=False, default=None, repr=False, compare=False)
     # Temperatur per riktningssektor i kroppsram, satt av sensingpasset.

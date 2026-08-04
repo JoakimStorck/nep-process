@@ -211,7 +211,7 @@ class PopParams:
     store_growth_min_chunk: int = 256
     store_growth_factor: float = 2.0
     
-    n_traits: int = 40   # +2: _T_BREED_PHASE = 38, _T_BREED_SYNC = 39
+    n_traits: int = 41   # +1: _T_BREED_PULL = 40, social fassynkronisering
 
     spawn_jitter_r: float = 1.5
 
@@ -909,7 +909,8 @@ class Population:
             yl = max(1e-9, float(getattr(self.WP, "year_len", 12.0)))
             ph0 = float(getattr(self.WP, "season_phase0", 0.0))
             frac = ((float(self.t) / yl) - ph0) % 1.0
-            d = 2.0 * math.pi * (frac - 0.25 - float(ag.pheno.breed_phase))
+            _bp = float(getattr(ag, "_breed_phase_real", ag.pheno.breed_phase))
+            d = 2.0 * math.pi * (frac - 0.25 - _bp)
             if math.exp(k * (math.cos(d) - 1.0)) < 0.5:
                 return False
 
@@ -3004,10 +3005,12 @@ class Population:
         # eftersom alla läser samma fält. Därför räknas alignment här, över
         # varje djurs egna kandidater — listan finns redan.
         head_of = {}
+        agent_of = {}
         for a in alive:
             sl = int(getattr(a, "store_slot", -1))
             if sl >= 0 and a.body.alive:
                 head_of[sl] = float(a.heading)
+                agent_of[sl] = a
 
         gain = float(getattr(self.PP, "flock_gain", 0.25))
         decay = float(getattr(self.PP, "flock_decay", 0.90))
@@ -3038,6 +3041,32 @@ class Population:
                     hy += w * math.sin(h)
             ch = math.cos(-float(a.heading)); sh_ = math.sin(-float(a.heading))
             a._flock_align = (hx * ch - hy * sh_, hx * sh_ + hy * ch)
+
+            # Social synkronisering av häckningsfasen, viktad med samma
+            # affinitet. Faser är cirkulära och måste medelvärdesbildas som
+            # vektorer. Dragningen sker mot dem djuret verkligen umgås med,
+            # så varje flock konvergerar mot sin egen fas — vilket ger
+            # reproduktiv isolering mellan grupper utan att koda den.
+            pull = float(getattr(a.pheno, "breed_pull", 0.0))
+            if pull > 1e-6:
+                px = py = 0.0
+                for t in order_r[bounds[r]:bounds[r + 1]]:
+                    sl = int(cand_slot[t])
+                    o = agent_of.get(sl)
+                    if o is None:
+                        continue
+                    w = fl.get(int(st.id[sl]), 0.0)
+                    if w <= 0.0:
+                        continue
+                    ang = 2.0 * math.pi * float(getattr(o, "_breed_phase_real",
+                                                        o.pheno.breed_phase))
+                    px += w * math.cos(ang)
+                    py += w * math.sin(ang)
+                if abs(px) + abs(py) > 1e-12:
+                    own = float(getattr(a, "_breed_phase_real", a.pheno.breed_phase))
+                    tgt = math.atan2(py, px) / (2.0 * math.pi)
+                    d_ = (tgt - own + 0.5) % 1.0 - 0.5      # kortaste vägen runt
+                    a._breed_phase_real = (own + pull * d_) % 1.0
 
         # Närmaste per djur: sortera på (rad, prioritet, avstånd).
         srt = np.lexsort((dist, prio, cand_row))
