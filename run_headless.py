@@ -918,8 +918,13 @@ def bench_flora_growth(a: argparse.Namespace, seed: int, warmup: int,
 
     n0 = len(pop._flora_slots(rebuild=True))
     print(f"mäter: {rounds} varv x {per} tick per väg, flora {n0}", flush=True)
-    for _ in range(int(rounds)):
-        for b in backends:
+    for r in range(int(rounds)):
+        # Ordningen vänds varannat varv. Beståndet driver monotont under
+        # mätningen — floran föll tre procent under en verklig mätning — och med
+        # fast ordning träffar den driften vägarna olika. Det gynnade den som
+        # kördes sist med ungefär en procent, vilket är i samma storleksordning
+        # som skillnaden mellan njit och prange.
+        for b in (backends if r % 2 == 0 else backends[::-1]):
             state["mode"] = b
             pop._flora_growth_mode = b
             t0 = time.perf_counter()
@@ -930,8 +935,12 @@ def bench_flora_growth(a: argparse.Namespace, seed: int, warmup: int,
             wall[b] += time.perf_counter() - t0
 
     n1 = len(pop._flora_slots(rebuild=True))
+    drift = abs(n1 - n0) / max(1.0, float(n0))
     print(f"\n--- tillväxtpassets vägar ---")
-    print(f"  flora {n0} -> {n1} under mätningen\n")
+    print(f"  flora {n0} -> {n1} under mätningen"
+          + (f"  ({drift * 100:.1f} % drift — kvoterna bär sämre än vanligt)"
+             if drift > 0.05 else ""))
+    print()
     print(f"  {'väg':<10} {'passet':>10} {'hel tick':>10} {'us/planta':>11} "
           f"{'passets andel':>14}")
     for b in backends:

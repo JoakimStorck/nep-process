@@ -1865,6 +1865,27 @@ Alltså samma nivå som den seriella kärnan, och ingen strukturell avvikelse.
 
 **Farten är inte mätt.** Sandlådan har en kärna, och där kostar parallellversionen 8 procent extra i ren trådhantering — vilket är precis vad man ska se. Talet måste tas med `--bench-flora-growth` på tolvkärningsmaskinen. Räkna inte med tolv gånger: de seriella svepen är fortfarande O(n), och kärnan var redan bara hälften av passets tid efter 0114. Amdahl gäller på båda nivåerna.
 
+### Mätordningen, och vad 0117 faktiskt gav
+
+*0118. Alternerad ordning i `--bench-flora-growth`.*
+
+Uppmätt på referensmaskinen vid 102 205 plantor, alltså vid det bestånd en riktig körning står i:
+
+```
+väg          passet   hel tick   kvot mot numpy
+numpy        12,93      41,55
+numba        10,20      37,71     1,27x
+parallel     10,31      37,87     1,25x
+```
+
+**0117 gav ingenting.** Parallellversionen är en procent långsammare än den seriella på tolv kärnor. Orsaken är designvalet i 0117 självt: varje reduktion gjordes seriell för att bevara `bincount`-ordningen, och det lämnade fyra parallella loopar mot åtta seriella O(n)-svep. Amdahl med en seriell andel över hälften ger max omkring 1,6 gånger på kärnan, kärnan är halva passet, och trådstarten äter resten. Den räkningen gick att göra i förväg och gjordes inte.
+
+**Och njit gav 1,27x, inte 2,12x som i utvecklingsmiljön.** Per planta: 0,127 mot 0,100 µs på referensmaskinen, 0,403 mot 0,191 i sandlådan. Maskinen är 3,2 gånger snabbare på numpy-vägen men bara 1,9 på kärnan, eftersom numpys elementvisa operationer är SIMD-vektoriserade medan kärnan är skalär — grenarna på `if holds[i]` hindrar autovektorisering. Ju bättre CPU, desto mindre vinst av att kompilera bort temporärerna. **Kvoter mellan njit och numpy bär alltså inte mellan maskiner**, bara mellan vägar på samma maskin.
+
+Passet är efter allt detta 27 procent av takten i stället för 55, och 80 000 tick tar femtio minuter. Prestandan binder inte längre på 64x256.
+
+**Mätfelet:** vägarna kördes i samma ordning varje varv medan floran drev monotont, tre procent under en mätning. Det gynnade den som kördes sist med ungefär en procent — samma storleksordning som skillnaden mellan njit och prange. Ordningen vänds nu varannat varv, och en drift över fem procent skrivs ut som varning.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*
