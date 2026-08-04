@@ -2725,6 +2725,38 @@ class Population:
         cap = np.where(m_eff[cand_row] > 0, m_eff[cand_row] * step, r_front)
         r_lim = np.minimum(r_lim, cap)
 
+        # Parningsvillig som egen sökkanal.
+        #
+        # Detektionen var odiskriminerande: närmaste artfrände oavsett
+        # tillstånd, och filtret på parningsvillighet kom först efteråt i
+        # `_resolve_detected_agent`. Var den närmaste ovillig hade djuret ingen
+        # partner alls — även om en villig stod tio procent längre bort. Det är
+        # defekten `docs/rorelsens-arkitektur.md` beskriver: fel granne närmast
+        # blockerar parningsdriften.
+        #
+        # Med 32,7 procent grannbyten mellan på varandra följande detektioner
+        # byttes målet dessutom under approachen. En villig partner byter inte
+        # tillstånd varje tick, så en egen kanal ger något stabilt att hålla
+        # fast vid under de åtta till fyrtio tick det tar att sluta avståndet.
+        #
+        # Biologiskt är det en separat perceptuell kanal och inte en genväg:
+        # läten, dofter och uppvisning är evolverade just för att vara märkbara
+        # på avstånd. Lokaliteten är orörd — samma celler, samma synellips.
+        want_mate = np.zeros(n, dtype=bool)
+        for k, i in enumerate(idx):
+            want_mate[k] = bool(getattr(alive[i], "_mating_mode", False))
+        cand_ready = np.zeros(cand_slot.size, dtype=bool)
+        if want_mate.any():
+            by_slot = {}
+            for a in alive:
+                sl = int(getattr(a, "store_slot", -1))
+                if sl >= 0:
+                    by_slot[sl] = bool(getattr(a, "_mating_mode", False))
+            cand_ready = np.fromiter(
+                (by_slot.get(int(sv), False) for sv in cand_slot),
+                dtype=bool, count=cand_slot.size,
+            )
+
         ok = (
             (dist > 0.0)
             & (dist <= r_lim)
@@ -2740,9 +2772,17 @@ class Population:
         cand_slot = cand_slot[ok]
         dist = dist[ok]
         rel = rel[ok]
+        cand_ready = cand_ready[ok]
 
-        # Närmaste per djur: sortera på (rad, avstånd) och ta första i varje grupp.
-        srt = np.lexsort((dist, cand_row))
+        # Ett parningsberett djur söker närmaste **villiga**; övriga söker
+        # närmaste artfrände. Sorteringsnyckeln gör det utan en andra gather:
+        # ovilliga kandidater läggs efter de villiga för sökare i parningsläge.
+        prio = np.zeros(dist.size, dtype=np.float64)
+        seeker_ready = want_mate[cand_row]
+        prio[seeker_ready & ~cand_ready] = 1.0
+
+        # Närmaste per djur: sortera på (rad, prioritet, avstånd).
+        srt = np.lexsort((dist, prio, cand_row))
         cand_row = cand_row[srt]
         cand_slot = cand_slot[srt]
         dist = dist[srt]

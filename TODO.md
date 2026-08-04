@@ -1252,6 +1252,26 @@ tick 1500                 T median 22,6     (världens median 12,2)
 
 Och koncentrationen är en biprodukt värd att mäta: samlas djuren i banden fyrdubblas tätheten där, vilket mildrar mötesproblemet — fjorton månaders väntan efter mognad, 42 procent barnlösa — utan att någon flockningsmekanik behöver fungera.
 
+### Parningsvillig som egen sökkanal
+
+*0097. Defekten stod dokumenterad från början.*
+
+Detektionen var odiskriminerande: `_acquire_neighbours` gav närmaste artfrände oavsett tillstånd, och filtret på parningsvillighet kom först efteråt i `_resolve_detected_agent`. Var den närmaste ovillig hade djuret **ingen** partner alls — även om en villig stod tio procent längre bort. Det är precis den defekt `docs/rorelsens-arkitektur.md` beskriver: fel granne närmast blockerar parningsdriften.
+
+Med 32,7 procent grannbyten mellan på varandra följande detektioner byttes målet dessutom under approachen. En villig partner byter inte tillstånd varje tick, så en egen kanal ger något stabilt att hålla fast vid under de åtta till fyrtio tick det tar att sluta avståndet.
+
+Ett parningsberett djur söker nu närmaste **villiga** inom synhåll; övriga söker närmaste artfrände. Sorteringsnyckeln gör det utan en andra gather. Lokaliteten är orörd — samma celler, samma synellips. Biologiskt är det en separat perceptuell kanal och inte en genväg: läten, dofter och uppvisning är evolverade just för att vara märkbara på avstånd.
+
+**Bakgrund ur p96.** Sex körningar vid f4-bördighet med 80 startdjur. Perceptionen löstes — andelen blinda gick från 96,9 procent i p89 till 62–72 — och toppopulationerna nådde 159–193 mot tidigare högst 113, med upp till 942 unika individer. Men parningsandelen föll från 6,5 till 2,1 procent, och andelen reproduktionsberedda som ser en partner utanför parningsradien steg från 0,9 till 21,8.
+
+`halv-s2` genomlevde fyra fullständiga rovdjur–bytesdjur-cykler över 60 000 tick, med återhämtning från tre individer till nittiotvå tre gånger om, innan den fjärde bottnen tog den. Långsammare djur ger grundare svängningar och överlevnad genom bottnarna.
+
+**Vad som inte var problemet.** Reproduktionens kostnad är korrekt bokförd: fostervävnad byggs ur moderns reserv kilo för kilo, och räcker inte reserven kataboliserar hon egen vävnad. `E_build_gestation` är bara syntesarbetet ovanpå materialet — att jämföra den mot basalmetabolismen och dra slutsatsen att reproduktionen är gratis var en felläsning. Kullintervallet ligger på 15,6 månader i p96 mot 17,3 i p89, alltså praktiskt taget oförändrat mellan en explosiv och en stagnerande körning: takten är fysiologisk och redan emergent. `repro_cooldown_s = 8` binder i ingendera.
+
+Explosionen kom från antalet, inte från takten. Median kullar per individ är fortfarande noll, medelvärdet 0,92 — populationen växer genom att fler individer lyckas alls.
+
+**Nästa steg.** `mating_radius = 3,0` motsvarar nästan tre cellbredder och en träffyta på 28 celler, med grannavstånd 1,07. Parning bör kräva samma cell, alltså radie kring 0,6. Men att strama åt den innan approachen håller skulle sänka träffytan trettiofem gånger och stoppa reproduktionen helt — radien sätts därför efter att den här ändringen mätts.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*
