@@ -1361,6 +1361,50 @@ soc 0,9          88,9 %       83,1 %   1,07   4,06/4,66      0,065
 
 **Alignment ger ingenting.** Kursordningen ligger på 0,066 i båda fallen, och slumpvärdet för 185 individer är 0,074 — kurserna är helt okorrelerade. Termen är 0,20 · soc_bias · (fel/π), alltså i storleksordningen 0,08 mot en total styrsignal som domineras av föda, värme och flykt. Att höja den skulle bryta mot att flockningen inte får ta över, så nästa steg är inte mer vikt utan att förstå varför riktningen inte hålls mellan tick.
 
+### Ett synfält, inte två
+
+*0101. Städning av en artefakt från den stegvisa migreringen.*
+
+Individidentifieringen ärvde strålmodellens ellips från 0085, medan världskanalerna sedan 0084 läser en cirkel via `cells_within_many`. Samma djur hade därmed **två olika synfält för artfränder**:
+
+```
+aggregatet (sektorer)   cirkel, radie 10, 314 celler
+identiteten             ellips: 10 framåt, 7 åt sidan, 5,4 bakåt
+```
+
+Ett djur kunde känna att det fanns artfränder rakt bakom sig utan att kunna identifiera någon av dem, och de två kanalerna gick därför inte att jämföra. Det var inte designat — det var en rest från 0085, där ellipsen bevarades för att inte ändra beteendet, med sektorkanalerna lagda ovanpå.
+
+Den framåtriktade biasen var motiverad för jakt och födosök, men **födosöket använder den inte längre**. Ellipsen påverkade i praktiken ingenting utom vilka artfränder som kunde identifieras, och för flockning är den aktivt skadlig: en flockkamrat färdas jämsides, och där var räckvidden kortast.
+
+`ray_eccentricity` har därmed noll läsare och kan tas bort när strålmodellens övriga rester städas — `RaySensors.sense` och `see_agent_first_hit` är också döda sedan 0084 och 0085.
+
+```
+                   före 0101    efter
+kohesionskvot          1,07      1,03
+medelavstånd      4,06/4,66   4,14/4,74
+kursordning           0,065     0,097     (slumpvärde 0,074)
+```
+
+Kursordningen steg över slumpvärdet för första gången. Effekten är liten och ett enskilt mått på 182 individer, men det är rätt tecken och det kom av att synfältet blev konsistent.
+
+### Kortsiktig plan för flockningen
+
+Alignment kan inte verka i nuvarande brusregim. `tau_dir` interpolerar mot `explore_drive` och ligger vid `dir_tau_local = 0,35` som lägst:
+
+```
+riktningsbrus per tick              0,34 rad = 19 grader
+ackumulerat över 10 tick            1,07 rad = 61 grader
+alignmentkorrigering per sensing    0,04 rad =  2 grader
+```
+
+Bruset är trettio gånger starkare och verkar tio gånger oftare. Kursen randomiseras helt mellan två observationer. Att höja vikten till dominans är uteslutet — flockningen ska vara en drift bland flera.
+
+Tre åtgärder, i ordning:
+
+1. **Sensa oftare när grannar finns.** Artfrändedetektion utlöser beredskap, `sense_alert_steps = 3` mot `sense_idle_steps = 10`. Tre gånger tätare korrigering mot samma brus. Sensing kostar energi, så avvägningen finns redan.
+2. **Sänk bruset när djuret följer någon.** `tau_dir` interpolerar redan mot `explore_drive`; att låta flockning räknas som "har ett mål" är en rad och är biologiskt riktig — ett djur som följer flocken irrar inte.
+3. **Låt alignment verka mellan sensingar.** Grannarnas medelkurs finns i `_soc_sectors` och skulle kunna appliceras varje tick, precis som `_nb_mem` bär position mellan observationer.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*

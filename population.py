@@ -2736,7 +2736,6 @@ class Population:
 
         AP0 = alive[idx[0]].AP
         r_front = float(AP0.ray_len_front)
-        ecc = max(0.0, min(0.999, float(AP0.ray_eccentricity)))
         step = float(AP0.ray_step)
         r_top = max(1, int(round(r_front)))
 
@@ -2781,7 +2780,25 @@ class Population:
         heads = np.fromiter((a.heading for a in sub), dtype=np.float64, count=n)
         self_ids = np.fromiter((int(a.id) for a in sub), dtype=np.int64, count=n)
         rel = (np.arctan2(dy, dx) - heads[cand_row]) % (2.0 * math.pi)
-        r_lim = r_front * (1.0 - ecc) / (1.0 - ecc * np.cos(rel))
+
+        # Ett synfält, inte två. Individidentifieringen ärvde strålmodellens
+        # ellips från 0085, medan världskanalerna sedan 0084 läser en cirkel
+        # via `cells_within_many`. Samma djur hade därmed två olika synfält för
+        # artfränder: aggregatet såg dem i en cirkel med radie tio, identiteten
+        # bara i ellipsen — tio framåt, sju åt sidan, 5,4 bakåt. Ett djur kunde
+        # känna att det fanns artfränder rakt bakom sig utan att kunna
+        # identifiera någon av dem, och de två kanalerna gick inte att jämföra.
+        #
+        # Den framåtriktade biasen var motiverad för jakt och födosök, men
+        # födosöket använder den inte längre. Ellipsen påverkade i praktiken
+        # ingenting utom vilka artfränder som kunde identifieras, och för
+        # flockning är den aktivt skadlig: en flockkamrat färdas jämsides, och
+        # där var räckvidden kortast.
+        #
+        # Kvar är en enda parameter för synvidd. `ray_eccentricity` har därmed
+        # ingen läsare alls och kan tas bort när strålmodellens övriga rester
+        # städas.
+        r_lim = np.full(rel.shape, r_front, dtype=np.float64)
 
         # m_eff kapar räckvidden precis som ray_depths gjorde.
         m_eff = np.fromiter(
