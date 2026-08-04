@@ -167,7 +167,9 @@ class AgentParams:
     # kvar men sidosynen räcker för att hålla sällskap. Samma ändring bör också
     # höja parningsfrekvensen, som legat på sex till sju procent av alla
     # tillfällen då en partner setts.
-    ray_eccentricity: float = 0.3  # 0=cirkel → 1=extremt avlångt
+    # Kvar bara som historik: synfältet är cirkulärt och delat mellan aggregat
+    # och identitet sedan 0101, och ingen kod läser detta värde.
+    ray_eccentricity: float = 0.0  # oanvänd sedan 0101
     # Hur många tick en sedd artfrände minns efter att den lämnat synfältet.
     # 0 = av. Sensingen körs var tionde tick i vila, och djuret förflyttar sig
     # 7,4 enheter däremellan — nästan hela synfältets längd. Utan minne finns
@@ -2291,15 +2293,14 @@ class Agent:
         """
         Kör full sensing och returnerar allt som build_inputs behöver vidare.
         """
-        if sectors is not None:
-            secB, secC = sectors
-            (B0, C0), rays_B, rays_C = self.sensors.sense_local(
-                world, self.x, self.y, secB, secC, rng=rng,
-            )
-        else:
-            (B0, C0), rays_B, rays_C = self.sensors.sense(
-                world, self.x, self.y, self.heading, rng=rng, m_eff=m_eff,
-            )
+        # Sektorpercepten är enda vägen sedan 0084, och strålreserven togs
+        # aldrig: 23 209 anrop till `_run_full_sensing` gav noll anrop till
+        # `RaySensors.sense`, verifierat över två parameteruppsättningar innan
+        # grenen togs bort. Att låta den ligga kvar dolde att `sense()` var död.
+        secB, secC = sectors
+        (B0, C0), rays_B, rays_C = self.sensors.sense_local(
+            world, self.x, self.y, secB, secC, rng=rng,
+        )
     
         thresh = float(self.AP.sense_alert_thresh)
         food_near = (
@@ -2309,15 +2310,12 @@ class Agent:
             or (len(rays_C) > 0 and float(rays_C.max()) > thresh)
         )
     
-        if neighbour is not False:
-            if neighbour is None:
-                N_ag, Nu_ag, Nd_ag, j_agent, hit_slot, hit_id = 0.0, 0.0, 0.0, -1, -1, 0
-            else:
-                N_ag, Nu_ag, Nd_ag, j_agent, hit_slot, hit_id = neighbour
+        # Batchad artfrändeuppslagning är enda vägen sedan 0085.
+        # `see_agent_first_hit` togs aldrig i samma verifiering.
+        if neighbour is None or neighbour is False:
+            N_ag, Nu_ag, Nd_ag, j_agent, hit_slot, hit_id = 0.0, 0.0, 0.0, -1, -1, 0
         else:
-            N_ag, Nu_ag, Nd_ag, j_agent, hit_slot, hit_id = self.sensors.see_agent_first_hit(
-                world, self.x, self.y, self.heading, self.id, m_eff=m_eff,
-            )
+            N_ag, Nu_ag, Nd_ag, j_agent, hit_slot, hit_id = neighbour
         agent_near = j_agent >= 0
     
         pred_bearing = float(Nu_ag) * 2.0 * math.pi if N_ag > 0.5 else 0.0

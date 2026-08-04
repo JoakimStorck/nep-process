@@ -1431,6 +1431,24 @@ Kohesionen har nu stigit tre mätningar i rad och medelavståndet ligger sexton 
 
 **Kvar att göra:** låta alignment verka mellan sensingar, och städa strålmodellens rester. `RaySensors.sense`, `see_agent_first_hit` och `ray_eccentricity` har alla noll verkliga anropare sedan 0084, 0085 och 0101 — men reservgrenarna i `_run_full_sensing` gör att en borttagning behöver verifieras med omsorg snarare än göras blint.
 
+### Strålmodellens reservgrenar bort
+
+*0103. Verifierat dött innan borttagning.*
+
+`_run_full_sensing` hade två reservgrenar kvar från migreringen: `if sectors is None` föll tillbaka på `RaySensors.sense`, och `if neighbour is False` på `see_agent_first_hit`. Båda är rester från 0084 och 0085, där den gamla vägen bevarades för säkerhets skull.
+
+Mätt över två parameteruppsättningar, 400 tick vardera:
+
+```
+_run_full_sensing anrop              23 209
+RaySensors.sense                          0
+RaySensors.see_agent_first_hit            0
+```
+
+Grenarna togs aldrig. Att låta dem ligga kvar dolde dessutom att metoderna var döda — de såg ut att ha anropare.
+
+Grenarna är borttagna. Metoddefinitionerna står kvar tills vidare men har nu bevisligen ingen väg in; de kan tas i en egen omgång tillsammans med `_rebuild_cache`, strålvikterna och `sample_flora_rays`, vilket är en större operation än den här. `ray_eccentricity` är satt till noll och märkt oanvänd sedan 0101.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*
