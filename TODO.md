@@ -1986,6 +1986,31 @@ Världsposten bär nu `M_detritus` och `M_carcass` var för sig, plus `nutrient_
 
 **Äldre loggar fungerar oförändrat.** Saknas de nya fälten blir kadaverserien NaN och ritas inte, medan förnan faller tillbaka på `M_C`, alltså exakt den kurva som ritades förut. Verifierat mot en logg med fälten borttagna.
 
+### Spatialindexet gjorde allt två gånger
+
+*0123. Delat efter kadensbehov, plus en smutsflagga.*
+
+Efter 0120 var indexbygget den största posten vid 256x256: 45 ms av 141, alltså trettiotvå procent, och det byggdes två gånger per tick.
+
+**Bygget gör tre saker med olika kadensbehov.** `id -> slot` och CSR-layouten ändras när någon föds, dör eller byter cell. De härledda florafälten `flora_cell_mass` och `flora_cell_structure` ändras varje tick, eftersom florans massa gör det. Båda anropen gjorde allt tre.
+
+Ett tidigare försök var att bara ta bort det andra anropet. Simuleringens utfall blev bitidentiskt över 2 000 tick, men invariantsviten flaggade `[spatial_index] slotar i fel cellbucket`: bygget är redundant för simuleringen men inte för invarianten att indexet stämmer vid tickgränsen. Sviten gjorde sitt jobb.
+
+En ren smutsflagga hjälpte inte heller, eftersom florans massa ändras varje tick och flaggan därmed alltid hade varit satt.
+
+**Delningen är efter vad som faktiskt ändras.** Andra anropet, efter faunapassen, tar `with_flora_fields=False`: där kan bara medlemskapet ha ändrats, och betningen håller de härledda fälten uppdaterade inkrementellt medan den äter. Och `_index_dirty` sätts bara av `alloc_slot`, `clear_slot` och av rörelse som **verkligen byter cell** — ett djur som rör sig inom sin cell ändrar ingenting, och det är det vanliga fallet eftersom en tick sällan räcker över en cellbredd. Har ingen flyttat blir andra anropet en ren no-op.
+
+```
+256x256, noll djur      140,8 -> 94,6 ms/tick   -33 %
+64x64 med fauna          10,7 ->  9,4 ms/tick   -12 %
+```
+
+Vid 256x256 utan fauna är `_finalize_store_and_emit` nu helt borta ur profilen: 99,7 procent av takten ligger i `_step_world_and_flora`.
+
+**Utfallet är oförändrat.** Tio rapportpunkter över 2 000 tick med fauna ger identiska tal för bestånd, massa och detritus — bara millisekunderna skiljer.
+
+Kvar i indexet är att andra anropet fortfarande sorterar om hela beståndet för att flytta hundra djur av trehundratusen. En inkrementell uppdatering av CSR är rätt operation men en riktig ändring i layouten, och den betalar sig först när fauna är många.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*

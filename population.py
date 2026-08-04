@@ -871,7 +871,13 @@ class Population:
     
         self.store.pos_x[s] = np.float32(float(x))
         self.store.pos_y[s] = np.float32(float(y))
-        self.store.cell_idx[s] = np.int32(self.grid.cell_of(float(x), float(y)))
+        # Bara ett verkligt cellbyte smutsar indexet. Ett djur som rör sig
+        # inom sin cell ändrar ingenting i medlemskapet, och det är det
+        # vanliga fallet: en tick räcker sällan över en cellbredd.
+        c = np.int32(self.grid.cell_of(float(x), float(y)))
+        if c != self.store.cell_idx[s]:
+            self.store.cell_idx[s] = c
+            self.store.mark_index_dirty()
 
     def _write_alive_to_store(self, slot: int, alive: bool) -> None:
         """
@@ -1293,6 +1299,7 @@ class Population:
         self.store.alive[slot] = True
         self.store.kind[slot] = 1
         self.store.cell_idx[slot] = int(cell)
+        self.store.mark_index_dirty()
         self.store.pos_x[slot] = self.grid.cell_center_x[int(cell)]
         self.store.pos_y[slot] = self.grid.cell_center_y[int(cell)]
     
@@ -3914,7 +3921,12 @@ class Population:
         #   - mass/energy/damage/wear i body_system samt relevanta händelsepass
         # Därför görs ingen generell fauna-writeback här längre.
     
-        self.store.rebuild_spatial_index()
+        # Efter faunapassen har bara medlemskapet kunnat ändras: djur som bytt
+        # cell, födslar och dödsfall. Florans massa ändras i tillväxtpasset,
+        # alltså före det första bygget, och betningen håller de härledda
+        # fälten uppdaterade inkrementellt medan den äter. Andra bygget behöver
+        # dem därför inte — och har ingen flyttat blir anropet en no-op.
+        self.store.rebuild_spatial_index(with_flora_fields=False)
         self._flora_summary_cache = None
     
         self._last_flora_growth = float(dM_growth_flora)

@@ -186,6 +186,9 @@ class OrganismStore:
     flora_claim_cell: np.ndarray = field(init=False)
     flora_claim_share: np.ndarray = field(init=False)
     _flora_cells_prev: np.ndarray = field(init=False)
+    # Cellmedlemskapet har ändrats sedan senaste indexbygge. Sätts av
+    # alloc/clear och av rörelse som faktiskt byter cell.
+    _index_dirty: bool = field(init=False, default=True)
     _csr_cursor: np.ndarray = field(init=False)
     cell_slots: np.ndarray = field(init=False)
 
@@ -325,6 +328,7 @@ class OrganismStore:
         self.flora_claim_cell = np.zeros(0, dtype=np.int32)
         self.flora_claim_share = np.zeros(0, dtype=np.float32)
         self._flora_cells_prev = np.zeros(0, dtype=np.int64)
+        self._index_dirty = True
         self._csr_cursor = np.zeros(n_cells, dtype=np.int64)
         self.cell_slots = np.zeros(cap, dtype=np.int32)
         self.flora_cell_mass = np.zeros(n_cells, dtype=np.float32)
@@ -445,12 +449,24 @@ class OrganismStore:
             if int(arr.shape[0]) != cap:
                 raise AssertionError(f"{name} har längd {int(arr.shape[0])}, förväntat capacity={cap}")
         
+    def mark_index_dirty(self) -> None:
+        """
+        Något har flyttat, fötts eller dött sedan senaste indexbygge.
+
+        Flaggan gäller *cellmedlemskapet*, inte de härledda florafälten. Florans
+        massa ändras varje tick i tillväxtpasset, så en flagga som också täckte
+        dem hade alltid varit satt och därmed varit meningslös. Det som ändras
+        sällan är vem som ligger i vilken cell.
+        """
+        self._index_dirty = True
+
     def alloc_slot(self) -> int:
         if not self.free_slots:
             raise RuntimeError("OrganismStore has no free slots; caller must grow store before alloc_slot().")
         slot = self.free_slots.pop()
         if slot >= self.n:
             self.n = slot + 1
+        self._index_dirty = True
         return slot
     
     def write_agent(self, slot: int, a, grid) -> None:
@@ -503,6 +519,7 @@ class OrganismStore:
         self.free_slots.append(int(slot))
         
     def clear_slot(self, slot: int) -> None:
+        self._index_dirty = True
         self.id[slot] = -1
         self.alive[slot] = False
         self.pos_x[slot] = 0.0
@@ -579,9 +596,24 @@ class OrganismStore:
         self.flora_claim_cell = np.zeros(0, dtype=np.int32)
         self.flora_claim_share = np.zeros(0, dtype=np.float32)
 
-    def rebuild_spatial_index(self) -> None:
+    def rebuild_spatial_index(self, with_flora_fields: bool = True) -> None:
         """
         Bygg gemensamt spatialindex för alla levande organismer.
+
+        Bygget gör tre saker med olika kadensbehov, och det var det som gjorde
+        det till trettiotvå procent av takten vid 256x256: det kördes två
+        gånger per tick och gjorde allt tre båda gångerna.
+
+        `id -> slot` och CSR-layouten ändras när någon föds, dör eller byter
+        cell. De härledda florafälten `flora_cell_mass` och
+        `flora_cell_structure` ändras varje tick, eftersom florans massa gör
+        det — men bara i tillväxtpasset, och betningen håller dem uppdaterade
+        inkrementellt medan den äter.
+
+        Andra anropet per tick, efter faunapassen, behöver därför bara
+        medlemskapet: `with_flora_fields=False`. Och har ingen flyttat sedan
+        förra bygget är det anropet en ren no-op — vilket är hela ticken i en
+        värld utan fauna.
 
         Glest CSR-liknande layout:
           - idx_cells[k]   = bebodda cell-ID, stigande
@@ -600,11 +632,15 @@ class OrganismStore:
 
         Den stabila sorteringen bevarar slotordningen inom varje cell.
         """
+        if not with_flora_fields and not self._index_dirty:
+            return
+        self._index_dirty = False
+
         n = int(self.n)
         empty_i64 = np.zeros(0, dtype=np.int64)
 
         # Nollställ bara det som var satt förra bygget.
-        if self._flora_cells_prev.size:
+        if with_flora_fields and self._flora_cells_prev.size:
             self.flora_cell_mass[self._flora_cells_prev] = np.float32(0.0)
             self.flora_cell_structure[self._flora_cells_prev] = np.float32(0.0)
             self._flora_cells_prev = empty_i64
@@ -662,6 +698,8 @@ class OrganismStore:
         self.idx_starts = np.append(starts, np.int64(m))
 
         # --- härlett florafält ---
+        if not with_flora_fields:
+            return
         is_flora = self.kind[sorted_slots] == 1
         if np.any(is_flora):
             fcells = sorted_cells[is_flora]
