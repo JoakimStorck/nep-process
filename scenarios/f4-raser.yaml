@@ -1,0 +1,11 @@
+namn: f4-raser
+varld:   {bredd: 64, hojd: 256, bordighet: 4.0}
+fauna:
+  antal: 90
+  insatts_vid: jamvikt
+  flackar: 3
+  flackradie: 20.0
+  grupp_avstand: 1.0
+  grupp_spridning: 0.4
+  max_antal: 8192
+fysiologi: {fartskala: 0.5, sociability: 0.8, sociability_sd: 0.5}
