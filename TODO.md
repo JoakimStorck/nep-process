@@ -2011,6 +2011,40 @@ Vid 256x256 utan fauna är `_finalize_store_and_emit` nu helt borta ur profilen:
 
 Kvar i indexet är att andra anropet fortfarande sorterar om hela beståndet för att flytta hundra djur av trehundratusen. En inkrementell uppdatering av CSR är rätt operation men en riktig ändring i layouten, och den betalar sig först när fauna är många.
 
+### Nedbetade plantor kunde aldrig växa igen
+
+*0124. Meristemrefug och rotens återgång.*
+
+Betningshorisonten tog `edible = m - rotmassa`. Eftersom tuggan normalt är större än medianplantans skott hamnade plantan på **exakt** skott = 0 — och då är bladarean noll, ljuset noll och `can_grow` falskt. Plantan kunde aldrig fotosyntetisera igen.
+
+Uppmätt i en betad värld, 64x64:
+
+```
+tick 1500   87,5 % av floran hade skott = 0
+tick 2500   82,9 %, och de höll 66 % av all rotmassa
+```
+
+2 693 sådana plantor följdes i 1 000 tick. **Inte en enda fick tillbaka ett skott.** De krympte monotont, 0,571 till 0,341 kg, och dog långsamt av svält medan de höll två tredjedelar av cellernas näringsanspråk och blockerade all nyrekrytering. Kodkommentaren vid betningen sa redan att plantan *"skjuter igen ur sin reserv"*. Koden gjorde inte det.
+
+**Refugen måste mätas mot roten, inte mot skottet.** Första försöket lämnade en andel av skottet. Det räckte inte: andelen krymper geometriskt vid upprepade passager och rundas till noll i float32, och skott = 0 föll bara från 82,5 till 67,2 procent. Mot rotmassan är golvet stabilt och representerbart. `edible = m - rot·(1 + meristem)`.
+
+**Rotens återgång** fäller överskjutande rot mot plantans egen `flora_root_alloc`. Utan den behåller en nedbetad planta hela sitt anspråk, eftersom anspråket räknas ur rotmassan och betningen inte rör roten. Den exakta återställningen är `(rot - rho·m)/(1 - rho)`, vilket för en hårt betad planta är merparten av den, så takten begränsar steget. Axeln får därmed en motverkande konsekvens: mer rot ger större anspråk men mer att fälla när betet kommer.
+
+Effekterna separerade, 2 000 tick:
+
+```
+meristem  återgång   flora   massa   fauna   skott=0   rotandel
+    0,00      0,00    6359    5769      22    82,5 %      0,847
+    0,10      0,00    8920   11268      26     6,6 %      0,810
+    0,00      0,50    1208    1761      12    12,5 %      0,548
+    0,10      0,10    5265    3149      27     0,1 %      0,661
+    0,10      0,50    1500    1177      20     0,0 %      0,587
+```
+
+Refugen ensam tar bort fällan och ger både mer flora och mer fauna. Återgången kostar floramassa — den fäller rot till förna — men sänker rotandelen från 0,85 till 0,66, vilket är det som faktiskt öppnar luckor, och ger flest djur. Vid 0,50 är den för hård. Valda värden: `flora_meristem_frac = 0,10`, `flora_root_dieback = 0,1`.
+
+Elementvis jämförelse mellan numpy-vägen och kärnan är oförändrad: massa och rotmassa exakt lika, ackumulatorerna kring 1e-16.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*

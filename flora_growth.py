@@ -120,7 +120,7 @@ def _growth_kernel_impl(
     nutrient, neighbor_idx,
     # --- skalärer --------------------------------------------------------
     dt, BK, u_area, sra, sla, k_ext, h_ref, L_cell,
-    m_floor_abs, seedling_floor, seed_cap_mult, e_labile,
+    m_floor_abs, seedling_floor, seed_cap_mult, e_labile, root_dieback,
     # --- utdata per planta -----------------------------------------------
     mass_out, root_out, energy_out, reserve_out, pool_out, carbon_out,
     shed_out, dying_out, dm_out, grow_out,
@@ -178,13 +178,40 @@ def _growth_kernel_impl(
         shed_want = _turnover_rate(s) * dt * m0
         if shed_want > m0:
             shed_want = m0
-        left = _store_down(m0 - shed_want)
+        m_after = m0 - shed_want
+
+        # Förnafallet fäller proportionellt ur båda facken.
+        keep = m_after / m0 if m0 > 0.0 else 1.0
+        root_t = np.float64(root32[i]) * keep
+
+        # Rotens återgång mot plantans egen `flora_root_alloc`. Utan den
+        # behåller en nedbetad planta hela sitt anspråk, eftersom anspråket
+        # räknas ur rotmassan och betningen inte rör roten. Den exakta
+        # återställningen är (rot - rho*m)/(1 - rho), vilket för en hårt betad
+        # planta är merparten av den, så takten begränsar steget.
+        rho = np.float64(rootalloc32[i])
+        if rho < 0.0:
+            rho = 0.0
+        elif rho > 1.0:
+            rho = 1.0
+        excess = root_t - rho * m_after
+        die = 0.0
+        if excess > 0.0:
+            die = excess / (1.0 - rho if (1.0 - rho) > 1e-6 else 1e-6)
+            cap = root_dieback * dt * root_t
+            if cap < die:
+                die = cap
+
+        left = _store_down(m_after - die if m_after > die else 0.0)
         shed_out[i] = m0 - left
         mass_out[i] = np.float32(left)
         m[i] = left
 
-        keep = left / m0 if m0 > 0.0 else 1.0
-        rm = np.float64(np.float32(np.float64(root32[i]) * keep))
+        # Det som faktiskt lämnade plantan efter rundningen dras ur rotfacket.
+        rm = root_t - (m_after - left)
+        if rm < 0.0:
+            rm = 0.0
+        rm = np.float64(np.float32(rm))
         root_out[i] = np.float32(rm)
         energy_out[i] = energy32[i]
 

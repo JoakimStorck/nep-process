@@ -230,6 +230,28 @@ class PopParams:
     carcass_yield: float = 0.65  # currently unused (carcass mass = remaining M)
     carcass_rad: int = 2
 
+    # Andel av rotmassan som betning inte når. Betningshorisonten stannade
+    # tidigare vid roten, och eftersom tuggan normalt är större än
+    # medianplantans skott hamnade plantan på exakt skott = 0. Då är bladarean
+    # noll, ljuset noll och `can_grow` falskt — plantan kunde aldrig växa igen.
+    # Uppmätt: 83 procent av floran stod på skott = 0, de höll 66 procent av
+    # all rotmassa, och av 2 693 följda plantor fick ingen enda tillbaka ett
+    # skott på 1 000 tick.
+    #
+    # Refugen mäts mot roten och inte mot skottet. En andel av skottet krymper
+    # geometriskt vid upprepade passager och rundas till noll i float32 — med
+    # den varianten föll skott = 0 bara till 67 procent. Mot rotmassan är golvet
+    # stabilt och representerbart.
+    flora_meristem_frac: float = 0.10
+
+    # Takt för rotens återgång mot `flora_root_alloc` när plantan betats ner.
+    # Utan den behåller en nedbetad planta hela sitt näringsanspråk: anspråket
+    # räknas ur rotmassan, och betningen rör inte roten. Nedbetade plantor blev
+    # anspråkshållare som blockerade nyrekrytering. Vid 0,5 är återgången för
+    # hård och floran faller till en fjärdedel; 0,1 sänker rotandelen från 0,85
+    # till 0,66 och ger flest djur.
+    flora_root_dieback: float = 0.1
+
     # sampling
     sample_dt: float = 1.0
     sample_avoid_repeat_k: int = 0
@@ -1829,6 +1851,10 @@ class Population:
         # per anrop. Att slå upp alla tolv cellernas slotar för att sedan bryta
         # i den första var tolv gånger för mycket arbete. Tomma celler hoppas
         # över på fältet i stället för via spatialindexet.
+        # Refugen ligger i skottet men mäts mot roten; se
+        # `PopParams.flora_meristem_frac`.
+        meristem_keep = 1.0 + max(0.0, float(self.PP.flora_meristem_frac))
+
         for ci, cell in enumerate(ordered_cells):
             if float(cell_avail[ci]) <= 1e-12:
                 continue
@@ -1863,7 +1889,10 @@ class Population:
                 # stället för en postulerad kurva — och det ger `root_alloc` en
                 # ny konsekvens: rot är betesskydd, och den som satsat på skott
                 # betalar för det när trycket kommer.
-                edible = m - float(self.store.flora_root_mass[s])
+                # En betare tar blad och lämnar meristem. Lämnar den bara
+                # roten blir bladarean noll och plantan kan aldrig
+                # fotosyntetisera igen.
+                edible = m - float(self.store.flora_root_mass[s]) * meristem_keep
                 if edible <= 1e-12:
                     continue
     
@@ -2049,7 +2078,25 @@ class Population:
         # fällda beräknas ur den lagrade massan, så att detritus får exakt det
         # plantan förlorade — varken mer eller mindre.
         shed_want = np.minimum(m, flora_turnover_rate(struct) * dt * m)
-        m_left = m - shed_want
+        m_after = m - shed_want
+        # Förnafallet fäller proportionellt ur båda facken, så sammansättningen
+        # är oförändrad. Fina rötter omsätts i verkligheten ungefär lika fort
+        # som blad, så förenklingen håller hyggligt.
+        keep_frac = np.where(m > 0.0, m_after / np.maximum(m, 1e-30), 1.0)
+        root_t = store.flora_root_mass[fl].astype(np.float64, copy=False) * keep_frac
+
+        # Rotens återgång mot plantans egen `flora_root_alloc`. Den exakta
+        # återställningen är (rot - rho*m)/(1 - rho), vilket för en hårt betad
+        # planta är merparten av den, så takten begränsar steget.
+        rho = np.clip(
+            store.flora_root_alloc[fl].astype(np.float64, copy=False), 0.0, 1.0
+        )
+        excess = np.maximum(0.0, root_t - rho * m_after)
+        die_back = np.minimum(
+            excess / np.maximum(1e-6, 1.0 - rho),
+            float(self.PP.flora_root_dieback) * dt * root_t,
+        )
+        m_left = np.maximum(0.0, m_after - die_back)
         stored_left = m_left.astype(np.float32)
         # Samma konvertering användes fyra gånger. Varje `astype` från float32
         # till float64 kopierar hela arrayen — vid 300 000 plantor är det 2,4 MB
@@ -2061,12 +2108,10 @@ class Population:
             stored_left[up] = np.nextafter(stored_left[up], np.float32(0.0))
             stored_left64 = stored_left.astype(np.float64)
         shed = m - stored_left64
-        # Förnafallet fäller proportionellt ur båda facken, så sammansättningen
-        # är oförändrad. Fina rötter omsätts i verkligheten ungefär lika fort
-        # som blad, så förenklingen håller hyggligt.
-        keep_frac = np.where(m > 0.0, stored_left64 / np.maximum(m, 1e-30), 1.0)
-        store.flora_root_mass[fl] = (
-            store.flora_root_mass[fl].astype(np.float64, copy=False) * keep_frac
+        # Det som faktiskt lämnade plantan efter float32-rundningen dras ur
+        # rotfacket, eftersom återgången fäller därifrån.
+        store.flora_root_mass[fl] = np.maximum(
+            0.0, root_t - (m_after - stored_left64)
         ).astype(np.float32)
         shedding = shed > 0.0
         self._last_flora_shed = float(shed[shedding].sum()) if np.any(shedding) else 0.0
@@ -2400,6 +2445,7 @@ class Population:
             float(self.PP.flora_seedling_floor),
             float(self.PP.flora_max_seeds_per_tick),
             float(self.WP.E_labile_J_per_kg),
+            float(self.PP.flora_root_dieback),
             mass_out, root_out, energy_out,
             reserve_out, pool_out, carbon_out,
             shed_out, dying_out, dm_out, grow_out,
