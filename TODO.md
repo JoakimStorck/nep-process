@@ -1911,6 +1911,37 @@ Orsaken är kärnans form. Den varvar tolv parallella regioner med åtta seriell
 
 **Lärdomen inför nästa parallellisering:** en kärna som varvar parallellt och seriellt arbete är fel form för `prange`. Ska hydro, transporten eller sensingen parallelliseras ska passet vara parallellt hela vägen igenom — reduktioner via per-trådsackumulatorer, inte via seriella mellanled. Det är ett krav på passets utformning, inte ett val vid kompileringen. Och `cache=True` på två dispatchers ur samma funktionsobjekt är alltid fel.
 
+### Världsposten byggdes varje tick och kastades
+
+*0120. `hub.wants()` före nyttolasten.*
+
+Passtidtagning vid 256x256 med noll djur visade `_finalize_store_and_emit` på 36 procent av takten. Nedbrytningen gav en post som inte borde funnits alls:
+
+```
+growth_flora      62,99 ms   34,0 %
+rebuild_index     45,24 ms   24,4 %
+emit_world        44,48 ms   24,0 %     <- med loggning avstängd
+dispersal_flora   26,86 ms   14,5 %
+world.step         5,58 ms    3,0 %
+```
+
+`_emit_world` byggde en full florasammanfattning **med kvantiler**, plus två svep över cell- och floravektorerna för näringskretsloppet, och lämnade den till `_emit` — som kastade allt när `self.hub is None`. Hela avgörandet låg i mottagaren. Och även med en logg kopplad skriver `WorldLogger` i sin egen kadens, som standard var annan simulerad sekund, alltså vart hundrade tick.
+
+Värre: 0113 gatade percentilerna bakom `_flora_want_quantiles` för att de bara lästes vid loggning. `_emit_world` satte flaggan igen varje tick och tog tillbaka det mesta av den vinsten.
+
+**Producenten frågar nu först.** `BaseObserver.wants(name, t)` är en sidoeffektfri variant av `allow()` — den flyttar inte fram nästa tillåtna tidpunkt, den svarar bara på om posten skulle skrivas. `EventHub.wants()` frågar alla observatörer, och `_emit_world` returnerar direkt om svaret är nej. Skillnaden mot `allow()` är hela poängen: `allow()` är fortfarande den som avgör när posten väl kommer.
+
+Uppmätt:
+
+```
+256x256, noll djur, ingen loggning    188,3 -> 140,8 ms/tick   -25 %
+64x64 med fauna och full loggning      13,9 ->  11,5 ms/tick   -17 %
+```
+
+Simuleringens utfall är oförändrat i båda fallen, och världsloggen skrivs med samma kadens och samma 56 fält som förut.
+
+Mönstret gäller fler poster än den här. `_emit_population` är billig i dag men bygger också ovillkorligt, och samma fråga bör ställas där när den växer.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*

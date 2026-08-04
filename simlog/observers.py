@@ -17,6 +17,7 @@ class JsonlObserver(BaseObserver):
 @dataclass
 class StepLogger(JsonlObserver):
     every_s: Optional[float] = 0.5
+    event_names: tuple = ("step",)
     track_id: Optional[int] = None
 
     def set_track_id(self, agent_id: int) -> None:
@@ -36,6 +37,7 @@ class StepLogger(JsonlObserver):
 @dataclass
 class SampleLogger(JsonlObserver):
     every_s: Optional[float] = 1.0  # t.ex. en gång per sekund
+    event_names: tuple = ("sample",)
 
     def handle(self, ev: Event) -> None:
         if ev.name != "sample":
@@ -47,6 +49,7 @@ class SampleLogger(JsonlObserver):
 @dataclass
 class PopLogger(JsonlObserver):
     every_s: Optional[float] = 1.0
+    event_names: tuple = ("population",)
 
     def handle(self, ev: Event) -> None:
         if ev.name != "population":
@@ -59,6 +62,7 @@ class PopLogger(JsonlObserver):
 @dataclass
 class LifeLogger(JsonlObserver):
     every_s: Optional[float] = None  # no gating by default
+    event_names: tuple = ("birth", "death")
 
     def handle(self, ev: Event) -> None:
         if ev.name not in ("birth", "death"):
@@ -71,6 +75,7 @@ class LifeLogger(JsonlObserver):
 @dataclass
 class WorldLogger(JsonlObserver):
     every_s: Optional[float] = 2.0
+    event_names: tuple = ("world",)
 
     def handle(self, ev: Event) -> None:
         if ev.name != "world":

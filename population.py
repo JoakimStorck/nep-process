@@ -468,6 +468,19 @@ class Population:
             return
         self.hub.emit(Event(name=name, t=float(t), payload=payload))
 
+    def _emit_wanted(self, name: EventName, t: float) -> bool:
+        """
+        Skulle någon lyssnare ta emot det här eventet nu?
+
+        Frågan finns för poster som är dyra att bygga. Den ska ställas före
+        nyttolasten, inte efter — det var hela felet med världsposten.
+        """
+        hub = self.hub
+        if hub is None:
+            return False
+        w = getattr(hub, "wants", None)
+        return True if w is None else bool(w(name, float(t)))
+
     def _emit_birth(self, t: float, child: Agent, parent: Optional[Agent]) -> None:
         self._emit("birth", t, records.birth_record(t, child, parent))
 
@@ -605,6 +618,19 @@ class Population:
         self._emit("sample", t, records.sample_record(t, a, pop_n=len(self.agents)))
 
     def _emit_world(self, t: float) -> None:
+        # Fråga först. Posten kostar en full florasammanfattning med kvantiler
+        # plus två svep över cell- och floravektorerna, och byggdes varje tick
+        # oavsett om någon världslogg fanns kopplad — vid 256x256 en fjärdedel
+        # av takten, kastad i `_emit`. Världsloggen skriver dessutom i sin egen
+        # kadens, som standard var annan simulerad sekund, alltså vart
+        # hundrade tick.
+        #
+        # Gatningen i 0113 lade percentilerna bakom `_flora_want_quantiles`;
+        # den här raden slog på flaggan igen varje tick och tog tillbaka det
+        # mesta av den vinsten.
+        if not self._emit_wanted("world", t):
+            return
+
         # Kvantilerna behövs bara här, och bara när posten faktiskt skrivs.
         # Cachen byggs om i samma anrop nedan om den är ogiltig.
         self._flora_want_quantiles = True
