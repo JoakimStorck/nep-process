@@ -2084,6 +2084,8 @@ class Agent:
     # id på den artfrände djuret senast följde. Förstahandsval nästa gång den
     # syns, så att den sociala reflexen får ett stabilt mål över hela mötet.
     _follow_id: int = field(init=False, default=0)
+    # (antal, kurs-x, kurs-y) per riktningssektor i kroppsram.
+    _soc_sectors: object = field(init=False, default=None, repr=False, compare=False)
     # Temperatur per riktningssektor i kroppsram, satt av sensingpasset.
     _temp_sectors: object = field(init=False, default=None, repr=False, compare=False)
     _cached_B0: float = field(init=False, default=0.0)
@@ -2620,17 +2622,51 @@ class Agent:
                 turn = clamp(turn - 0.70 * rs * biasN, -1.0, 1.0)
                 explore_drive = explore_drive * (1.0 - 0.3 * rs)
             elif abs(soc_bias) > 1e-6:
-                # Kohesion: verkar på avstånd och tonar ut när man närmar sig.
+                # Kohesion mot **grannskapets tyngdpunkt**, inte mot den
+                # närmaste. En enskild granne ger bara riktningen mot den
+                # grannen, och djur som svänger mot närmaste artfrände roterar
+                # runt varandra i stället för att konvergera. 0099 gjorde
+                # målvalet stabilt utan att kohesionskvoten rörde sig från 1,0.
+                #
+                # Reynolds tre regler får dela på **samma** totala vikt som den
+                # enda kohesionstermen hade. Flockningen ska vara en drift
+                # bland flera — föda, värme, flykt och parning verkar
+                # oförändrat — inte ta över styrningen.
                 wcoh = clamp((Nd_f - REP_ZONE) / max(1e-6, 1.0 - REP_ZONE), 0.0, 1.0)
-                turn = clamp(turn + 0.70 * soc_bias * wcoh * biasN, -1.0, 1.0)
+                _soc = getattr(self, "_soc_sectors", None)
+                did_group = False
+                if _soc is not None and soc_bias > 0.0:
+                    _F, _HX, _HY = _soc
+                    _S = len(_F)
+                    if _S:
+                        _ang = (np.arange(_S) + 0.5) * (2.0 * math.pi / _S)
+                        _w = np.asarray(_F, dtype=np.float64)
+                        _cx = float(np.sum(_w * np.cos(_ang)))
+                        _cy = float(np.sum(_w * np.sin(_ang)))
+                        if abs(_cx) + abs(_cy) > 1e-9:
+                            _e = self._signed_angle(math.atan2(_cy, _cx))
+                            turn = clamp(turn + 0.40 * soc_bias * wcoh
+                                         * clamp(_e / math.pi, -1.0, 1.0), -1.0, 1.0)
+                            did_group = True
+                        # Alignment mot grannskapets medelkurs. Vektorerna är
+                        # redan i kroppsram, så nollriktningen är egen kurs.
+                        _hx = float(np.sum(_HX)); _hy = float(np.sum(_HY))
+                        if abs(_hx) + abs(_hy) > 1e-9:
+                            _ea = self._signed_angle(math.atan2(_hy, _hx))
+                            turn = clamp(turn + 0.20 * soc_bias
+                                         * clamp(_ea / math.pi, -1.0, 1.0), -1.0, 1.0)
+                if not did_group:
+                    # Ingen granne i aggregatet — falla tillbaka på den
+                    # detekterade individen.
+                    turn = clamp(turn + 0.40 * soc_bias * wcoh * biasN, -1.0, 1.0)
 
                 # Alignment: starkast på mellanavstånd, där grannen är nära nog
                 # att vara värd att följa men inte så nära att man måste väja.
-                if neighbour_heading is not None and soc_bias > 0.0:
+                if (not did_group) and neighbour_heading is not None and soc_bias > 0.0:
                     w = clamp((Nd_f - REP_ZONE) / max(1e-6, 1.0 - REP_ZONE), 0.0, 1.0)
-                    walign = 4.0 * w * (1.0 - w)          # topp vid halva vägen
+                    walign = 4.0 * w * (1.0 - w)
                     errA = self._signed_angle(float(neighbour_heading) - self.heading)
-                    turn = clamp(turn + 0.70 * soc_bias * walign
+                    turn = clamp(turn + 0.20 * soc_bias * walign
                                  * clamp(errA / math.pi, -1.0, 1.0), -1.0, 1.0)
 
                 # Utforskningen dämpas bara av att *söka sällskap*. Tidigare

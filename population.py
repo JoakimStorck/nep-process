@@ -2563,7 +2563,7 @@ class Population:
         n = len(alive)
         if n == 0:
             z = np.zeros((0, S), dtype=np.float32)
-            return z, z, z
+            return z, z, z, z, z, z
 
         AP0 = alive[0].AP
         r_max = max(1, int(round(float(AP0.ray_len_front))))
@@ -2599,6 +2599,40 @@ class Population:
         Tw_cells = np.asarray(self.world.temperature_of_cells(cells.ravel()),
                               dtype=np.float32).reshape(cells.shape)
 
+        # Artfränder som täta per-cell-fält: antal och hastighetssumma.
+        #
+        # Reynolds tre regler verkar på ett *grannskap*, inte på en granne, och
+        # skälet är riktningen. En enskild granne kan bara ge riktningen mot
+        # den grannen — djur som svänger mot närmaste artfrände roterar runt
+        # varandra. Ett aggregat ger riktningen mot gruppens tyngdpunkt, och
+        # det är en annan storhet: den konvergerar.
+        #
+        # 0099 stabiliserade målvalet — grannbyte 32,9 -> 8,6 procent — utan att
+        # kohesionskvoten rörde sig från 1,0. Stabiliteten var nödvändig men
+        # inte tillräcklig, och det som återstår är just tyngdpunkten.
+        #
+        # Fälten byggs med bincount över fauna_slots, samma mönster som
+        # flora_cell_mass. Nollställningen är O(n_cells) och försumbar vid
+        # 16 384; vid en miljon celler bör samma glesningstrick användas.
+        nc = int(self.grid.n_cells)
+        fslots = np.asarray(self._fauna_slots(), dtype=np.int64)
+        f_cnt = np.zeros(nc, dtype=np.float32)
+        f_vx = np.zeros(nc, dtype=np.float32)
+        f_vy = np.zeros(nc, dtype=np.float32)
+        if fslots.size:
+            fc = self.store.cell_idx[fslots].astype(np.int64, copy=False)
+            f_cnt += np.bincount(fc, minlength=nc).astype(np.float32, copy=False)
+            hd = np.zeros(fslots.size, dtype=np.float64)
+            by_slot = {}
+            for a in self.agents:
+                sl = int(getattr(a, "store_slot", -1))
+                if sl >= 0 and a.body.alive:
+                    by_slot[sl] = float(a.heading)
+            for j, sv in enumerate(fslots):
+                hd[j] = by_slot.get(int(sv), 0.0)
+            f_vx += np.bincount(fc, weights=np.cos(hd), minlength=nc).astype(np.float32, copy=False)
+            f_vy += np.bincount(fc, weights=np.sin(hd), minlength=nc).astype(np.float32, copy=False)
+
         # Egen cell är B0/C0 och hör inte till någon sektor.
         m = sec >= 0
         base = np.arange(n, dtype=np.int64)[:, None] * S
@@ -2616,6 +2650,9 @@ class Population:
         Bw = agg(Bu)
         Cw = agg(Cu)
         Tw = agg(Tw_cells)
+        Fw = agg(f_cnt[cells])
+        Hx = agg(f_vx[cells])
+        Hy = agg(f_vy[cells])
 
         # Rotation till kroppsram: fraktionell cirkulär förskjutning.
         head = np.fromiter((a.heading for a in alive), dtype=np.float64, count=n)
@@ -2630,7 +2667,15 @@ class Population:
         B_out = ((1.0 - frac) * Bw[rows, a0] + frac * Bw[rows, a1]).astype(np.float32, copy=False)
         C_out = ((1.0 - frac) * Cw[rows, a0] + frac * Cw[rows, a1]).astype(np.float32, copy=False)
         T_out = ((1.0 - frac) * Tw[rows, a0] + frac * Tw[rows, a1]).astype(np.float32, copy=False)
-        return B_out, C_out, T_out
+        F_out = ((1.0 - frac) * Fw[rows, a0] + frac * Fw[rows, a1]).astype(np.float32, copy=False)
+        # Kurserna roteras inte som sektorer utan som vektorer: kroppsram
+        # betyder att egen kurs dras av.
+        HX = ((1.0 - frac) * Hx[rows, a0] + frac * Hx[rows, a1]).astype(np.float64, copy=False)
+        HY = ((1.0 - frac) * Hy[rows, a0] + frac * Hy[rows, a1]).astype(np.float64, copy=False)
+        ch = np.cos(-head)[:, None]; sh = np.sin(-head)[:, None]
+        HXb = (HX * ch - HY * sh).astype(np.float32, copy=False)
+        HYb = (HX * sh + HY * ch).astype(np.float32, copy=False)
+        return B_out, C_out, T_out, F_out, HXb, HYb
 
     def _sector_tables(self, r_max: int, S: int):
         """Offset, avstånd, sektorindex och vikt per cell i grannskapet. Cachad."""
@@ -2893,11 +2938,13 @@ class Population:
         sensing = [i for i, a in enumerate(alive) if int(a._sense_cd) <= 0]
         secB = secC = None
         if sensing:
-            secB, secC, secT = self._build_sector_percept([alive[i] for i in sensing])
+            secB, secC, secT, secF, secHX, secHY = self._build_sector_percept(
+                [alive[i] for i in sensing])
         sec_row = {}
         for k, i in enumerate(sensing):
             sec_row[i] = (secB[k], secC[k])
             alive[i]._temp_sectors = secT[k]
+            alive[i]._soc_sectors = (secF[k], secHX[k], secHY[k])
         # Tomt uppslag betyder "ingen artfrände inom räckhåll", inte "ej
         # beräknat". Utan den skillnaden faller just de djur som inget ser
         # tillbaka på strålmarschen — och det är precis de dyraste fallen.

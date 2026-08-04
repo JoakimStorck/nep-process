@@ -1339,6 +1339,28 @@ medelavstånd      4,67   ->   4,06     (Poisson-förväntan 4,67)
 
 Nästa hypotes ska alltså sökas någon annanstans än i målvalet. Kvar står aggregat över grannskapet — tyngdpunkt för kohesion, medelkurs för alignment, närmaste avstånd för separation — som är vad Reynolds faktiskt gör. Medelvärden hoppar inte, men de bär också en riktning som en enskild granne inte kan ge: mot mitten av gruppen snarare än mot en individ.
 
+### Reynolds tre regler på grannskapet
+
+*0100. Kohesionen svarar för första gången. Alignment gör det inte.*
+
+En enskild granne kan bara ge riktningen mot **den grannen**. Djur som svänger mot närmaste artfrände roterar runt varandra i stället för att konvergera. Ett aggregat ger riktningen mot gruppens **tyngdpunkt**, och det är en annan storhet.
+
+0099 gjorde målvalet stabilt — grannbyte 32,9 → 8,6 procent — utan att kohesionskvoten rörde sig från 1,0. Stabiliteten var nödvändig men inte tillräcklig.
+
+Artfränder byggs nu som täta per-cell-fält med `bincount` över `fauna_slots`, samma mönster som `flora_cell_mass`: antal och hastighetssumma. De går genom samma gather som flora, detritus och temperatur, och roteras till kroppsram — sektorindex med fraktionell förskjutning, vektorkomponenter med egen kurs avdragen.
+
+**Vikterna delas, inte adderas.** De tre reglerna får dela på samma totala vikt som den enda kohesionstermen hade: 0,40 för tyngdpunkt, 0,20 för medelkurs, separationen oförändrad. Flockningen ska vara en drift bland flera — föda, värme, flykt och parning verkar oförändrat — inte ta över styrningen.
+
+```
+              inom synhåll   Poisson   kvot   nn/Poisson   kursordning
+soc 0,1          84,7 %       82,1 %   1,03   4,34/4,73      0,067
+soc 0,9          88,9 %       83,1 %   1,07   4,06/4,66      0,065
+```
+
+**Kohesionen svarar på `sociability` för första gången.** 1,07 mot 1,03, och medelavståndet 4,06 mot Poisson-förväntan 4,66. Effekten är liten men den är den första som alls beror på egenskapen.
+
+**Alignment ger ingenting.** Kursordningen ligger på 0,066 i båda fallen, och slumpvärdet för 185 individer är 0,074 — kurserna är helt okorrelerade. Termen är 0,20 · soc_bias · (fel/π), alltså i storleksordningen 0,08 mot en total styrsignal som domineras av föda, värme och flykt. Att höja den skulle bryta mot att flockningen inte får ta över, så nästa steg är inte mer vikt utan att förstå varför riktningen inte hålls mellan tick.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*
