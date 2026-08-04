@@ -10,7 +10,7 @@ hela floravektorn.
 
 Kärnan här gör samma sak i ett svep per beroendesteg. Den tar bara arrayer och
 skalärer — ingen store, ingen värld, inget grid — vilket är villkoret för att
-den ska kunna kompileras och senare parallelliseras. Anropande skal och
+den ska kunna kompileras. Anropande skal och
 efterspel ligger kvar i `Population._growth_system_flora`, som också behåller
 numpy-vägen bakom en flagga så att de två går att jämföra elementvis på samma
 tillstånd.
@@ -41,12 +41,11 @@ import numpy as np
 # på numpy-vägen; kärnan här körs aldrig otolkad, eftersom en Python-loop över
 # 300 000 plantor vore hundra gånger långsammare än den numpy-väg den ersätter.
 try:
-    from numba import njit as _njit, prange
+    from numba import njit as _njit
 
     HAVE_NUMBA = True
 except Exception:  # pragma: no cover - beror på miljön
     HAVE_NUMBA = False
-    prange = range
 
     def _njit(*a, **k):  # type: ignore[misc]
         def deco(f):
@@ -54,20 +53,11 @@ except Exception:  # pragma: no cover - beror på miljön
 
         return deco
 
-# Sätts längst ned, när det står klart om den parallella varianten gick att
-# bygga. Att låta den finnas som en flagga i stället för att låta anropare
-# gissa gör att mätverktyget kan räkna upp vägarna utan att veta vilka som
-# byggts.
-HAVE_PARALLEL = False
-
-
 def available_backends() -> tuple[str, ...]:
     """Vägar som går att välja i den här miljön, i stigande förväntad fart."""
     out = ["numpy"]
     if HAVE_NUMBA:
         out.append("numba")
-    if HAVE_PARALLEL:
-        out.append("parallel")
     return tuple(out)
 
 
@@ -144,18 +134,13 @@ def _growth_kernel_impl(
     Semantiken är oförändrad mot `Population._growth_system_flora_numpy`; se
     dess docstring för biologin.
 
-    **Formen är delad efter vad som går att parallellisera.** Varje `prange`
-    skriver bara per-planta-fält och bär ingen reduktionsvariabel. Allt som
-    ackumulerar — summor, räknare och de utströdda additionerna till cellfält —
-    ligger i korta seriella svep emellan. Det kostar några extra genomlöpningar
-    men ger två saker som är värda mer: reduktionerna behåller sin ordning, så
-    `np.bincount`-avrundningen följer med och den elementvisa jämförelsen mot
-    numpy-vägen står kvar, och de två kompilerade varianterna av den här
-    källan ger bitidentiskt resultat oavsett trådantal.
-
-    Samma funktion kompileras två gånger, med och utan `parallel=True`. `prange`
-    beter sig som `range` i den seriella varianten, så det finns en källa och
-    ingen risk att de två glider isär.
+    **Formen är delad efter vad som ackumulerar och vad som inte gör det.** De
+    stora loopar som räknar per planta skriver bara egna index; summor, räknare
+    och de utströdda additionerna till cellfälten ligger i korta svep emellan.
+    Uppdelningen kom till för en parallellisering som visade sig inte löna sig
+    (se `TODO.md`, 0119), men den är behållen på egna meriter: reduktionerna
+    har en fast ordning, så `np.bincount`-avrundningen följer med och den
+    elementvisa jämförelsen mot numpy-vägen står kvar.
 
     Returnerar `(shed_total, n_age, n_starve, produced, taken, died,
     light_limited, row_plant, row_cell, row_share)`.
@@ -177,7 +162,7 @@ def _growth_kernel_impl(
     holds = np.zeros(n, np.bool_)
 
     # --- 1. förnafall, åldrande och svält, per planta ---------------------
-    for i in prange(n):
+    for i in range(n):
         # Strukturandelen används i två former, precis som i numpy-vägen:
         # klippt i näringsinnehåll, omsättning och livslängd, oklippt i
         # areorna och i energitätheten.
@@ -310,7 +295,7 @@ def _growth_kernel_impl(
                 row_claim[r] = per
                 r += 1
 
-    for c in prange(n_cells):
+    for c in range(n_cells):
         claimed[c] = 0.0
     for t in range(n_rows):
         claimed[row_cell[t]] += row_claim[t]
@@ -329,7 +314,7 @@ def _growth_kernel_impl(
         access[row_plant[t]] += av
 
     # --- 3. inkomst -------------------------------------------------------
-    for i in prange(n):
+    for i in range(n):
         if holds[i] and gate[i] > 1e-6:
             adult = np.float64(adult32[i])
             if adult < 1e-12:
@@ -354,7 +339,7 @@ def _growth_kernel_impl(
             any_take = True
             break
     if any_take:
-        for c in prange(n_cells):
+        for c in range(n_cells):
             cellacc[c] = 0.0
         for t in range(n_rows):
             i = row_plant[t]
@@ -366,11 +351,11 @@ def _growth_kernel_impl(
             else:
                 fr = 0.0
             cellacc[row_cell[t]] += fr * row_avail[t]
-        for c in prange(n_cells):
+        for c in range(n_cells):
             nutrient[c] -= cellacc[c]
 
     # --- 4. bladarean per cell -------------------------------------------
-    for c in prange(n_cells):
+    for c in range(n_cells):
         lam[c] = 0.0
         hsum[c] = 0.0
     for i in range(n):
@@ -378,14 +363,14 @@ def _growth_kernel_impl(
             c = cells[i]
             lam[c] += leaf[i]
             hsum[c] += leaf[i] * height[i]
-    for c in prange(n_cells):
+    for c in range(n_cells):
         if lam[c] > 0.0:
             hsum[c] = hsum[c] / lam[c]
         else:
             hsum[c] = 0.0
 
     # --- 5. allokering och skugga ----------------------------------------
-    for i in prange(n):
+    for i in range(n):
         al = np.float64(ralloc32[i]) * np.float64(rcap32[i])
         if al < 0.0:
             al = 0.0
@@ -407,14 +392,14 @@ def _growth_kernel_impl(
             eff[i] = 0.0
 
     # `cellacc` återanvänds som bladarea vägd med skuggan.
-    for c in prange(n_cells):
+    for c in range(n_cells):
         cellacc[c] = 0.0
     for i in range(n):
         if holds[i]:
             cellacc[cells[i]] += eff[i]
 
     # --- 6. ljus och tillväxt --------------------------------------------
-    for i in prange(n):
+    for i in range(n):
         dm_out[i] = 0.0
         grow_out[i] = 0
         if not holds[i]:
@@ -490,12 +475,4 @@ def _growth_kernel_impl(
             row_plant, row_cell, row_share)
 
 
-# Samma källa, två kompilat. `prange` beter sig som `range` när `parallel` är
-# av, så den seriella varianten är oförändrad mot 0114 i allt utom formen — och
-# de två kan inte glida isär, eftersom det bara finns en implementation.
 growth_kernel = _njit(cache=True, nogil=True)(_growth_kernel_impl)
-growth_kernel_par = (
-    _njit(cache=True, nogil=True, parallel=True)(_growth_kernel_impl)
-    if HAVE_NUMBA else growth_kernel
-)
-HAVE_PARALLEL = HAVE_NUMBA

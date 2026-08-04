@@ -349,7 +349,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--pass-timing-warmup", type=int, default=50,
                     help="tick som räknas som uppvärmning och utesluts")
     ap.add_argument("--flora-growth", type=str, default=None,
-                    choices=("numpy", "numba", "parallel"),
+                    choices=("numpy", "numba"),
                     help="väg för florans tillväxtpass; standard är numba "
                          "när biblioteket finns")
     ap.add_argument("--bench-flora-growth", type=int, default=0,

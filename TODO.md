@@ -1886,6 +1886,31 @@ Passet är efter allt detta 27 procent av takten i stället för 55, och 80 000 
 
 **Mätfelet:** vägarna kördes i samma ordning varje varv medan floran drev monotont, tre procent under en mätning. Det gynnade den som kördes sist med ungefär en procent — samma storleksordning som skillnaden mellan njit och prange. Ordningen vänds nu varannat varv, och en drift över fem procent skrivs ut som varning.
 
+### Parallelliseringen tillbakadragen
+
+*0119. `prange` bort, kärnans form kvar.*
+
+Två fel låg ovanpå varandra och tog tre mätomgångar att skala av.
+
+**Kärnan kompilerades aldrig parallellt.** Numbas diskcache slår upp på funktionens `__qualname__` och signatur, inte på kompileringsflaggorna. `growth_kernel` och `growth_kernel_par` byggdes av samma funktionsobjekt med `cache=True`, hamnade i samma cachepost, och den som kompilerades sist läste in den förstas objektkod. Tyst, utan varning, med `parallel_diagnostics()` tom. Det förklarade varför `NUMBA_NUM_THREADS=1` och tolv trådar gav identiska tal.
+
+**Med kompileringen rättad blev den tio gånger långsammare.** Vid 102 205 plantor:
+
+```
+trådar     passet    kvot mot njit
+     1     10,2 ms          —
+     2      8,8 ms       1,16x
+    12    104,5 ms       0,10x
+```
+
+Orsaken är kärnans form. Den varvar tolv parallella regioner med åtta seriella O(n)-svep, eftersom reduktionerna hölls seriella för att bevara `bincount`-ordningen. Numbas trådlager parkerar inte trådarna mellan regionerna utan låter dem snurra, så elva trådar bränner CPU under varje seriellt svep medan den tolfte gör arbetet. Ju fler kärnor, desto värre.
+
+**Bästa uppmätta utfall var 1,16x på passet vid två trådar**, alltså fyra procent av ticken — mot att bära en andra kodväg, en cachefiness som redan lurat oss en gång, och en patologi som gör körningen tre gånger långsammare om trådantalet råkar vara maskinens. Vägen är därför borta. `available_backends()` ger två vägar igen.
+
+**Kärnans form är behållen.** Uppdelningen i räknande loopar och separata reduktionssvep kom till för parallelliseringen men står på egna meriter: reduktionerna har en fast ordning, så `bincount`-avrundningen följer med och den elementvisa jämförelsen mot numpy-vägen står kvar. Verifierad oförändrad efter reverten.
+
+**Lärdomen inför nästa parallellisering:** en kärna som varvar parallellt och seriellt arbete är fel form för `prange`. Ska hydro, transporten eller sensingen parallelliseras ska passet vara parallellt hela vägen igenom — reduktioner via per-trådsackumulatorer, inte via seriella mellanled. Det är ett krav på passets utformning, inte ett val vid kompileringen. Och `cache=True` på två dispatchers ur samma funktionsobjekt är alltid fel.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*

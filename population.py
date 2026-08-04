@@ -2315,12 +2315,9 @@ class Population:
         dm_out = np.empty(n, dtype=np.float64)
         grow_out = np.zeros(n, dtype=np.uint8)
         claimed, lam, hsum, cellacc = self._flora_cell_buffers(n_cells)
-        kernel = (flora_growth.growth_kernel_par
-                  if self._flora_growth_mode == "parallel"
-                  else flora_growth.growth_kernel)
 
         (shed_total, n_age, n_starve, produced, taken, died, light_lim,
-         row_plant, row_cell, row_share) = kernel(
+         row_plant, row_cell, row_share) = flora_growth.growth_kernel(
             store.mass[fl], struct32, store.flora_adult_mass[fl],
             store.flora_root_mass[fl], store.flora_seed_mass[fl], store.energy[fl],
             store.flora_temp_opt[fl], store.flora_temp_width[fl],
