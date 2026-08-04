@@ -32,11 +32,11 @@ _NUTRIENT_INPUT_BASE = 4.6e-5
 _NUTRIENT_INIT_BASE = 0.117
 _DETRITUS_INIT_BASE = 21.16
 
-# Tick till floran nått jämvikt från sådd. Uppmätt: antalet plantor planar ut
-# kring 12 000 och biomassan kring 14 000–15 000 vid f1, något tidigare vid
-# högre bördighet eftersom sådden då ligger närmare jämvikten. 20 000 ger
-# marginal.
-_EQUILIBRIUM_TICKS = 20000
+# Sentinel: låt simuleringen själv upptäcka när floran nått jämvikt, i stället
+# för att gissa ett tickvärde. Jämvikten infaller olika sent vid olika
+# bördighet, och ett tal mätt vid faktor 1 och 4 är en gissning utanför det
+# intervallet. Se `Population._fauna_release_now`.
+_EQUILIBRIUM_TICKS = -1
 
 
 @dataclass

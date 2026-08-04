@@ -130,6 +130,10 @@ class PopParams:
     # utspridning över hela världen. Se `_fauna_spawn_pos`.
     fauna_spawn_radius: float = 0.0
     fauna_spawn_patches: int = 1
+    # Jämviktsdetektion för fördröjd insättning. Se `_fauna_release_now`.
+    flora_eq_window: int = 1000
+    flora_eq_tol: float = 0.01
+    flora_eq_max_ticks: int = 40000
     # Flockmedlemskap som relation: affiniteten stiger med `flock_gain` vid
     # varje observation och avtar med `flock_decay` mellan dem. Vid 0,25 och
     # 0,90 krävs ungefär fyra observationer för full medlem, och en granne som
@@ -365,8 +369,9 @@ class Population:
         self.agents = []
         self._tick = 0
         self._fauna_spawn_centre = None
+        self._flora_eq_prev = None
         # Faunan kan hållas tillbaka tills floran nått jämvikt.
-        self._fauna_pending = int(self.PP.init_pop) if int(self.PP.fauna_at) > 0 else 0
+        self._fauna_pending = int(self.PP.init_pop) if int(self.PP.fauna_at) != 0 else 0
         if self._fauna_pending == 0:
             self.seed_fauna(int(self.PP.init_pop))
 
@@ -1244,6 +1249,56 @@ class Population:
         self.store.flood_tolerance[slot] = np.float32(0.0)
         self.store.buoyancy[slot] = np.float32(0.0)
         
+    def _fauna_release_now(self) -> bool:
+        """
+        Är världen redo att ta emot faunan?
+
+        `fauna_at >= 0` är ett tickvärde. `fauna_at < 0` betyder **jämvikt**:
+        sätt in djuren när floramassan slutat förändras.
+
+        Skälet att detektera i stället för att gissa: faunan mätt mot en
+        halvfärdig flora mäter fel sak. Sådden ger omkring hälften av
+        jämviktens stående gröda, produktionen skalar med den, och ett bestånd
+        som ligger under bärkraften i den färdiga världen ligger över den i den
+        halvfärdiga. Det gjorde både p87 och p97 ogiltiga.
+
+        Ett fast tal räcker inte heller, eftersom jämvikten infaller olika sent
+        vid olika bördighet: sådden ligger närmare målet ju rikare marken är,
+        men gallringen tar också längre tid när plantorna är fler. Det tal som
+        låg i `scenario.py` var mätt vid faktor 1 och 4 och var en gissning
+        utanför det intervallet.
+
+        Kriteriet är relativ förändring per fönster. Vid `flora_eq_tol = 0,01`
+        och `flora_eq_window = 1000` krävs att floramassan rör sig mindre än en
+        procent per tusen tick — uppmätt låg den på 2,5 procent per 5 000 tick
+        vid tick 30 000, alltså långt under, medan den under uppbyggnaden
+        ändras tiotals procent per fönster.
+        """
+        want = int(self.PP.fauna_at)
+        if want >= 0:
+            return self._tick >= want
+
+        win = max(1, int(self.PP.flora_eq_window))
+        if self._tick < win or (self._tick % win) != 0:
+            return False
+
+        m = float(np.sum(self.store.mass[: self.store.n][
+            (self.store.alive[: self.store.n]) & (self.store.kind[: self.store.n] == 1)
+        ], dtype=np.float64))
+        prev = self._flora_eq_prev
+        self._flora_eq_prev = m
+        if prev is None or m <= 0.0:
+            return False
+
+        rel = abs(m - prev) / max(m, 1e-9)
+        hard = int(self.PP.flora_eq_max_ticks)
+        if rel <= float(self.PP.flora_eq_tol) or (hard > 0 and self._tick >= hard):
+            print(f"[flora] jämvikt vid tick {self._tick}: "
+                  f"{m:.0f} kg, relativ ändring {100*rel:.2f} % per {win} tick",
+                  flush=True)
+            return True
+        return False
+
     def _fauna_spawn_pos(self) -> tuple[float, float]:
         """
         Var ett insatt djur hamnar.
@@ -3529,7 +3584,7 @@ class Population:
 
         # Fördröjd insättning. Sker före världspasset, så att djuren möter en
         # värld i samma tillstånd som om de stått där hela tiden.
-        if self._fauna_pending > 0 and self._tick >= int(self.PP.fauna_at):
+        if self._fauna_pending > 0 and self._fauna_release_now():
             n = self._fauna_pending
             self._fauna_pending = 0
             made = self.seed_fauna(n)

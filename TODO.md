@@ -1526,6 +1526,24 @@ Uttryckliga flaggor vinner över filen, så ett scenario kan användas som utgå
 ./kor.sh scenarios/f4-flock.yaml runs/p106 60000
 ```
 
+### Jämvikten upptäcks, inte gissas
+
+*0107. Sista gissningen ur scenariot.*
+
+`fauna.insatts_vid: jamvikt` översattes till en konstant på 20 000 tick. Det var mätt vid bördighet 1 och 4 och därmed en gissning utanför det intervallet — jämvikten infaller olika sent vid olika bördighet, eftersom sådden ligger närmare målet ju rikare marken är men gallringen tar längre tid när plantorna är fler.
+
+Simuleringen upptäcker den nu själv. `fauna_at < 0` betyder jämvikt: floramassan mäts var `flora_eq_window` tick, och faunan sätts in när den relativa förändringen faller under `flora_eq_tol`.
+
+```
+flora_eq_window = 1000     flora_eq_tol = 0,01     flora_eq_max_ticks = 40000
+```
+
+En procent per tusen tick. Uppmätt låg floramassan på 2,5 procent per 5 000 tick vid tick 30 000, alltså långt under tröskeln, medan den under uppbyggnaden ändras tiotals procent per fönster. Takgränsen finns för att en värld som aldrig stabiliseras inte ska hänga för evigt.
+
+Skälet att detektera i stället för att gissa är mätt: faunan mot en halvfärdig flora mäter fel sak. Sådden ger omkring hälften av jämviktens stående gröda, produktionen skalar med den, och ett bestånd som ligger under bärkraften i den färdiga världen ligger över den i den halvfärdiga. Det gjorde både p87 och p97 ogiltiga.
+
+**Overifierad i drift.** Sandlådan hinner inte fram till jämvikt inom sin tidsgräns; mekaniken är prövad men inte själva utlösningen. Raden `[flora] jämvikt vid tick N` i utskriften visar när den slår till, och det talet bör jämföras med de 12 000–15 000 där floraantalet planade ut i p94.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*
