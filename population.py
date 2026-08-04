@@ -902,9 +902,14 @@ class Population:
         # temperatur — så ingen ny perception behövs.
         k = float(getattr(ag.pheno, "breed_sync", 0.0))
         if k > 1e-6:
+            # Fasen mäts mot årets **temperaturtopp**, inte mot en absolut
+            # punkt i cykeln. Signalen är gemensam för alla på samma latitud,
+            # så synkroniseringen uppstår ur världen i stället för ur delad
+            # genetik. `breed_phase` är individens förskjutning mot toppen.
             yl = max(1e-9, float(getattr(self.WP, "year_len", 12.0)))
-            frac = (float(self.t) / yl) % 1.0
-            d = 2.0 * math.pi * (frac - float(ag.pheno.breed_phase))
+            ph0 = float(getattr(self.WP, "season_phase0", 0.0))
+            frac = ((float(self.t) / yl) - ph0) % 1.0
+            d = 2.0 * math.pi * (frac - 0.25 - float(ag.pheno.breed_phase))
             if math.exp(k * (math.cos(d) - 1.0)) < 0.5:
                 return False
 

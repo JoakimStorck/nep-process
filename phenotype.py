@@ -199,7 +199,31 @@ _T_BREED_SYNC      = 39
 @dataclass(frozen=True)
 class PhenoRanges:
     # maturity
-    # Säsongsparning
+    # Säsongsparning. `breed_phase` är en **förskjutning** mot årets
+    # temperaturtopp, inte en absolut fas i cykeln.
+    #
+    # Som absolut fas var locus fritt och pekade var som helst i året. Två djur
+    # fick därmed oberoende fönster, och grinden blev ett filter i stället för
+    # en synkronisering: om var och en är i säsong en fjärdedel av året och
+    # faserna är oberoende är sannolikheten att två är det samtidigt en
+    # sextondel — sämre än den asynkrona utgångspunkten den skulle förbättra.
+    # Uppmätt i p108: 75 födslar mot p96:s 211-862, med allt annat lika eller
+    # bättre.
+    #
+    # I naturen är häckningstiden inte en godtycklig fas utan låst till att
+    # ungarna ska födas när fodret är rikligt, och djuret läser en signal —
+    # dagslängd eller temperatur — som är gemensam för alla i samma trakt.
+    # Synkroniseringen uppstår då gratis: alla läser samma värld, och ingen
+    # delad genetik behövs. Två djur på samma latitud får samma säsong även om
+    # de aldrig träffats; två på olika latitud får olika, vilket är biologiskt
+    # riktigt och ger rumslig struktur på köpet.
+    #
+    # Kvar att evolvera är förskjutningen: rätt läge beror på dräktighetstid
+    # och på när floran faktiskt producerar, vilket djuret inte vet i förväg.
+    # Intervallet spänner en fjärdedels år åt vardera hållet kring toppen.
+    breed_offset_min: float = -0.25
+    breed_offset_max: float = 0.25
+
     breed_sync_min: float = 0.0
     breed_sync_max: float = 6.0    # von Mises-liknande skärpa; 0 = ingen säsong
 
@@ -359,7 +383,8 @@ def derive_pheno(traits: np.ndarray | None, R: PhenoRanges = PhenoRanges()) -> P
         sociability=float(u_soc),
         mobility=float(u_mob),
         cold_aversion=float(_lerp(R.cold_aversion_min, R.cold_aversion_max, u_cold)),
-        breed_phase=float(_sigmoid(_get_trait(traits, _T_BREED_PHASE))),
+        breed_phase=float(_lerp(R.breed_offset_min, R.breed_offset_max,
+                                _sigmoid(_get_trait(traits, _T_BREED_PHASE)))),
         breed_sync=float(_lerp(R.breed_sync_min, R.breed_sync_max,
                                _sigmoid(_get_trait(traits, _T_BREED_SYNC)))),
         sense_strength=float(u_sense),

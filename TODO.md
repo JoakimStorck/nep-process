@@ -1583,6 +1583,45 @@ Följden är att det inte finns någon r-strategi att evolvera mot. Utan luckor 
 
 Mekaniken finns till hälften: `root_alloc` sätter målandelen och massan faller vid betning, så ett målvärde som följer aktuell massa skulle få överskottsroten att fällas av sig själv.
 
+### Häckningsfasen mot årstiden
+
+*0109. Rättar ett tankefel i 0098.*
+
+`breed_phase` var en **absolut fas** i årscykeln, kodad av ett fritt locus som pekade var som helst. Två djur fick därmed oberoende fönster, och grinden blev ett filter i stället för en synkronisering: om var och en är i säsong en fjärdedel av året och faserna är oberoende är sannolikheten att två är det samtidigt en sextondel — **sämre** än den asynkrona utgångspunkten den skulle förbättra.
+
+Regressionen är mätt. p108 mot p96, med allt annat lika eller bättre — varmare värld, sammanhängande bälte, tre fläckar, flockning:
+
+```
+                p96 (halv)     p108
+födslar          211–862         75
+unika            291–942        155
+parningar        192–364         76
+topp             159–193        116
+överlevnad     60 000 tick   8 000 tick
+```
+
+I naturen är häckningstiden inte en godtycklig fas utan låst till att ungarna ska födas när fodret är rikligt, och djuret läser en signal — dagslängd eller temperatur — som är **gemensam för alla i samma trakt**. Synkroniseringen uppstår då gratis: alla läser samma värld, och ingen delad genetik behövs. Två djur på samma latitud får samma säsong även om de aldrig träffats; två på olika latitud får olika, vilket är biologiskt riktigt och ger rumslig struktur på köpet.
+
+`breed_phase` är nu en **förskjutning** mot årets temperaturtopp, i intervallet ±0,25 år. Kvar att evolvera är förskjutningens storlek: rätt läge beror på dräktighetstid och på när floran faktiskt producerar, vilket djuret inte vet i förväg.
+
+```
+                          i säsong    båda samtidigt
+absolut fas                 22 %          6,0 %
+förskjutning mot toppen     22 %         10,9 %
+```
+
+Nästan fördubblad överlappning vid oförändrad andel av året per individ, mätt över 200 slumpade loci vid `breed_sync = 3,0`.
+
+### På horisonten: band som riktade relationer
+
+`_flock` bär i dag enbart positiv affinitet, byggd av närvaro. Ett band med **tecken**, byggt av utfall i stället, skulle göra samma mekanism till både flockbildning och predatorundvikande — och den skiljer då inte på art utan på erfarenhet.
+
+Två skäl utöver realismen. Det är observerbart per definition och **kan slå fel**, vilket är vad startpromptens tredje mål efterlyser: riskvärderingen läser i dag `pheno.predation`, alltså motpartens arvsmassa.
+
+Och aversionen bör kunna uppstå av att se **andra** angripas, inte bara av egen erfarenhet. Ett band byggt på egen erfarenhet lärs bara av dem som överlever mötet; den som dödades hann aldrig uppdatera något. Att observera flyttar informationen dit den behövs — den som ser attacken lever fortfarande. Bandet ska riktas mot angriparen, vilket kräver att observatören identifierar båda.
+
+Det ger också ett selektionstryck mot att jaga i en flocks åsyn: ju fler som ser, desto fler undviker. Jaktbeteende som uppstår ur bandmekaniken i stället för att kodas.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*
