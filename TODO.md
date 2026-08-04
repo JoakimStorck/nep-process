@@ -1499,6 +1499,33 @@ Medianen steg sju grader eftersom absolutbeloppet gav dubbelt så mycket kall yt
 
 **All temperaturkalibrering gjord före den här patchen är oanvändbar**, och det gäller även bärkraftsmätningarna: en varmare värld med sammanhängande beboelig zon bär fler djur vid samma bördighet.
 
+### Scenariot som fil
+
+*0106. Utgångsläget blir data i stället för kommandorad.*
+
+Kommandoraden hade vuxit till fjorton flaggor varav sex bara beskrev scenariot, och tre av dem — `nutrient_input`, `nutrient_init`, `detritus_init` — skalar alltid tillsammans men räknades fram för hand vid varje körning. De hann gå isär två gånger.
+
+**Bördigheten blir ett tal.** Jämvikten är linjär i näringsflödet, så faktor 4 betyder fyra gånger alla tre. Det går inte längre att sätta dem inkonsekvent.
+
+**Insättningen uttrycks som en princip.** `fauna.insatts_vid: jamvikt` i stället för ett tickvärde valt på känsla — det felet gjorde både p87 och p97 ogiltiga, eftersom faunan mötte en halvfärdig flora och därmed låg över bärkraften just då fastän den legat under i den färdiga världen.
+
+**Flera grundargrupper.** `flackar: 3` ger tre skilda fläckar i stället för en. En enda fläck ger en enda linje: i p91 tog två grundarlinjer av tjugo 73 procent av avkommorna, och den effektiva populationsstorleken mättes till fem.
+
+```yaml
+namn: f4-flock
+varld:   {bredd: 64, hojd: 256, bordighet: 4.0}
+fauna:   {antal: 80, insatts_vid: jamvikt, flackar: 3, flackradie: 20.0, max_antal: 8192}
+fysiologi: {fartskala: 0.5, sociability: 0.8, sociability_sd: 0.5}
+```
+
+Uttryckliga flaggor vinner över filen, så ett scenario kan användas som utgångsläge och enskilda tal varieras ovanpå.
+
+`kor.sh` tar scenario, utdatakatalog och ticks. Katalogen får scenariot, commit-hashen, en `dirty.txt` med eventuella oincheckade ändringar och hela konsolutskriften — så att en körning går att förstå långt efteråt utan terminalhistorik. Att blanda ihop vilken patch en körning gjordes mot har hänt flera gånger under arbetet.
+
+```
+./kor.sh scenarios/f4-flock.yaml runs/p106 60000
+```
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*

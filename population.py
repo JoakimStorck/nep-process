@@ -129,6 +129,7 @@ class PopParams:
     # Radie i kontinuerliga enheter för insättningsfläcken. 0 = jämn
     # utspridning över hela världen. Se `_fauna_spawn_pos`.
     fauna_spawn_radius: float = 0.0
+    fauna_spawn_patches: int = 1
     # Flockmedlemskap som relation: affiniteten stiger med `flock_gain` vid
     # varje observation och avtar med `flock_decay` mellan dem. Vid 0,25 och
     # 0,90 krävs ungefär fyra observationer för full medlem, och en granne som
@@ -1270,9 +1271,16 @@ class Population:
         if r <= 0.0:
             return self.grid.random_position(self.rng)
 
+        # Flera grundargrupper. En enda fläck ger en enda linje: mätt i p91
+        # tog två grundarlinjer av tjugo 73 procent av avkommorna, och den
+        # effektiva populationsstorleken låg på fem. Skilda fläckar ger
+        # genetisk struktur från start.
+        nfl = max(1, int(getattr(self.PP, "fauna_spawn_patches", 1)))
         if self._fauna_spawn_centre is None:
-            self._fauna_spawn_centre = self.grid.random_position(self.rng)
-        cx, cy = self._fauna_spawn_centre
+            self._fauna_spawn_centre = [self.grid.random_position(self.rng)
+                                        for _ in range(nfl)]
+        cent = self._fauna_spawn_centre
+        cx, cy = cent[int(self.rng.integers(0, len(cent)))]
 
         # Likformigt i skivan, inte i polära koordinater — sqrt-transformen
         # hindrar klumpning mot centrum.

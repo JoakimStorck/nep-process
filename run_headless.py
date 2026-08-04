@@ -354,6 +354,10 @@ def parse_args() -> argparse.Namespace:
                     help="bredare diagnostikrad och sammanfattning vid slut")
     ap.add_argument("--seeds", type=str, default=None,
                     help="kommaseparerad lista, t.ex. 1,2,3 — kör flera och jämför")
+    ap.add_argument("--scenario", type=str, default=None,
+                    help="YAML-fil med körningens utgångsläge; se scenario.py")
+    ap.add_argument("--scenario-out", type=str, default=None,
+                    help="skriv scenariot hit för spårbarhet")
     ap.add_argument("--drag-lin", type=float, default=None,
                     help="AgentParams.drag_lin — linjärt motstånd; sätter farten")
     ap.add_argument("--drag-quad", type=float, default=None,
@@ -436,6 +440,9 @@ def build_population(a: argparse.Namespace, seed: int, hub=None) -> Population:
         PP.fauna_at = int(a.fauna_at)
     if getattr(a, "fauna_spawn_radius", None) is not None:
         PP.fauna_spawn_radius = float(a.fauna_spawn_radius)
+    _sc = getattr(a, "_scenario", None)
+    if _sc is not None:
+        PP.fauna_spawn_patches = int(_sc.fauna.flackar)
     return Population(WP=WP, AP=AP, PP=PP, seed=int(seed), hub=hub)
 
 
@@ -591,6 +598,51 @@ def run(a: argparse.Namespace, seed: int | None = None) -> int:
     finally:
         for w in writers:
             w.__exit__(None, None, None)
+
+
+def apply_scenario(a: argparse.Namespace) -> None:
+    """
+    Låt scenariot sätta de flaggor det äger, om de inte givits explicit.
+    Uttryckliga flaggor vinner, så en fil kan användas som utgångsläge och
+    enskilda tal varieras ovanpå den.
+    """
+    if not getattr(a, "scenario", None):
+        return
+    from scenario import Scenario
+
+    sc = Scenario.load(a.scenario)
+    print(sc.summary(), flush=True)
+
+    def setdef(name, value):
+        if getattr(a, name, None) in (None, 0) or name in ("width", "height"):
+            setattr(a, name, value)
+
+    a.width = int(sc.varld.bredd)
+    a.height = int(sc.varld.hojd)
+    a.dt = float(sc.varld.dt)
+    if a.nutrient_input is None:
+        a.nutrient_input = sc.nutrient_input
+    if a.nutrient_init is None:
+        a.nutrient_init = sc.nutrient_init
+    if a.detritus_init is None:
+        a.detritus_init = sc.detritus_init
+    if a.drag_lin is None:
+        a.drag_lin = sc.drag_lin
+    if a.fauna_at is None:
+        a.fauna_at = sc.fauna_at_tick
+    if a.fauna_spawn_radius is None:
+        a.fauna_spawn_radius = float(sc.fauna.flackradie)
+    if getattr(a, "sociability_init", None) is None and sc.fysiologi.sociability is not None:
+        a.sociability_init = float(sc.fysiologi.sociability)
+    if getattr(a, "sociability_init_sd", None) is None:
+        a.sociability_init_sd = float(sc.fysiologi.sociability_sd)
+    a.init_pop = int(sc.fauna.antal)
+    a.max_pop = int(sc.fauna.max_antal)
+    a._scenario = sc
+
+    out = getattr(a, "scenario_out", None)
+    if out:
+        sc.dump(out)
 
 
 def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
@@ -788,6 +840,7 @@ def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
 
 def main() -> int:
     a = parse_args()
+    apply_scenario(a)
 
     if a.seeds:
         seeds = [int(x) for x in str(a.seeds).split(",") if x.strip()]
