@@ -1272,6 +1272,46 @@ Explosionen kom från antalet, inte från takten. Median kullar per individ är 
 
 **Nästa steg.** `mating_radius = 3,0` motsvarar nästan tre cellbredder och en träffyta på 28 celler, med grannavstånd 1,07. Parning bör kräva samma cell, alltså radie kring 0,6. Men att strama åt den innan approachen håller skulle sänka träffytan trettiofem gånger och stoppa reproduktionen helt — radien sätts därför efter att den här ändringen mätts.
 
+### Säsongsbunden parning
+
+*0098. Kvadreringen är det som dödar reproduktionen.*
+
+Beredskapen var asynkron: varje individ blev redo på sin egen tidtabell. Uppmätt i p97 var **14,8 procent** av agenttickarna reproduktivt klara, och två djur måste vara det *samtidigt*:
+
+```
+båda redo   0,148²  =  2,2 %
+```
+
+Innan de ens ska hitta varandra och sluta avståndet. Det förklarar också varför 0097 inte hjälpte: att söka närmaste **villiga** i stället för närmaste artfrände gör målet längre bort när villiga är sällsynta, och andelen utanför parningsradien steg från 21,8 till 23,3 procent. Premissen var fel — problemet var inte fel granne närmast utan att villiga partners knappt finns.
+
+Grindas beredskapen till en period blir alla redo samtidigt:
+
+```
+i dag                0,148² × 12 mån  =  0,26 månadsekvivalenter per år
+tvåmånadersfönster   1,0²   ×  2 mån  =  2,0        ungefär åtta gånger fler
+```
+
+Två loci: `breed_phase` (när på året) och `breed_sync` (hur snävt). Grinden är von Mises-liknande, `exp(k·(cos Δ − 1)) ≥ 0,5`:
+
+```
+skärpa 0    fönster 12,0 mån    ingen säsong — dagens beteende
+skärpa 1             4,9
+skärpa 3             2,7
+skärpa 6             1,9
+```
+
+Vid skärpa noll är grinden konstant ett, så det asynkrona beteendet är bevarat som en punkt i parameterrummet snarare än borttaget. Kuen är årscykeln som redan finns — `year_len` med sinusformad temperatur — så ingen ny perception behövs.
+
+**Avvägningen är verklig och behöver inte uppfinnas.** En strikt säsongsparare som missar fönstret väntar ett år. Ju snävare synkronisering, desto större vinst i mötesfrekvens och desto större risk att individen inte är i kondition just då. Den adaptiva motiveringen är också verklig: säsongsparare synkroniserar för att avkomman ska födas när fodret är rikligt, och floran har en temperaturgrindad tillväxtcykel.
+
+`n_traits` går från 38 till 40.
+
+### Om sådden vid hög bördighet
+
+p97 visade självgallring rent: sådden gav 328 804 plantor på 1,27 kg, jämvikten 92 370 på 3,42 kg. Antalet faller till 28 procent medan medelmassan nästan tredubblas — emergent ur rotkonkurrensen om cellarean och ljuskonkurrensen om höjd, inget i koden säger att beståndet ska gallra sig.
+
+Praktisk följd: `flora_init_plant_mass = 1,32` sattes mot jämvikten vid f1, men vid f4 är den 3,42. Skalas plantmassan med bördigheten hamnar sådden nära jämvikt direkt, och inkörningen kortas från fjortontusen tick till några tusen.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*

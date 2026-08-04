@@ -80,6 +80,8 @@ class Phenotype:
     sociability: float
     mobility: float
     cold_aversion: float
+    breed_phase: float
+    breed_sync: float
     sense_strength: float
 
     # Vävnadens strukturandel. Body behöver den för katabolismens utbyte och
@@ -173,9 +175,34 @@ _T_ROOT_ALLOC      = 36
 # omöjligt.
 _T_MATURITY        = 37
 
+# Säsongsbunden parning. Två loci: när på året och hur snävt.
+#
+# Beredskapen är i dag asynkron — varje individ blir redo på sin egen
+# tidtabell. Uppmätt i p97 var 14,8 procent av agenttickarna reproduktivt
+# klara, och två djur måste vara det *samtidigt*: 0,148² = 2,2 procent, innan
+# de ens ska hitta varandra. Det är kvadreringen som dödar reproduktionen.
+#
+# Grindas beredskapen till en period blir alla redo samtidigt. Ett
+# tvåmånadersfönster ger 1,0² × 2 = 2,0 månadsekvivalenter per år mot dagens
+# 0,148² × 12 = 0,26 — ungefär åtta gånger fler tillfällen.
+#
+# `breed_phase` är fasen i årscykeln, `breed_sync` skärpan. Vid skärpa noll är
+# grinden konstant ett, alltså dagens asynkrona beteende — nuvarande läge är en
+# punkt i rummet snarare än något som tas bort.
+#
+# Avvägningen är verklig: en strikt säsongsparare som missar fönstret väntar
+# ett år. Ju snävare synkronisering, desto större vinst i mötesfrekvens och
+# desto större risk att individen inte är i kondition just då.
+_T_BREED_PHASE     = 38
+_T_BREED_SYNC      = 39
+
 @dataclass(frozen=True)
 class PhenoRanges:
     # maturity
+    # Säsongsparning
+    breed_sync_min: float = 0.0
+    breed_sync_max: float = 6.0    # von Mises-liknande skärpa; 0 = ingen säsong
+
     A_mature_min: float = 5.0
     A_mature_max: float = 20.0   # var 40.0 — kortare mognadsperiod relativt livslängden
 
@@ -332,6 +359,9 @@ def derive_pheno(traits: np.ndarray | None, R: PhenoRanges = PhenoRanges()) -> P
         sociability=float(u_soc),
         mobility=float(u_mob),
         cold_aversion=float(_lerp(R.cold_aversion_min, R.cold_aversion_max, u_cold)),
+        breed_phase=float(_sigmoid(_get_trait(traits, _T_BREED_PHASE))),
+        breed_sync=float(_lerp(R.breed_sync_min, R.breed_sync_max,
+                               _sigmoid(_get_trait(traits, _T_BREED_SYNC)))),
         sense_strength=float(u_sense),
         diet=float(_lerp(R.diet_min, R.diet_max, u_diet)),
         predation=float(_lerp(R.predation_min, R.predation_max, u_predation)),
@@ -369,6 +399,8 @@ def phenotype_summary(p: Phenotype) -> dict[str, float]:
         "sociability": float(p.sociability),
         "mobility": float(p.mobility),
         "cold_aversion": float(p.cold_aversion),
+        "breed_phase": float(p.breed_phase),
+        "breed_sync": float(p.breed_sync),
         "sense_strength": float(p.sense_strength),
         "hidden_1": int(p.hidden_1),
         "hidden_2": int(p.hidden_2),

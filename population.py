@@ -200,7 +200,7 @@ class PopParams:
     store_growth_min_chunk: int = 256
     store_growth_factor: float = 2.0
     
-    n_traits: int = 38   # +1: _T_MATURITY = 37, mognadströskel
+    n_traits: int = 40   # +2: _T_BREED_PHASE = 38, _T_BREED_SYNC = 39
 
     spawn_jitter_r: float = 1.5
 
@@ -875,7 +875,27 @@ class Population:
         efrac = E / Ecap
         if efrac < float(ag.pheno.E_repro_min):
             return False
-    
+
+        # Säsongsgrind. Beredskapen var asynkron: varje individ blev redo på
+        # sin egen tidtabell, och två djur måste vara det samtidigt. Uppmätt i
+        # p97 var 14,8 procent klara vid en given tick, alltså 2,2 procents
+        # sannolikhet att båda är det — innan de ens ska hitta varandra.
+        #
+        # Grinden är von Mises-liknande: exp(k·(cos Δ − 1)), som är ett vid
+        # fasens topp och avtar med skärpan k. Vid k = 0 är den konstant ett,
+        # så det asynkrona beteendet är bevarat som specialfall och inte
+        # borttaget.
+        #
+        # Kuen är årscykeln som redan finns — `year_len` med sinusformad
+        # temperatur — så ingen ny perception behövs.
+        k = float(getattr(ag.pheno, "breed_sync", 0.0))
+        if k > 1e-6:
+            yl = max(1e-9, float(getattr(self.WP, "year_len", 12.0)))
+            frac = (float(self.t) / yl) % 1.0
+            d = 2.0 * math.pi * (frac - float(ag.pheno.breed_phase))
+            if math.exp(k * (math.cos(d) - 1.0)) < 0.5:
+                return False
+
         return True
 
     def _mating_mode_slot(self, slot: int) -> bool:
