@@ -1650,6 +1650,33 @@ Parbildningen faller ut som konsekvens i stället för som egen mekanism: flocke
 
 `n_traits` 40 → 41.
 
+### Grundargrupper med egen tyngdpunkt
+
+*0111. Raser vid introduktion.*
+
+Varje grundares genom slumpades oberoende, så tre fläckar innehöll tre stickprov ur samma fördelning: geografiskt åtskilda men **genetiskt identiska**. Med en egen tyngdpunkt per grupp och liten spridning inom den får man verkliga raser redan vid introduktionen — en grupp kan ha starkt flockbeteende medan en annan saknar det.
+
+```yaml
+fauna:
+  flackar: 3
+  grupp_avstand: 1.0      # mellan tyngdpunkterna, i logit-enheter
+  grupp_spridning: 0.4    # skala på spridningen inom gruppen
+```
+
+Uppmätt vid de värdena, 60 grundare i tre grupper:
+
+```
+avstånd inom grupp     3,96
+avstånd mellan grupper 8,48
+kvot                   2,14
+```
+
+**Kvoten avgör om det blir raser eller arter**, och det är just den som är intressant att variera: den säger när grupperna slutar utbyta gener.
+
+Kombinerat med den sociala fassynkroniseringen i 0110 blir isoleringen **dubbel** — grupperna skiljs både genetiskt och reproduktivt, eftersom varje flock drar mot sin egen säsong. Det är ungefär så artbildning faktiskt börjar, och ingen av mekanismerna kodar den.
+
+Scenariofilen beskriver därmed en **fauna** i stället för bara ett antal.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*

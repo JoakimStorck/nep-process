@@ -130,6 +130,11 @@ class PopParams:
     # utspridning över hela världen. Se `_fauna_spawn_pos`.
     fauna_spawn_radius: float = 0.0
     fauna_spawn_patches: int = 1
+    # Grupperna i traitrymden. `founder_group_sep` är avståndet mellan
+    # gruppernas tyngdpunkter i logit-rymden, `founder_group_spread` en skala
+    # på spridningen inom gruppen. 0 = alla ur samma fördelning.
+    founder_group_sep: float = 0.0
+    founder_group_spread: float = 1.0
     # Jämviktsdetektion för fördröjd insättning. Se `_fauna_release_now`.
     flora_eq_window: int = 1000
     flora_eq_tol: float = 0.01
@@ -370,6 +375,7 @@ class Population:
         self._tick = 0
         self._fauna_spawn_centre = None
         self._flora_eq_prev = None
+        self._founder_centroids = None
         # Faunan kan hållas tillbaka tills floran nått jämvikt.
         self._fauna_pending = int(self.PP.init_pop) if int(self.PP.fauna_at) != 0 else 0
         if self._fauna_pending == 0:
@@ -1392,6 +1398,34 @@ class Population:
             _eps = 0.02   # marginaler för att undvika logit(0) och logit(1)
             _u   = self.rng.uniform(_eps, 1.0 - _eps, int(self.PP.n_traits)).astype(_np.float64)
             raw_traits = _np.log(_u / (1.0 - _u)).astype(_np.float32)  # logit
+
+            # Grupper med egen tyngdpunkt i traitrymden.
+            #
+            # Varje grundares genom slumpades oberoende, så tre fläckar
+            # innehöll tre stickprov ur samma fördelning: geografiskt åtskilda
+            # men genetiskt identiska. Med en egen tyngdpunkt per grupp och
+            # liten spridning inom den får man verkliga raser redan vid
+            # introduktionen.
+            #
+            # Kvoten mellan `grupp_avstand` och `grupp_spridning` avgör om det
+            # blir raser eller arter, och det är just den kvoten som är
+            # intressant att variera: den säger när grupperna slutar utbyta
+            # gener. Kombinerat med den sociala fassynkroniseringen blir
+            # isoleringen dubbel — grupperna skiljs både genetiskt och
+            # reproduktivt, eftersom varje flock drar mot sin egen säsong.
+            # Det är ungefär så artbildning faktiskt börjar.
+            _gsep = float(getattr(self.PP, "founder_group_sep", 0.0))
+            _gspr = float(getattr(self.PP, "founder_group_spread", 1.0))
+            _ngrp = max(1, int(getattr(self.PP, "fauna_spawn_patches", 1)))
+            if _gsep > 0.0 and _ngrp > 1:
+                if self._founder_centroids is None:
+                    self._founder_centroids = [
+                        self.rng.normal(0.0, _gsep, int(self.PP.n_traits)).astype(_np.float32)
+                        for _ in range(_ngrp)
+                    ]
+                _g = int(len(self.agents)) % _ngrp
+                raw_traits = (self._founder_centroids[_g]
+                              + raw_traits * _gspr).astype(_np.float32)
 
             # Grundarnas sociability kan sättas explicit. Reflexen använder
             # `soc_bias = 2·soc − 1`, så nollpunkten ligger vid 0,5: halva en

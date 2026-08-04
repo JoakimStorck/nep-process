@@ -443,6 +443,8 @@ def build_population(a: argparse.Namespace, seed: int, hub=None) -> Population:
     _sc = getattr(a, "_scenario", None)
     if _sc is not None:
         PP.fauna_spawn_patches = int(_sc.fauna.flackar)
+        PP.founder_group_sep = float(_sc.fauna.grupp_avstand)
+        PP.founder_group_spread = float(_sc.fauna.grupp_spridning)
     return Population(WP=WP, AP=AP, PP=PP, seed=int(seed), hub=hub)
 
 

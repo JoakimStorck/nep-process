@@ -59,6 +59,11 @@ class FaunaSpec:
     # procent av avkommorna.
     flackar: int = 1
     flackradie: float = 0.0
+    # Avstånd mellan gruppernas tyngdpunkter i traitrymden (logit-enheter), och
+    # skala på spridningen inom varje grupp. Kvoten avgör om det blir raser
+    # eller arter. 0 = alla grundare ur samma fördelning.
+    grupp_avstand: float = 0.0
+    grupp_spridning: float = 1.0
     max_antal: int = 4096
 
 
@@ -159,5 +164,7 @@ class Scenario:
             f"(nutrient_input {self.nutrient_input:.3e}), "
             f"{self.fauna.antal} djur i {self.fauna.flackar} fläck(ar) "
             f"radie {self.fauna.flackradie:g} vid tick {self.fauna_at_tick}, "
+            f"gruppavstånd {self.fauna.grupp_avstand:g}/spridning "
+            f"{self.fauna.grupp_spridning:g}, "
             f"fartskala {self.fysiologi.fartskala:g}"
         )
