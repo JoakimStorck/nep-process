@@ -185,6 +185,8 @@ _S: dict = {"agenttick": 0, "kans_n": 0, "kans_traff": 0, "kans_hist": [0] * 20,
             "null_traff": 0.0, "null_hist": [0.0] * 20,
             "gren_n": 0, "gren_traff": 0, "gren_traff90": 0, "avv_hist": [0] * 18,
             "kalla": {}, "gren": {}, "state": {},
+            # 20 fack per styrka, 0–1.
+            "styrka": {},
             # Fönstret är **skilt** från totalerna ovan och nollställs vid
             # avläsning, som `gestation_window()`. Totalerna nollställs per
             # körning, som `_C`. Att blanda de två mönstren i samma räknare är
@@ -233,6 +235,18 @@ _S_VIKTER = (("flykt", 0.95), ("jakt", 0.90), ("parning", 0.95),
 # Reflexkedjans grenar i elif-ordning. Skild från viktlistan ovan, som också
 # bär födan — den är inte en gren utan ett påslag efter kedjan.
 _S_GRENAR = ("flykt", "jakt", "parning", "flock")
+
+# Styrkefördelningar. Steg 2 gav flykten och jakten var sin dokumenterade
+# avbildning till 0–1, men mättnadsvärdena är ännu antaganden: flyktens 0,30
+# kommer från den högsta `attack_score` som observerats i en *annan* värld, och
+# jaktens 1,0 är formell och besöks aldrig. Ett tyst kalibreringsfel gömmer sig
+# just där, så fördelningarna ska mätas innan styrkorna får driva amplitud i
+# steg 3.
+#
+# De två bärs sedan 0143 ut ur reflexkedjan som `flee_state` och `hunt_state`,
+# så de kan läsas utan att grenlogiken skrivs av här. De sju övriga har ingen
+# sådan väg ut och mäts när arbitreringen ger dem en.
+_S_STYRKOR = ("flykt", "jakt")
 
 _INSTRUMENTED_STEERING = False
 
@@ -292,6 +306,10 @@ def instrument_steering() -> None:
         rec[1] = t_in - rec[0]
         rec[2] = float(out[0]) - t_in
         rec[4] = float(out[0])
+        for namn, v in (("flykt", float(out[3])), ("jakt", float(out[4]))):
+            if v > 0.0:
+                h = _S["styrka"].setdefault(namn, [0] * 20)
+                h[min(19, int(v * 20.0))] += 1
         if float(out[3]) > 0.0:
             rec[3] = "flykt"
         elif float(out[4]) > 0.0:
@@ -984,6 +1002,15 @@ def print_summary(pop: Population, d0: dict, nb0: dict, unika: int, worst_drift:
                     print(f"      {k:<8} vann {e[0]:8d} tick, "
                           f"{100 * e[1] / e[0]:5.1f} % över 30°, "
                           f"{100 * e[2] / e[0]:5.1f} % över 90°")
+        for k in _S_STYRKOR:
+            h = _S["styrka"].get(k)
+            if h and sum(h):
+                n_h = sum(h)
+                lo = next(i for i, c in enumerate(h) if c) / 20.0
+                hi = (max(i for i, c in enumerate(h) if c) + 1) / 20.0
+                print(f"    styrkan {k:<6} n {n_h:8d}  median "
+                      f"{_hist_median(h, 0.0, 1.0):.2f}  spann {lo:.2f}–{hi:.2f}"
+                      f"  mättad {100 * h[19] / n_h:.1f} %")
         for k in ("mlp", "kyla", "gren", "föda"):
             e = _S["kalla"].get(k)
             if e and e[0]:
@@ -1107,6 +1134,7 @@ def run(a: argparse.Namespace, seed: int | None = None) -> int:
     # ombindning här hade lämnat den kvar på den gamla dicten och burit över
     # tillstånd mellan seeds i `--seeds`.
     _S["state"].clear()
+    _S["styrka"] = {}
 
     # Samma loggar som run_population.py skriver, men utan pygame. Det gör
     # live_pop_plot.py och live_world_plot.py användbara mot en
