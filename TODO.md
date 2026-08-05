@@ -2288,6 +2288,52 @@ Den exklusiva reflexkedjan ersätts av viktade drifter. Tre döda beteendetraits
 
 **Klart när:** predationsdödsfall > 0 över 100 000 tick, inget beteendetrait saknar läsare, och `sociability` differentierar med predationen påslagen men driftar neutralt utan den.
 
+### Två fynd ur styrningsmätningen (0136, 0138)
+
+**Parningsgrenen är redan ett val.** Den skriver `turn = clamp(0,95 · biasN)`,
+en tilldelning — inte `turn +=` som de åtta övriga. Den kastar alltså MLP:ns
+och köldtermens anspråk och behåller ett. Att den samtidigt avviker mest av
+grenarna från det slutliga `turn` — 30,3 % över trettio grader mot flockens
+23,4 — är därför inte ett fel utan definitionen på ett val: den enda gren som
+avviker mycket är den enda som faktiskt väljer, och det som lagts på efteråt
+är födan.
+
+Grenen ska alltså inte rättas utan **generaliseras**. Den är den befintliga
+formen av det arbitreringen ska göra för alla nio bidrag. Det som saknas i den
+är bara det arbitreringen tillför: en poäng som avgör *vilken* som vinner, i
+stället för elif-kedjans fasta ordning.
+
+**Predationens grind ligger i `attack_score`, inte i traitet.** Antagandet att
+hotgrenen sällan avfyrar för att predatoriska genotyper är ovanliga stämmer
+inte. Mätt över 79 000 agenttick i `f4-start20`-liknande värld:
+
+```
+hunt_eff                       median 0,124   p90 0,365   max 0,529
+över predator_trait_min 0,20                  29,9 % av agenttickarna
+över threat_predation_min 0,35                12,3 %
+
+med byte i sikte och hunt_eff ≥ 0,20                     n = 9 736
+  attack_score                 median −0,307  p90 −0,030  max +0,313
+  över hunt_score_min 0,12                     1,2 %
+  över attack_score_min 0,18                   0,4 %
+  avstånd under attack_range 1,5               8,5 %
+  båda villkoren samtidigt                     0,34 %
+```
+
+`attack_risk` har medianen 0,830 mot `attack_value` 0,578, alltså är
+differensen negativ i det normala fallet. Termen `0,40 · target_pred` ensam
+räcker för att göra en genomsnittlig artfrände olönsam att angripa för en
+genomsnittlig predator. Utfallet blev 52 flykttick och 226 jakttick av 78 961,
+och noll dödsfall i predationspasset.
+
+Två följder. Steg 6c:s riskvärdering behöver kalibreras om, inte bara få nya
+läsare — och det arbetet är skilt från att aktivera `attack_energy_gain`.
+Och: flyktens mättnadsvärde i behovstrappans normering kan inte mätas i den
+här världen, eftersom grenen knappt avfyrar. Det värdet blir en gissning som
+ingen mätning motsäger, och det ska stå skrivet snarare än döljas av att det
+finns en siffra. En scenariovariant med predatorisk diet i tillräcklig andel
+av beståndet är eget arbete och hör inte till normeringssteget.
+
 ## Steg 6b — Fauna store-first
 
 *Störst risk, störst utdelning.*
