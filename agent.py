@@ -2615,26 +2615,6 @@ class Agent:
             thrust = max(thrust, 0.95)
             explore_drive = 0.0
     
-        elif in_mating_mode:
-            # Redo att para sig och ser ingen alls. Det fallet fanns inte i
-            # kedjan: det föll igenom till födostyrningen, som *sänker*
-            # utforskningen när organismen står på föda den vill ha. Ett mättat
-            # djur ensamt på en full betesmark fick alltså minimal utforskning,
-            # kortaste persistenstid och en bana som slingrar på fläcken.
-            #
-            # Uppmätt i p125 frö 2: från tick 20 000 dog inget djur av svält på
-            # 8 000 tick, floran låg på 92 000 plantor, och de tio som fanns
-            # kvar fick fyra ungar innan de dog av ålder — med medianavstånd 16
-            # cellbredder till närmaste artfrände mot en synradie på 7. De
-            # svalt inte. De hittade aldrig varandra.
-            #
-            # Reflexen säger *när* det är läge att färdas. **Hur** rakt avgörs
-            # av `pheno_dir_tau()` ur `_T_MOB`, som redan bär avvägningen: hög
-            # persistens ger effektiv förflyttning men dålig lokal genomsökning.
-            # Ingen ny parameter, och magnituden är evolverbar.
-            self._mate_search = True
-            explore_drive = 1.0
-
         elif N > 0.5 or neighbour_memory is not None:
             if N > 0.5:
                 a_hit = self.heading + (2.0 * math.pi * float(Nu))
@@ -2732,6 +2712,34 @@ class Agent:
                 if soc_bias > 0.0:
                     explore_drive = explore_drive * (1.0 - 0.60 * soc_bias * wcoh)
     
+        elif in_mating_mode:
+            # Redo att para sig och ser ingen alls. Det fallet fanns inte i
+            # kedjan: det föll igenom till födostyrningen, som *sänker*
+            # utforskningen när organismen står på föda den vill ha. Ett mättat
+            # djur ensamt på en full betesmark fick alltså minimal utforskning,
+            # kortaste persistenstid och en bana som slingrar på fläcken.
+            #
+            # Uppmätt i p125 frö 2: från tick 20 000 dog inget djur av svält på
+            # 8 000 tick, floran låg på 92 000 plantor, och de tio som fanns
+            # kvar fick fyra ungar innan de dog av ålder — med medianavstånd 16
+            # cellbredder till närmaste artfrände mot en synradie på 7. De
+            # svalt inte. De hittade aldrig varandra.
+            #
+            # Grenen ligger **sist** i kedjan, efter flockningen. Låg den
+            # före fångade den även fallet "ser någon som inte är en giltig
+            # partner" — och eftersom `best_mate` kräver att motparten också
+            # är parningsberedd är det det vanliga fallet. Ett parningsberett
+            # djur sprang då rakt förbi en artfrände i stället för att slå
+            # följe. Uppmätt i p132: de tjugo grundarna korsade världen i
+            # raka banor, hittade varandra, och fortsatte förbi.
+            #
+            # Reflexen säger *när* det är läge att färdas. **Hur** rakt avgörs
+            # av `pheno_dir_tau()` ur `_T_MOB`, som redan bär avvägningen: hög
+            # persistens ger effektiv förflyttning men dålig lokal genomsökning.
+            # Ingen ny parameter, och magnituden är evolverbar.
+            self._mate_search = True
+            explore_drive = 1.0
+
         return turn, thrust, explore_drive, flee_state, hunt_state
     
     

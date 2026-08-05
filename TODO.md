@@ -2227,6 +2227,31 @@ hela världen            0,403 MB
 
 Verifieringen är nu en riktig anslutning: handskakning, `cmd: "view"` med och utan `detail`, och kontroll av att `claim_cells()` svarar med respektive utan celler.
 
+### Sökgrenen låg före flockningen
+
+*0134. Ordningen i reflexkedjan, och vad den inte förklarar.*
+
+0126 lade söktillståndet i kedjan **före** flockningsgrenen, trots att anteckningen till samma patch säger att den ska ligga efter "så den bara fångar ser ingen alls". Koden gjorde alltså något annat än beskrivningen.
+
+Följden: ett parningsberett djur som ser en artfrände utan att den är en giltig partner — `best_mate` kräver att motparten också är parningsberedd — hoppade över flockningen helt. Värre är att flockningsgrenen bär minnet: `elif N > 0.5 or neighbour_memory is not None`. Sökgrenen före den föregriper alltså även det minne som håller ihop ett sällskap när sikten tillfälligt bryts, och den gör det för de 74,7 procent av agenttickarna där djuret är parningsberett.
+
+Grenen ligger nu sist.
+
+**Men det förklarar inte varför djuren inte slår följe**, och det ska sägas rakt ut. En A/B över 2 500 tick i en gles värld gav *identiskt* utfall — samma bestånd, samma medelavstånd, samma kvot mot slumpen. Uppmätt är fallet sällsynt:
+
+```
+agenttick          21 745
+  parningsberedd   74,7 %
+  ser någon alls    3,4 %
+  berett OCH ser    2,4 %
+  varav giltig partner  2,2 %   <- 90 % av mötena
+  söktillstånd     70,8 %
+```
+
+Nio av tio möten sker mellan två parningsberedda djur, så partnergrenen tar dem ändå. Ordningsfelet biter i 0,2 procent av tickarna.
+
+Det verkliga svaret ligger i de tre andra talen. Djuren är ensamma 96,6 procent av tiden, de **närmar sig** varandra när de möts, och sedan finns ingenting som håller dem kvar: söktillståndet återinträder så snart sikten bryts, och flockningen är svag med avsikt — nitton procent tätare än slumpen. Sensingen hjälper inte heller: i vila går tio tick mellan två avläsningar, alltså 5,6 celler av en synvidd på tolv.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*
