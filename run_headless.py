@@ -279,8 +279,8 @@ def instrument_steering() -> None:
 
     def wrapped_decode(self, *ar, **kw):
         out = orig_decode(self, *ar, **kw)
-        # [turn_mlp, Δ_kyla, Δ_gren, gren]
-        st[int(getattr(self, "id", 0))] = [float(out[0]), 0.0, 0.0, ""]
+        # [turn_mlp, Δ_kyla, Δ_gren, gren, turn_ut_ur_reflex]
+        st[int(getattr(self, "id", 0))] = [float(out[0]), 0.0, 0.0, "", 0.0]
         return out
 
     def wrapped_reflex(self, *ar, **kw):
@@ -291,6 +291,7 @@ def instrument_steering() -> None:
             return out
         rec[1] = t_in - rec[0]
         rec[2] = float(out[0]) - t_in
+        rec[4] = float(out[0])
         if float(out[3]) > 0.5:
             rec[3] = "flykt"
         elif float(out[4]) > 0.5:
@@ -353,7 +354,24 @@ def instrument_steering() -> None:
         if gren:
             _S["gren_n"] += 1
             w[3] += 1
-            d = (t_fin - rec[2]) * math.pi
+            # Referensen är grenens *egen* riktning, och den är inte samma
+            # storhet för de två grentyperna.
+            #
+            # Åtta grenar adderar: `turn = clamp(turn + w · bias)`. Deras egen
+            # riktning är differensen `Δ_gren`, eftersom det är precis vad de
+            # begärde utöver vad som redan låg där.
+            #
+            # Parningsgrenen tilldelar: `turn = clamp(0,95 · biasN)`. Dess egen
+            # riktning är hela det tilldelade värdet, alltså `turn` ut ur
+            # reflexkedjan — inte differensen mot det den kastade. Mäts den mot
+            # differensen läggs MLP:ns och kylans belopp till avvikelsen, trots
+            # att grenen medvetet gjorde sig av med dem. Det var precis vad
+            # 0136 gjorde, och det gav parningsgrenen 22,6 % i p140 mot
+            # flockens 18,1 — en siffra som mätte grenens val i stället för
+            # vad som stördes efteråt. För den grenen är den enda verkliga
+            # störningen födotermen.
+            ref = rec[4] if gren == "parning" else rec[2]
+            d = (t_fin - ref) * math.pi
             d = abs((d + math.pi) % (2.0 * math.pi) - math.pi)
             grader = d * 180.0 / math.pi
             _S["avv_hist"][min(17, int(grader / 10.0))] += 1
