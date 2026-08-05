@@ -2215,6 +2215,18 @@ hela världen            0,403 MB
 
 **Förvalet är inga rader**, inte alla. En klient som aldrig frågar får floran som celltäckning, vilket är allt som ändå syns utzoomat. Det gör att en klient från protokoll 3 skulle tappa floran tyst — så versionen är bumpad till 4 och handskakningen avvisar den i stället.
 
+### `_Client` har `__slots__`
+
+*0133. Ett fältnamn som saknades.*
+
+`view` tilldelades i `__init__` men stod inte i `__slots__`, så första anslutningen gav `AttributeError`. Två saker gjorde felet obehagligare än det borde varit.
+
+**Det syntes inte i rökprovet.** `_Client` skapas först när någon ansluter, och ingen av verifieringarna av 0132 öppnade en socket — de anropade `frame_from_pop` och `pack` direkt. Serverdelen var alltså aldrig körd.
+
+**Och körningen avbröts inte.** Undantaget kastades i accept-tråden, efter att servern rapporterat att den lyssnar. Simuleringen fortsatte i huvudtråden medan viewern aldrig kunde ansluta.
+
+Verifieringen är nu en riktig anslutning: handskakning, `cmd: "view"` med och utan `detail`, och kontroll av att `claim_cells()` svarar med respektive utan celler.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*

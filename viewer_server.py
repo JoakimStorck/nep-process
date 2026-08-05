@@ -38,7 +38,12 @@ from viewframe import PROTOCOL_VERSION, ViewFrame, pack
 
 
 class _Client:
-    __slots__ = ("sock", "addr", "wake", "thread", "reader", "alive", "sent", "dropped")
+    # `view` måste stå här. Klassen har `__slots__`, så ett fält som bara
+    # tilldelas i `__init__` ger AttributeError vid första anslutningen — och
+    # felet dyker upp i accept-tråden, alltså efter att servern rapporterat att
+    # den lyssnar och utan att körningen avbryts.
+    __slots__ = ("sock", "addr", "wake", "thread", "reader", "alive", "sent",
+                 "dropped", "view")
 
     def __init__(self, sock: socket.socket, addr) -> None:
         self.sock = sock
