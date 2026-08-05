@@ -865,7 +865,13 @@ def format_stats(pop: Population, d: dict, tick: int, elapsed: float) -> str:
     # täthetsberoende drift syns. Vid --report-every 600 är ett fönster exakt
     # ett år.
     sw = steering_window()
-    styr = (f"  styr={sw[0]:4.1f}/{sw[1]:+4.1f}/{sw[2]:4.1f}/{sw[3]:3.1f}"
+    # Utan breddspecificerare. Med `4.1f` får ett värde under tio ett inledande
+    # blanksteg, och fältet blir då fyra tokens i stället för ett — varje
+    # radparsare som delar på blanksteg tappar tyst just de fönster där
+    # avvikelsen är låg, alltså systematiskt de välmatade. Det hände i
+    # analysen av p140 och gjorde korrelationen mot massa per djur −0,65 i
+    # stället för −0,82.
+    styr = (f"  styr={sw[0]:.1f}/{sw[1]:+.1f}/{sw[2]:.1f}/{sw[3]:.1f}"
             if sw is not None else "")
     # Varje fält bär sitt eget prefix i stället för att ligga under en
     # gruppetikett. `n_` är antal, `M_` massa i kilo torrsubstans, `N_` näring i

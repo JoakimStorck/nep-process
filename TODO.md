@@ -2334,6 +2334,42 @@ ingen mätning motsäger, och det ska stå skrivet snarare än döljas av att de
 finns en siffra. En scenariovariant med predatorisk diet i tillräcklig andel
 av beståndet är eget arbete och hör inte till normeringssteget.
 
+### Fyra beslut som p140 gör skarpare
+
+**Jaktens beslutströskel ligger under attackens.** Båda använder `attack_score`,
+men grenen avfyrar på `> hunt_score_min` 0,12 medan angreppet kräver
+`> attack_score_min` 0,18. Ungefär två tredjedelar av alla jaktbeslut är alltså
+åtaganden som per konstruktion inte kan sluta i ett angrepp — 41 173 jakttick i
+p140 utan ett enda byte. Tröskeln ska inte flyttas för sig: i trappan är
+jaktens *styrka* bytets värde mot risken, alltså `attack_score`, och den ska
+normeras så att den är noll där angreppet blir omöjligt. Flykten mäter mot
+samma 0,12 fast för motpartens poäng; två olika beslut delar i dag en konstant
+utan skäl och ska ha var sin.
+
+**λ måste prövas om när predationen slås på.** Trappans nivå 1 och 4 avfyrar i
+dag i 0,18 respektive 0,51 procent av tickarna, och noll dödsfall följer. En
+kalibrering av λ i den världen säger inget om hur trappan beter sig när flykten
+blir vanlig. Ordningen är ändå rätt — λ är en ordning, och en gren utan styrka
+stör ingen ordning — men omprövningen ska vara planerad, inte upptäckt.
+
+**Styrkraften har redan en kanal, och det är slitage och inte energi.**
+`effort = speed_n + 0,6 · activity` och `activity = 0,03 + 0,45 · speed_n +
+0,10 · ate`. Ingen term för vridning, och `_integrate_motion` löser farten ur
+kraftbalansen utan koppling till `d_steer`. Att svänga är alltså gratis i dag.
+Men `dD_eff` är 33,7 procent av all skada i p140 och matar också
+trötthetsintegratorn, medan lokomotionen bara är 3,8 procent av energiintaget.
+Steg 5 behöver därför ingen ny mekanism utan en vinkelterm i ett uttryck som
+redan finns — avvägningen uppstår genom slitage, inte genom joule.
+
+**Normeringen i steg 2 måste bevara produkten vikt × styrka.** Att skala om
+`fd` från 0–0,6 till 0–1 ändrar amplituden med faktorn 1,67 om inte vikten
+följer med från 0,60 till 0,36. Görs det inte blir steg 2 en tyst
+beteendeändring maskerad som en refaktor, och p140 upphör att vara jämförbar.
+Kravet är starkare än så: eftersom simuleringen är kaotisk räcker det inte att
+produkten stämmer analytiskt — även en omassociering på sista biten driver isär
+banorna på några hundra tick. Steg 2 ska därför vara **bitidentisk**, inte bara
+ekvivalent.
+
 ## Steg 6b — Fauna store-first
 
 *Störst risk, störst utdelning.*
