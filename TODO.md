@@ -2123,6 +2123,26 @@ n_föd=   9  n_död=   1  dräkt=  2/ 94%  17.66 ms/tick
 
 **Den korta raden fick samma delning.** `format_diagnostics`, som körs utan `--stats`, skrev fortfarande `M_detritus` för det som sedan 0121 bara är förna, och saknade kadaverpoolen helt. Två rapportformat som beskriver samma tillstånd med olika namn är värre än ett otydligt.
 
+### Takten var kumulativ, inte aktuell
+
+*0128. Glidande fönster över senaste rapportintervallet.*
+
+`ms/tick` räknades som `elapsed / tick`, alltså ett medel över hela körningen från tick noll. Det gör talet trögt på ett sätt som är lätt att missta för information: i p124 stod det på 44,20 vid tick 1 000 och 22,17 vid 30 000, och fortsatte sjunka långt efter att takten planat ut. Marginaltakten i slutet var 26,8 medan raden skrev 27,17.
+
+Fönstret är nu senaste rapportintervallet, alltså redan ett medel över `--report-every` tick — vid tusen tick är det gott om utjämning utan att lägga till eftersläpning. Det kumulativa medlet står kvar inom parentes, eftersom det är rätt tal för frågan *hur lång tid tar resten*.
+
+```
+17.11 ms/tick (medel 17.11)
+16.84 ms/tick (medel 16.97)
+18.13 ms/tick (medel 17.36)
+19.03 ms/tick (medel 17.78)
+15.89 ms/tick (medel 17.40)
+```
+
+Nu syns att takten faktiskt varierar med beståndet — de två sista raderna skiljer sig tjugo procent, vilket det kumulativa medlet döljer helt.
+
+Fönstret nollställs per körning, eftersom `--seeds` kör flera världar i samma process. Sista raden, där tick inte hunnit öka sedan förra rapporten, faller tillbaka på det kumulativa medlet.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*

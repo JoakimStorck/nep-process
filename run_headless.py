@@ -464,6 +464,32 @@ def build_population(a: argparse.Namespace, seed: int, hub=None) -> Population:
     return Population(WP=WP, AP=AP, PP=PP, seed=int(seed), hub=hub)
 
 
+# Takten mättes kumulativt från tick noll, vilket gör den till ett medel över
+# hela körningen i stället för ett mått på nuläget. I p124 stod den på 44,20
+# vid tick 1 000 och 22,17 vid 30 000 — och den siffran fortsatte sjunka länge
+# efter att takten planat ut, eftersom historiken dominerade. Marginaltakten i
+# slutet var 26,8 medan raden skrev 27,17.
+#
+# Fönstret är senaste rapportintervallet, alltså redan ett medel över
+# `--report-every` tick. Det kumulativa medlet står kvar bredvid, eftersom det
+# är rätt tal för frågan "hur lång tid tar resten".
+_RATE = {"tick": 0, "elapsed": 0.0}
+
+
+def tick_rate(tick: int, elapsed: float) -> tuple[float, float]:
+    """Takt över senaste intervallet, och kumulativt medel. Båda i ms/tick."""
+    prev_t = int(_RATE["tick"])
+    prev_e = float(_RATE["elapsed"])
+    d_ticks = int(tick) - prev_t
+    recent = (
+        (float(elapsed) - prev_e) / d_ticks * 1000.0
+        if d_ticks > 0 else float(elapsed) / max(1, int(tick)) * 1000.0
+    )
+    _RATE["tick"] = int(tick)
+    _RATE["elapsed"] = float(elapsed)
+    return recent, float(elapsed) / max(1, int(tick)) * 1000.0
+
+
 def gestation_state(pop: Population) -> tuple[int, float]:
     """Antal dräktiga och deras median-andel av målmassan."""
     fr = [
@@ -477,6 +503,7 @@ def gestation_state(pop: Population) -> tuple[int, float]:
 def format_stats(pop: Population, d: dict, tick: int, elapsed: float) -> str:
     nb = nutrient_balance(pop)
     ng, gfrac = gestation_state(pop)
+    recent, mean = tick_rate(tick, elapsed)
     # Varje fält bär sitt eget prefix i stället för att ligga under en
     # gruppetikett. `n_` är antal, `M_` massa i kilo torrsubstans, `N_` näring i
     # kilo. Skillnaden mot grupper är att fältet blir självbeskrivande: `grep
@@ -501,7 +528,7 @@ def format_stats(pop: Population, d: dict, tick: int, elapsed: float) -> str:
         f"N_förna={nb.get('in_litter', nb['in_detritus']):7.0f}  "
         f"n_föd={pop._births_total:4d}  n_död={pop._deaths_total:4d}  "
         f"dräkt={ng:3d}/{gfrac*100:3.0f}%  "
-        f"{elapsed / max(tick, 1) * 1000.0:.2f} ms/tick"
+        f"{recent:.2f} ms/tick (medel {mean:.2f})"
     )
 
 
@@ -582,7 +609,7 @@ def print_summary(pop: Population, d0: dict, nb0: dict, unika: int, worst_drift:
 
 
 def format_diagnostics(d: dict, tick: int, elapsed: float) -> str:
-    rate = (elapsed / max(tick, 1)) * 1000.0
+    recent, mean = tick_rate(tick, elapsed)
     return (
         f"tick {tick:7d}  t={d['t']:8.1f}  "
         f"n_fauna={d['fauna_n']:4d}  n_flora={d['flora_n']:5d}  "
@@ -592,7 +619,7 @@ def format_diagnostics(d: dict, tick: int, elapsed: float) -> str:
         # och kadavret är en egen pool. Den korta raden saknade den helt.
         f"M_förna={d['detritus_mass_kg']:.4e}  "
         f"M_kadaver={d.get('carcass_mass_kg', 0.0):.2f}  "
-        f"{rate:.2f} ms/tick"
+        f"{recent:.2f} ms/tick (medel {mean:.2f})"
     )
 
 
@@ -603,6 +630,10 @@ def run(a: argparse.Namespace, seed: int | None = None) -> int:
         instrument_mating()
         for k in _R:
             _R[k] = 0
+
+    # `--seeds` kör flera världar i samma process; fönstret får inte bära över.
+    _RATE["tick"] = 0
+    _RATE["elapsed"] = 0.0
 
     # Samma loggar som run_population.py skriver, men utan pygame. Det gör
     # live_pop_plot.py och live_world_plot.py användbara mot en
