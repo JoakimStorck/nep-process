@@ -29,6 +29,7 @@ direkt i CI eller som pre-commit-kontroll.
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import sys
 import time
@@ -114,6 +115,186 @@ def instrument_contacts() -> None:
         return out
 
     Agent._apply_reflex_drives = wrapped
+
+
+# ---------------------------------------------------------------------------
+# Styrningens bidrag.
+#
+# `turn` bär i dag både riktning och kraft i samma tal, och riktningen väljs
+# genom addition i stället för genom ett val. Nio ställen skriver additivt, på
+# formen `vikt · err/π`, och `_integrate_motion` tolkar summan som ett normerat
+# kursfel. Ett beteende som skriver `0,40 · err/π` påstår därmed inte "jag vill
+# dit med halv kraft" utan "kursfelet är 40 procent av vad det är". Riktningen
+# ljugs ned för att uttrycka svag prioritet.
+#
+# Två tal ska falla ut, och de är facit att bygga mot innan arbitreringen
+# byggs:
+#
+#   kansellering — andelen agenttick där `|turn|` är väsentligt mindre än
+#     summan av bidragens belopp. Drar två termer isär tar de ut varandra mot
+#     noll, vilket i `_integrate_motion` betyder rakt fram. Vid en T-korsning
+#     är medelvägen diket.
+#
+#   riktningsavvikelse — andelen agenttick där den vinnande grenens egen
+#     riktning skiljer sig mer än trettio grader från det `turn` som faktiskt
+#     blev efter att kyla och föda lagts på.
+#
+# Bidragen mäts som differenser runt de tre metoder som var för sig skriver i
+# `turn`, inte genom att grenlogiken replikeras här:
+#
+#   turn_mlp   ut ur `_decode_action_outputs`      tanh(y[0])
+#   Δ_kyla     in till `_apply_reflex_drives`      minus turn_mlp
+#   Δ_gren     ut ur `_apply_reflex_drives`        minus dess indata
+#   Δ_föda     ut ur `_apply_food_steering`        minus dess indata
+#
+# Summan av de fyra är per konstruktion exakt det `turn` som blir, så
+# klampningen i varje `clamp(turn + …)` ligger redan inbakad i differenserna
+# och räknas som förlorad styrvilja. Parningsgrenen skriver `turn = 0,95·bias`
+# i stället för `turn +=`, alltså kastar den MLP:n och kylan; det syns här som
+# kansellering, vilket är rätt i sak — styrviljan går förlorad.
+#
+# Att jämföra magnitud som om den vore riktning är avsiktligt. I dagens
+# semantik *är* magnituden riktning: `d_steer = frac · turn · π`, så en ändrad
+# magnitud är en ändrad riktning djuret svänger mot. Det är hela felet.
+#
+# Kvantilerna tas ur histogram i stället för sparade listor. Vid tjugo djur och
+# 80 000 tick vore en lista per mått 1,6 miljoner tal; facken kostar inget och
+# ger medianen på ett par procent när.
+#
+# Tillståndet ligger i `state`, med individens id som nyckel, inte på agenten.
+# Produktionskoden rörs alltså inte, och instrumenteringen är helt borta utan
+# `--stats`.
+_S: dict = {"agenttick": 0, "kans_n": 0, "kans_traff": 0, "kans_hist": [0] * 20,
+            "gren_n": 0, "gren_traff": 0, "avv_hist": [0] * 18,
+            "kalla": {}, "gren": {}, "state": {}}
+
+# Grenarnas nominella vikter, speglade ur `_apply_reflex_drives` och
+# `_apply_food_steering`. De används bara för att räkna ut styrningens
+# tidskonstant nedan. Att de står på två ställen är avsiktligt tillfälligt:
+# steg 3 och 4 flyttar vikterna till arbitreringen respektive styrkraften, och
+# då har raden inga hårdkodade tal kvar att spegla.
+_S_VIKTER = (("flykt", 0.95), ("jakt", 0.90), ("parning", 0.95),
+             ("flock", 0.60), ("föda", 0.36))
+
+# Reflexkedjans grenar i elif-ordning. Skild från viktlistan ovan, som också
+# bär födan — den är inte en gren utan ett påslag efter kedjan.
+_S_GRENAR = ("flykt", "jakt", "parning", "flock")
+
+_INSTRUMENTED_STEERING = False
+
+
+def _hist_median(h: list, lo: float, hi: float) -> float:
+    """Median ur jämnbreda fack, linjärt interpolerad inom det träffade."""
+    n = sum(h)
+    if n <= 0:
+        return float("nan")
+    w = (hi - lo) / len(h)
+    half = 0.5 * n
+    acc = 0
+    for i, c in enumerate(h):
+        if c > 0 and acc + c >= half:
+            return lo + w * (i + (half - acc) / c)
+        acc += c
+    return hi
+
+
+def instrument_steering() -> None:
+    """
+    Bokför varje additivt bidrag till `turn`, per agenttick.
+
+    Lindar de tre metoder som skriver i `turn`. Ingen av dem ändras, och
+    grenvalet läses ur returvärdet — `flee_state` och `hunt_state` — i stället
+    för att elif-kedjans villkor skrivs av en gång till.
+    """
+    global _INSTRUMENTED_STEERING
+    if _INSTRUMENTED_STEERING:
+        return
+    _INSTRUMENTED_STEERING = True
+
+    from agent import Agent
+
+    st = _S["state"]
+    orig_decode = Agent._decode_action_outputs
+    orig_reflex = Agent._apply_reflex_drives
+    orig_food = Agent._apply_food_steering
+
+    def turn_in(ar, kw, pos):
+        if "turn" in kw:
+            return float(kw["turn"])
+        return float(ar[pos]) if len(ar) > pos else 0.0
+
+    def wrapped_decode(self, *ar, **kw):
+        out = orig_decode(self, *ar, **kw)
+        # [turn_mlp, Δ_kyla, Δ_gren, gren]
+        st[int(getattr(self, "id", 0))] = [float(out[0]), 0.0, 0.0, ""]
+        return out
+
+    def wrapped_reflex(self, *ar, **kw):
+        t_in = turn_in(ar, kw, 0)
+        out = orig_reflex(self, *ar, **kw)
+        rec = st.get(int(getattr(self, "id", 0)))
+        if rec is None:
+            return out
+        rec[1] = t_in - rec[0]
+        rec[2] = float(out[0]) - t_in
+        if float(out[3]) > 0.5:
+            rec[3] = "flykt"
+        elif float(out[4]) > 0.5:
+            rec[3] = "jakt"
+        elif bool(kw.get("in_mating_mode", False)) and kw.get("best_mate") is not None:
+            rec[3] = "parning"
+        elif abs(rec[2]) > 1e-12:
+            # Flockgrenen kan avfyra utan att röra `turn` — då har den ingen
+            # riktning att avvika från och räknas inte som vinnare.
+            rec[3] = "flock"
+        return out
+
+    def wrapped_food(self, *ar, **kw):
+        t_in = turn_in(ar, kw, 1)
+        out = orig_food(self, *ar, **kw)
+        rec = st.pop(int(getattr(self, "id", 0)), None)
+        if rec is None:
+            return out
+
+        t_fin = float(out[0])
+        b = (abs(rec[0]), abs(rec[1]), abs(rec[2]), abs(t_fin - t_in))
+        tot = b[0] + b[1] + b[2] + b[3]
+
+        _S["agenttick"] += 1
+        for namn, v in zip(("mlp", "kyla", "gren", "föda"), b):
+            if v > 1e-12:
+                e = _S["kalla"].setdefault(namn, [0, 0.0])
+                e[0] += 1
+                e[1] += v
+
+        # Brusgolvet håller borta tick där ingen vill någonstans: en summa på
+        # några tusendelar kan ta ut sig själv fullständigt utan att det
+        # betyder något.
+        if tot > 0.02:
+            _S["kans_n"] += 1
+            f = 1.0 - abs(t_fin) / tot
+            _S["kans_hist"][min(19, max(0, int(f * 20.0)))] += 1
+            if abs(t_fin) < 0.5 * tot:
+                _S["kans_traff"] += 1
+
+        gren = rec[3]
+        if gren:
+            _S["gren_n"] += 1
+            d = (t_fin - rec[2]) * math.pi
+            d = abs((d + math.pi) % (2.0 * math.pi) - math.pi)
+            grader = d * 180.0 / math.pi
+            _S["avv_hist"][min(17, int(grader / 10.0))] += 1
+            e = _S["gren"].setdefault(gren, [0, 0])
+            e[0] += 1
+            if grader > 30.0:
+                _S["gren_traff"] += 1
+                e[1] += 1
+        return out
+
+    Agent._decode_action_outputs = wrapped_decode
+    Agent._apply_reflex_drives = wrapped_reflex
+    Agent._apply_food_steering = wrapped_food
+
 
 _INSTRUMENTED = False
 
@@ -663,6 +844,50 @@ def print_summary(pop: Population, d0: dict, nb0: dict, unika: int, worst_drift:
               f"     såg partner men parade inte {_R['sag_men_parade_ej']:5d}")
         print(f"    täthet {d['fauna_n'] / max(1, n_cells) * 1000.0:.2f} agenter per 1000 celler")
 
+    if _S["agenttick"]:
+        n = _S["agenttick"]
+        print(f"\n  styrning     {n} agenttick genom hela styrkedjan")
+        if _S["kans_n"]:
+            med = _hist_median(_S["kans_hist"], 0.0, 1.0)
+            print(f"    kansellering  {100 * _S['kans_traff'] / _S['kans_n']:5.1f} % av "
+                  f"tickarna tappar över hälften av styrviljan, median "
+                  f"{100 * med:.0f} % av bidragens belopp")
+        if _S["gren_n"]:
+            medg = _hist_median(_S["avv_hist"], 0.0, 180.0)
+            print(f"    riktning      {100 * _S['gren_traff'] / _S['gren_n']:5.1f} % av "
+                  f"tickarna styr mer än 30° från vinnande grenens egen "
+                  f"riktning, median {medg:.0f}°")
+            for k in _S_GRENAR:
+                e = _S["gren"].get(k)
+                if e and e[0]:
+                    print(f"      {k:<8} vann {e[0]:8d} tick, "
+                          f"{100 * e[1] / e[0]:5.1f} % avviker")
+        for k in ("mlp", "kyla", "gren", "föda"):
+            e = _S["kalla"].get(k)
+            if e and e[0]:
+                print(f"      {k:<8} skrev {100 * e[0] / n:5.1f} % av tickarna, "
+                      f"medelbelopp {e[1] / e[0]:.3f}")
+
+        # Loopbandbredden är i dag en bieffekt av prioritetsvikten: ett
+        # beteende som skriver `w · err/π` rätar ut kursfelet med
+        # tidskonstanten `1/(frac · w)` tick. Kvoten mot mediankontakten är
+        # måttet steg 4 ska kalibrera styrkraften mot — en flock kan inte
+        # bildas om djuret svänger långsammare än mötet varar.
+        AP = pop.agents[0].AP if pop.agents else None
+        if AP is not None:
+            dt_w = float(pop.WP.dt)
+            frac = 1.0 - math.exp(-float(AP.turn_gain) * dt_w)
+            rader = ", ".join(f"{k} {1.0 / (frac * w):.0f}" for k, w in _S_VIKTER)
+            print(f"    bandbredd    frac {frac:.3f} per tick "
+                  f"(turn_gain {float(AP.turn_gain):.1f}, dt {dt_w:.3f})")
+            print(f"      tidskonstant vid full vikt: {rader} tick")
+            L2 = np.asarray(_C["langder"], dtype=np.float64)
+            if L2.size:
+                kont = float(np.median(L2))
+                tau_flock = 1.0 / (frac * 0.60)
+                print(f"      mot mediankontakt {kont:.0f} tick — kvot "
+                      f"{tau_flock / max(1e-9, kont):.1f} för flocken")
+
     print(f"\n  näring (kg)  fri {nb['free']:.2f}  flora {nb['in_flora']:.2f}  "
           f"fauna {nb['in_fauna']:.2f}  förna {nb.get('in_litter', nb['in_detritus']):.2f}  "
           f"kadaver {nb.get('in_carcass', 0.0):.2f}")
@@ -718,6 +943,7 @@ def run(a: argparse.Namespace, seed: int | None = None) -> int:
     if a.stats:
         instrument_mating()
         instrument_contacts()
+        instrument_steering()
         for k in _R:
             _R[k] = 0
 
@@ -732,6 +958,22 @@ def run(a: argparse.Namespace, seed: int | None = None) -> int:
     _C["kontakter"] = 0
     _C["langder"] = []
     _C["state"] = {}
+    # Per körning, som `_C` — inte vid avläsning, som `gestation_window()`.
+    # Hamnar en räknare i det andra mönstret är den alltid noll när blocket
+    # ska skrivas ut, och blocket hoppas tyst över.
+    _S["agenttick"] = 0
+    _S["kans_n"] = 0
+    _S["kans_traff"] = 0
+    _S["kans_hist"] = [0] * 20
+    _S["gren_n"] = 0
+    _S["gren_traff"] = 0
+    _S["avv_hist"] = [0] * 18
+    _S["kalla"] = {}
+    _S["gren"] = {}
+    # In-place: wrappern band `st = _S["state"]` vid installationen, så en
+    # ombindning här hade lämnat den kvar på den gamla dicten och burit över
+    # tillstånd mellan seeds i `--seeds`.
+    _S["state"].clear()
 
     # Samma loggar som run_population.py skriver, men utan pygame. Det gör
     # live_pop_plot.py och live_world_plot.py användbara mot en
