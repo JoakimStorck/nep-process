@@ -416,28 +416,30 @@ class Population:
         if self._fauna_pending == 0:
             self.seed_fauna(int(self.PP.init_pop))
 
-        fauna_mass0 = float(sum(
-            float(x.body.M) + x.body.M_reserve()
-            for x in self.agents if x.body.alive
-        ))
-        if fauna_mass0 <= 0.0:
-            # Sådden skalas mot **markens bördighet**, inte mot konsumenterna.
-            #
-            # Kopplingen till `fauna_mass0` har nu brustit fyra gånger: vid
-            # fördröjd fauna, vid ändrad världsstorlek, vid ändrad init_pop och
-            # senast vid `--init_pop 0`, där en floraköring utan djur sådde en
-            # enda planta på 7,64 kg och därmed mätte ingenting alls.
-            #
-            # Rätt storhet fanns hela tiden. Sedan 0087 köps sådden ur den fria
-            # näringspoolen, så taket är redan bördigheten — det här gör det
-            # till *målet* i stället för till en spärr. En värld med
-            # `nutrient_init` = 0,117 och 16 384 celler bär 1 917 kg näring,
-            # vilket vid typisk stökiometri räcker till omkring 108 000 kg
-            # vävnad mot jämviktens uppmätta 118 100.
-            free_n = float(np.sum(np.asarray(self.world.nutrient), dtype=np.float64))
-            target = free_n / max(1e-9, nutrient_content(0.5))
-        else:
-            target = float(self.PP.flora_init_mass_ratio) * fauna_mass0
+        # Sådden skalas mot **markens bördighet**, inte mot konsumenterna.
+        #
+        # Kopplingen till `fauna_mass0` har brustit fem gånger: vid fördröjd
+        # fauna, vid ändrad världsstorlek, vid ändrad init_pop, vid
+        # `--init_pop 0` där en floraköring sådde en enda planta på 7,64 kg —
+        # och senast när insättning vid tick 0 i stället för vid jämvikt gav en
+        # fjärdedels värld, eftersom grundarna då hann bli till före sådden och
+        # den andra grenen därmed togs.
+        #
+        # Det var vilseledande på ett värre sätt än de fyra tidigare: samtliga
+        # körningar från p114 till p126 sätter in faunan vid jämvikt och hade
+        # alltså **noll** agenter vid sådden. De använde redan bördighetsmålet.
+        # Kvoten gällde i praktiken bara körningar med fauna från start, alltså
+        # rökproven — två olika världar för samma scenario, beroende på en
+        # flagga som inte handlar om floran.
+        #
+        # Rätt storhet fanns hela tiden. Sedan 0087 köps sådden ur den fria
+        # näringspoolen, så taket är redan bördigheten — det här gör det till
+        # *målet* i stället för till en spärr. En värld med `nutrient_init` =
+        # 0,117 och 16 384 celler bär 1 917 kg näring, vilket vid typisk
+        # stökiometri räcker till omkring 108 000 kg vävnad mot jämviktens
+        # uppmätta 118 100.
+        free_n = float(np.sum(np.asarray(self.world.nutrient), dtype=np.float64))
+        target = free_n / max(1e-9, nutrient_content(0.5))
 
         _ = self._seed_initial_flora(target_mass=target)
         self.store.rebuild_spatial_index()

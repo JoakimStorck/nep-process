@@ -2159,6 +2159,29 @@ Fönstret nollställs vid avläsning och per körning.
 
 **Fallgropen är generell.** Varje mått som samplas vid rapporttillfället och beskriver något årstidsbundet — dräktighet, tillväxt, temperaturgrind — riskerar samma svävning så länge `--report-every · dt` inte är en multipel av `year_len`. Vid dt 0,02 och tolv månaders år är 600 tick ett år.
 
+### Sådden hade två regler beroende på när faunan sattes in
+
+*0130. Bördighetsmålet gäller alltid. Nytt scenario `f4-start20`.*
+
+Sådden skalades mot `flora_init_mass_ratio · fauna_mass0` när det fanns agenter vid världens skapelse, och mot markens bördighet när det inte gjorde det. Kommentaren i koden listade redan fyra tillfällen då kvoten brustit och slog fast att bördighetsmålet var rätt storhet — men den låg kvar som huvudregel.
+
+Femte gången: ett scenario med `insatts_vid: start` i stället för `jamvikt` gav **en fjärdedels värld**, eftersom grundarna hann bli till före sådden och den andra grenen därmed togs. 58 480 plantor mot 317 246.
+
+Det värre fyndet ligger bakom det. **Samtliga körningar från p114 till p126 sätter in faunan vid jämvikt och hade alltså noll agenter vid sådden.** De använde redan bördighetsmålet. Kvoten gällde i praktiken bara körningar med fauna från start — alltså rökproven — så samma scenario byggde två olika världar beroende på en flagga som inte handlar om floran.
+
+Nu gäller bördighetsmålet i båda fallen:
+
+```
+f4-flock   (80 djur, jämvikt)   317 246 plantor   4,1583e5 kg
+f4-start20 (20 djur, start)     317 336 plantor   4,1577e5 kg
+```
+
+Skillnaden på 0,03 procent är att `seed_fauna` drar ur samma slumpström före sådden och förskjuter den. Att göra floran bitidentiskt oberoende av faunan kräver en egen ström för sådden, vilket skulle ändra utgångsläget i **alla** tidigare körningar och göra dem ojämförbara. Det är inte värt 0,03 procent.
+
+`scenarios/f4-start20.yaml` är f4-flock med tjugo djur insatta vid tick 0. Ingen kompensation behövs.
+
+**Kvar att veta om:** floran är inte i jämvikt vid tick 0. Sådden ligger över jämvikten och självgallrar — 204 640 plantor vid tick 1 000, botten 70 782 vid tick 6 000, jämvikt 102 205 vid 17 000. Faunan möter alltså en födobas som faller till en tredjedel under sina första sextusen tick, av skäl som inte har med betningen att göra. Det är en verklig skillnad mot p126, inte ett fel.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*
