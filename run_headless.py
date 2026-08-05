@@ -137,7 +137,24 @@ def instrument_contacts() -> None:
 #
 #   riktningsavvikelse — andelen agenttick där den vinnande grenens egen
 #     riktning skiljer sig mer än trettio grader från det `turn` som faktiskt
-#     blev efter att kyla och föda lagts på.
+#     blev efter att kyla och föda lagts på. Trettio grader är ett mjukt mått:
+#     en avvikelse dit kan vara oskyldig. Nittio kan den inte vara — då styr
+#     djuret in i fel halvplan mot vad grenen ville — och andelen över nittio
+#     redovisas därför vid sidan av.
+#
+# **Kanselleringen behöver en nollhypotes.** Fyra bidrag med oberoende tecken
+# tar ut varandra av sig själva; utan att veta vad ofarlig addition ger går
+# talet inte att tolka. Nollfördelningen håller beloppen fasta och randomiserar
+# tecknen — men den *räknas upp exakt* i stället för att dras. Med fyra bidrag
+# finns sexton teckenmönster, åtta upp till en global spegling som inte ändrar
+# `|Σ|`. Åtta additioner per tick är billigare än ett enda dragningsanrop och
+# har ingen Monte Carlo-brusnivå alls, till skillnad från permutationsnivån i
+# `genopheno_analyze.py` där rummet är för stort för uppräkning.
+#
+# Nollfördelningen inkluderar det observerade mönstret som ett av åtta fall.
+# Det är avsiktligt: frågan är inte om additionen kancellerar mer än slumpen i
+# någon strikt mening utan hur mycket av den uppmätta kanselleringen som är en
+# egenskap hos konstruktionen snarare än hos beteendet.
 #
 # Bidragen mäts som differenser runt de tre metoder som var för sig skriver i
 # `turn`, inte genom att grenlogiken replikeras här:
@@ -165,8 +182,14 @@ def instrument_contacts() -> None:
 # Produktionskoden rörs alltså inte, och instrumenteringen är helt borta utan
 # `--stats`.
 _S: dict = {"agenttick": 0, "kans_n": 0, "kans_traff": 0, "kans_hist": [0] * 20,
-            "gren_n": 0, "gren_traff": 0, "avv_hist": [0] * 18,
+            "null_traff": 0.0, "null_hist": [0.0] * 20,
+            "gren_n": 0, "gren_traff": 0, "gren_traff90": 0, "avv_hist": [0] * 18,
             "kalla": {}, "gren": {}, "state": {}}
+
+# De åtta teckenmönstren, första tecknet fixerat till +. `|Σ|` är oförändrat
+# under global spegling, så de resterande åtta är dubletter.
+_S_TECKEN = ((1, 1, 1), (1, 1, -1), (1, -1, 1), (1, -1, -1),
+             (-1, 1, 1), (-1, 1, -1), (-1, -1, 1), (-1, -1, -1))
 
 # Grenarnas nominella vikter, speglade ur `_apply_reflex_drives` och
 # `_apply_food_steering`. De används bara för att räkna ut styrningens
@@ -277,6 +300,17 @@ def instrument_steering() -> None:
             if abs(t_fin) < 0.5 * tot:
                 _S["kans_traff"] += 1
 
+            # Nollfördelningen: samma belopp, alla teckenmönster, en åttondel
+            # vikt vardera.
+            b0, b1, b2, b3 = b
+            nh = _S["null_hist"]
+            for s1, s2, s3 in _S_TECKEN:
+                sn = abs(b0 + s1 * b1 + s2 * b2 + s3 * b3)
+                fn = 1.0 - sn / tot
+                nh[min(19, max(0, int(fn * 20.0)))] += 0.125
+                if sn < 0.5 * tot:
+                    _S["null_traff"] += 0.125
+
         gren = rec[3]
         if gren:
             _S["gren_n"] += 1
@@ -284,11 +318,14 @@ def instrument_steering() -> None:
             d = abs((d + math.pi) % (2.0 * math.pi) - math.pi)
             grader = d * 180.0 / math.pi
             _S["avv_hist"][min(17, int(grader / 10.0))] += 1
-            e = _S["gren"].setdefault(gren, [0, 0])
+            e = _S["gren"].setdefault(gren, [0, 0, 0])
             e[0] += 1
             if grader > 30.0:
                 _S["gren_traff"] += 1
                 e[1] += 1
+            if grader > 90.0:
+                _S["gren_traff90"] += 1
+                e[2] += 1
         return out
 
     Agent._decode_action_outputs = wrapped_decode
@@ -848,20 +885,30 @@ def print_summary(pop: Population, d0: dict, nb0: dict, unika: int, worst_drift:
         n = _S["agenttick"]
         print(f"\n  styrning     {n} agenttick genom hela styrkedjan")
         if _S["kans_n"]:
+            n_k = _S["kans_n"]
             med = _hist_median(_S["kans_hist"], 0.0, 1.0)
-            print(f"    kansellering  {100 * _S['kans_traff'] / _S['kans_n']:5.1f} % av "
+            med0 = _hist_median(_S["null_hist"], 0.0, 1.0)
+            print(f"    kansellering  {100 * _S['kans_traff'] / n_k:5.1f} % av "
                   f"tickarna tappar över hälften av styrviljan, median "
                   f"{100 * med:.0f} % av bidragens belopp")
+            print(f"      nollhypotes {100 * _S['null_traff'] / n_k:5.1f} % och "
+                  f"{100 * med0:.0f} % vid slumpmässiga tecken och samma belopp "
+                  f"— överskott {100 * (_S['kans_traff'] - _S['null_traff']) / n_k:+.1f} "
+                  f"respektive {100 * (med - med0):+.0f} enheter")
         if _S["gren_n"]:
+            n_g = _S["gren_n"]
             medg = _hist_median(_S["avv_hist"], 0.0, 180.0)
-            print(f"    riktning      {100 * _S['gren_traff'] / _S['gren_n']:5.1f} % av "
+            print(f"    riktning      {100 * _S['gren_traff'] / n_g:5.1f} % av "
                   f"tickarna styr mer än 30° från vinnande grenens egen "
                   f"riktning, median {medg:.0f}°")
+            print(f"      över 90°, alltså in i fel halvplan: "
+                  f"{100 * _S['gren_traff90'] / n_g:5.1f} %")
             for k in _S_GRENAR:
                 e = _S["gren"].get(k)
                 if e and e[0]:
                     print(f"      {k:<8} vann {e[0]:8d} tick, "
-                          f"{100 * e[1] / e[0]:5.1f} % avviker")
+                          f"{100 * e[1] / e[0]:5.1f} % över 30°, "
+                          f"{100 * e[2] / e[0]:5.1f} % över 90°")
         for k in ("mlp", "kyla", "gren", "föda"):
             e = _S["kalla"].get(k)
             if e and e[0]:
@@ -972,8 +1019,11 @@ def run(a: argparse.Namespace, seed: int | None = None) -> int:
     _S["kans_n"] = 0
     _S["kans_traff"] = 0
     _S["kans_hist"] = [0] * 20
+    _S["null_traff"] = 0.0
+    _S["null_hist"] = [0.0] * 20
     _S["gren_n"] = 0
     _S["gren_traff"] = 0
+    _S["gren_traff90"] = 0
     _S["avv_hist"] = [0] * 18
     _S["kalla"] = {}
     _S["gren"] = {}
