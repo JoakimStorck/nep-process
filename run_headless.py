@@ -248,6 +248,53 @@ _S_GRENAR = ("flykt", "jakt", "parning", "flock")
 # sådan väg ut och mäts när arbitreringen ger dem en.
 _S_STYRKOR = ("flykt", "jakt")
 
+# Råa storheter och styrkor som ännu inte har någon väg ut ur styrkedjan.
+#
+# Två skäl. Flyktens styrka mättar vid `flee_score_sat`, så histogrammet över
+# den kan inte visa hur långt svansen når — och 4,3 % av hoten låg i det
+# översta facket i p144. Mättnaden går alltså inte att välja ur den mätningen.
+# Råpoängen mäts därför oklippt.
+#
+# Och λ ska väga flock mot föda mot kyla. Utan deras fördelningar är valet av
+# λ en gissning, och trappan gör då bara det skalskillnaden redan gjorde.
+#
+# Allt utom födan och kylan räknas ur argument som redan skickas in i
+# `_apply_reflex_drives`. Formlerna hämtas ur `styrning` — samma definition som
+# styrpassen använder, inte en andra kopia. Det enda som upprepas här är valet
+# mellan sett och ihågkommet grannavstånd, som är en selektion mellan två
+# befintliga värden och inte en formel.
+#
+# namn -> [n, min, max, summa, hist, lo, hi]
+_S_RA: dict = {}
+_S_RA_SPANN = {
+    "hotpoäng rå": (0.0, 0.6),
+    "jaktanlag rå": (0.0, 1.0),
+    "separation": (0.0, 1.0),
+    "kohesion": (0.0, 1.0),
+    "alignment": (0.0, 1.0),
+    # Födan får dubbelt spann. `sig` ur sektoraggregatet är **inte** normerad,
+    # så styrkan går över ett — uppmätt 1,059 redan i en liten värld. Det är
+    # precis den sortens skalfel λ inte överlever, och det syns bara om
+    # histogrammet räcker förbi ett.
+    "föda": (0.0, 2.0),
+    "kyla": (0.0, 1.0),
+}
+
+
+def _ra(namn: str, v: float) -> None:
+    lo, hi = _S_RA_SPANN[namn]
+    e = _S_RA.get(namn)
+    if e is None:
+        e = [0, float("inf"), float("-inf"), 0.0, [0] * 20]
+        _S_RA[namn] = e
+    e[0] += 1
+    if v < e[1]:
+        e[1] = v
+    if v > e[2]:
+        e[2] = v
+    e[3] += v
+    e[4][min(19, max(0, int((v - lo) / (hi - lo) * 20.0)))] += 1
+
 _INSTRUMENTED_STEERING = False
 
 
@@ -306,6 +353,25 @@ def instrument_steering() -> None:
         rec[1] = t_in - rec[0]
         rec[2] = float(out[0]) - t_in
         rec[4] = float(out[0])
+
+        import styrning as _st
+        bts = kw.get("best_threat_score")
+        if bts is not None and float(bts) > float(self.AP.flee_score_min):
+            _ra("hotpoäng rå", float(bts))
+        he = kw.get("hunt_eff")
+        if he is not None and float(he) >= float(self.AP.predator_trait_min):
+            _ra("jaktanlag rå", float(he))
+
+        _N = float(kw.get("N", 0.0))
+        _mem = kw.get("neighbour_memory")
+        if _N > 0.5 or _mem is not None:
+            nd = float(kw.get("Nd", 1.0)) if _N > 0.5 else float(_mem[1])
+            sb = 2.0 * float(kw.get("soc", 0.5)) - 1.0
+            if nd < _st.REP_ZONE:
+                _ra("separation", _st.styrka_separation(nd, _st.REP_ZONE))
+            else:
+                _ra("kohesion", _st.styrka_kohesion(sb, nd))
+                _ra("alignment", _st.styrka_alignment(sb, nd))
         for namn, v in (("flykt", float(out[3])), ("jakt", float(out[4]))):
             if v > 0.0:
                 h = _S["styrka"].setdefault(namn, [0] * 20)
@@ -324,6 +390,21 @@ def instrument_steering() -> None:
 
     def wrapped_food(self, *ar, **kw):
         t_in = turn_in(ar, kw, 1)
+
+        # Födans styrka mäts **före** anropet och oberoende av flyktgrinden.
+        # I dag släcks födotermen under flykt, men under arbitrering är föda en
+        # kandidat även då — den förlorar, den försvinner inte. Det är den
+        # fördelningen λ ska vägas mot.
+        import styrning as _st
+        _sens = getattr(self, "sensors", None)
+        _aB = getattr(_sens, "_acc_dir_B", None) if _sens is not None else None
+        _aC = getattr(_sens, "_acc_dir_C", None) if _sens is not None else None
+        _h = float(self.body.hunger())
+        if _aB is not None and _aC is not None and len(_aB) > 0 and _h > 0.4:
+            _sig, _ = _st.foda_signal(_aB, _aC, float(getattr(self.pheno, "diet", 0.5)))
+            if _sig > 0.05:
+                _ra("föda", _st.styrka_foda_normerad(_h, _sig))
+
         out = orig_food(self, *ar, **kw)
         rec = st.pop(int(getattr(self, "id", 0)), None)
         if rec is None:
@@ -405,6 +486,19 @@ def instrument_steering() -> None:
                 w[5] += 1
         return out
 
+    orig_plan = Agent.plan_actions
+
+    def wrapped_plan(self, world, *ar, **kw):
+        import styrning as _st
+        _ca = float(getattr(self.pheno, "cold_aversion", 0.0))
+        if _ca > 1e-6 and hasattr(world, "temperature_at"):
+            _stress = _st.kold_stress(float(self.AP.Tb_set),
+                                      float(world.temperature_at(self.x, self.y)))
+            if _stress > 1e-6:
+                _ra("kyla", _ca * _stress)
+        return orig_plan(self, world, *ar, **kw)
+
+    Agent.plan_actions = wrapped_plan
     Agent._decode_action_outputs = wrapped_decode
     Agent._apply_reflex_drives = wrapped_reflex
     Agent._apply_food_steering = wrapped_food
@@ -1011,6 +1105,12 @@ def print_summary(pop: Population, d0: dict, nb0: dict, unika: int, worst_drift:
                 print(f"    styrkan {k:<6} n {n_h:8d}  median "
                       f"{_hist_median(h, 0.0, 1.0):.2f}  spann {lo:.2f}–{hi:.2f}"
                       f"  mättad {100 * h[19] / n_h:.1f} %")
+        for k in _S_RA_SPANN:
+            e = _S_RA.get(k)
+            if e and e[0]:
+                lo, hi = _S_RA_SPANN[k]
+                print(f"    {k:<13} n {e[0]:8d}  median {_hist_median(e[4], lo, hi):.3f}"
+                      f"  medel {e[3] / e[0]:.3f}  spann {e[1]:.3f}–{e[2]:.3f}")
         for k in ("mlp", "kyla", "gren", "föda"):
             e = _S["kalla"].get(k)
             if e and e[0]:
@@ -1135,6 +1235,7 @@ def run(a: argparse.Namespace, seed: int | None = None) -> int:
     # tillstånd mellan seeds i `--seeds`.
     _S["state"].clear()
     _S["styrka"] = {}
+    _S_RA.clear()
 
     # Samma loggar som run_population.py skriver, men utan pygame. Det gör
     # live_pop_plot.py och live_world_plot.py användbara mot en

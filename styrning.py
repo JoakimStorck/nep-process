@@ -80,6 +80,11 @@ NIVA_UTFORSKNING = 7
 N_NIVAER = 7
 
 
+# Repulsionszonens gräns i normerat grannavstånd. Flockens tre regler delar på
+# den: innanför gäller separation, utanför kohesion och kursanpassning.
+REP_ZONE = 0.35
+
+
 # --- Dagens amplituder ----------------------------------------------------
 #
 # Vikterna är oförändrade och står här bara för att de ska ha ett ställe. I
@@ -230,3 +235,46 @@ def alignment_vikt(w: float) -> float:
     Mättnaden är formell — uttrycket når exakt ett vid `w = 0,5`.
     """
     return 4.0 * w * (1.0 - w)
+
+
+def styrka_kohesion(soc_bias: float, nd: float, rep_zone: float = REP_ZONE) -> float:
+    """
+    Sammanhållningen som **belopp**, 0–1: sällskapligheten gånger
+    avståndsvikten.
+
+    `soc_bias = 2·sociability − 1` är tecknad, och negativ betyder undvikande.
+    Under arbitrering finns ingen negativ styrka — ett anspråk med omvänt
+    tecken är ett anspråk på motsatt bäring. Beloppet hör alltså till styrkan
+    och tecknet till bäringen.
+
+    Anropas ännu inte från styrpassen, av skälet i modulens docstring: den
+    bildar produkten `|soc_bias| · wcoh`, och det byter association mot dagens
+    `(0,40 · soc_bias) · wcoh`. Den mäts däremot, och tas i bruk i steg 3.
+    """
+    return abs(soc_bias) * avstandsvikt(nd, rep_zone)
+
+
+def styrka_alignment(soc_bias: float, nd: float, rep_zone: float = REP_ZONE) -> float:
+    """
+    Kursanpassningen som belopp, 0–1. Samma villkor som ovan.
+
+    Gäller grannvarianten. Gruppvarianten saknar avståndsvikten helt och är
+    därför i genomsnitt starkare — den asymmetrin står i modulens docstring och
+    ska lösas i steg 3.
+    """
+    return abs(soc_bias) * alignment_vikt(avstandsvikt(nd, rep_zone))
+
+
+def foda_signal(accB, accC, diet: float):
+    """
+    Födosignalen ur sektoraggregatet: `(styrka, sektorindex)`.
+
+    Örtätande och asätande effektivitet viktar var sitt aggregat. Uttrycket är
+    oförändrat och ligger här för att styrpasset och mätningen ska läsa samma
+    definition — inte två.
+    """
+    herb_eff = (1.0 - diet) ** 0.7
+    scav_eff = diet ** 0.7
+    combo = accB * herb_eff + accC * scav_eff
+    i_best = int(combo.argmax())
+    return float(combo[i_best]), i_best

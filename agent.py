@@ -2674,7 +2674,7 @@ class Agent:
             # Alignment är regeln som omvandlar ett möte till ett sällskap.
             # Riktningen ett djur rör sig i är observerbar — den läses ur
             # motpartens kurs, inte ur dess arvsmassa.
-            REP_ZONE = 0.35
+            REP_ZONE = styrning.REP_ZONE
             soc_bias = 2.0 * soc - 1.0
             if Nd_f < REP_ZONE:
                 rs = styrning.styrka_separation(Nd_f, REP_ZONE)
@@ -2792,12 +2792,7 @@ class Agent:
     
                 if accB is not None and accC is not None and ang is not None and len(accB) > 0:
                     _diet = float(getattr(self.pheno, "diet", 0.5))
-                    herb_eff = (1.0 - _diet) ** 0.7
-                    scav_eff = _diet ** 0.7
-    
-                    combo = accB * herb_eff + accC * scav_eff
-                    i_best = int(np.argmax(combo))
-                    sig = float(combo[i_best])
+                    sig, i_best = styrning.foda_signal(accB, accC, _diet)
     
                     if sig > 0.05:
                         food_angle = float(ang[i_best]) + float(self.heading)
