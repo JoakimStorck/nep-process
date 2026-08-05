@@ -2252,6 +2252,28 @@ Nio av tio möten sker mellan två parningsberedda djur, så partnergrenen tar d
 
 Det verkliga svaret ligger i de tre andra talen. Djuren är ensamma 96,6 procent av tiden, de **närmar sig** varandra när de möts, och sedan finns ingenting som håller dem kvar: söktillståndet återinträder så snart sikten bryts, och flockningen är svag med avsikt — nitton procent tätare än slumpen. Sensingen hjälper inte heller: i vila går tio tick mellan två avläsningar, alltså 5,6 celler av en synvidd på tolv.
 
+### Kontaktens varaktighet
+
+*0135. Mätning innan mekanik.*
+
+Frågan *slår de följe när de möts* gick inte att svara på. Kvoten mot Poisson mäter momentan täthet och låg på 0,95 till 1,03 oavsett vad flockningen gjorde — och när en affinitetsmekanism prövades gav den 0,950 mot 0,973 med spridningen 0,936–0,987 inom respektive grupp. Måttet kunde inte skilja effekt från brus.
+
+Det som saknades var **varaktigheten**. Ett möte som varar en tick är ingen flock.
+
+Ett möte är en obruten följd av tick där samma artfrände ligger i `_cached_agent_hit`. Byter motparten identitet, eller försvinner den, stängs mötet och längden bokförs. Tre tal faller ut:
+
+```
+kontakt      977 avslutade möten, 1.450 per djur och månad
+             längd median 0.14 mån, p90 0.38, max 1.6
+             sällskap 29.1 % av agenttickarna
+```
+
+Medianmötet varar alltså **sju tick** — 0,14 månader — mot en synvidd på åtta cellbredder och en fart på 0,43 celler per tick. De passerar varandra. Det förklarar också varför Poisson-kvoten var okänslig: djuren har någon inom synhåll 29 procent av tiden, men nästan alltid en ny någon.
+
+Tillståndet ligger i en dict med individens id som nyckel, inte på agenten, så instrumenteringen rör ingen produktionskod och är helt borta utan `--stats`.
+
+**En fälla värd att minnas.** Nollställningen hamnade först i `gestation_window()`, som nollställer vid avläsning — alltså anropad av `format_stats` precis före utskriften. Räknarna var därför alltid noll när de skulle skrivas, och blocket hoppades tyst över. Två nollställningsmönster i samma fil, ett vid avläsning och ett per körning, och de ser likadana ut.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*

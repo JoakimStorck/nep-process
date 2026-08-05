@@ -53,6 +53,68 @@ from invariants import check_all, diagnostics, fauna_spacing, nutrient_balance
 
 _R = {"agenttick": 0, "redo": 0, "ser_ingen": 0, "utanfor_radie": 0,
       "sag_men_parade_ej": 0, "parning": 0}
+
+# Kontaktmätning. Frågan "slår de följe när de möts" går inte att svara på med
+# ett ögonblicksmått: kvoten mot Poisson mäter momentan täthet och låg på 0,95
+# till 1,03 oavsett vad flockningen gjorde. Det som saknades var
+# **varaktigheten** — hur länge en artfrände stannar inom synhåll efter första
+# kontakten.
+#
+# Tillståndet ligger i `state`, med individens id som nyckel, inte på agenten.
+# Då rör instrumenteringen ingen produktionskod och är helt borta utan
+# `--stats`.
+_C: dict = {"agenttick": 0, "i_kontakt": 0, "kontakter": 0,
+            "langder": [], "state": {}}
+_INSTRUMENTED_CONTACTS = False
+
+
+def instrument_contacts() -> None:
+    """
+    Räkna möten och deras längd, per agenttick.
+
+    Ett möte är en obruten följd av tick där samma artfrände ligger i
+    `_cached_agent_hit`. Byter motparten identitet, eller försvinner den,
+    stängs mötet och längden bokförs.
+
+    Två tal faller ut: hur ofta djuren möts och hur länge de stannar. Det är
+    det andra som säger om affiniteten gör något — ett möte som varar en tick
+    är ingen flock.
+    """
+    global _INSTRUMENTED_CONTACTS
+    if _INSTRUMENTED_CONTACTS:
+        return
+    _INSTRUMENTED_CONTACTS = True
+
+    from agent import Agent
+
+    orig = Agent._apply_reflex_drives
+    st = _C["state"]
+
+    def wrapped(self, *ar, **kw):
+        out = orig(self, *ar, **kw)
+        _C["agenttick"] += 1
+        hit = getattr(self, "_cached_agent_hit", None)
+        nid = 0
+        if isinstance(hit, tuple) and len(hit) >= 5:
+            hit_slot, did = hit[3], hit[4]
+            if int(hit_slot) >= 0 and int(did) > 0:
+                nid = int(did)
+        key = int(getattr(self, "id", 0))
+        prev_id, prev_n = st.get(key, (0, 0))
+        if nid and nid == prev_id:
+            st[key] = (nid, prev_n + 1)
+            _C["i_kontakt"] += 1
+        else:
+            if prev_id and prev_n > 0:
+                _C["langder"].append(prev_n)
+                _C["kontakter"] += 1
+            st[key] = (nid, 1 if nid else 0)
+            if nid:
+                _C["i_kontakt"] += 1
+        return out
+
+    Agent._apply_reflex_drives = wrapped
+
 _INSTRUMENTED = False
 
 
@@ -582,6 +644,18 @@ def print_summary(pop: Population, d0: dict, nb0: dict, unika: int, worst_drift:
                   f"{sp['fauna_nn_poisson']:.2f} vid slump; synellipsen täcker "
                   f"{sp['fauna_sense_area']:.0f} av {int(pop.grid.n_cells)} celler")
 
+    if _C["agenttick"]:
+        dt = float(pop.WP.dt)
+        L = np.asarray(_C["langder"], dtype=np.float64)
+        rate = _C["kontakter"] / max(1e-9, _C["agenttick"] * dt)
+        print(f"\n  kontakt      {_C['kontakter']} avslutade möten, "
+              f"{rate:.3f} per djur och månad")
+        if L.size:
+            print(f"               längd median {np.median(L) * dt:.2f} mån, "
+                  f"p90 {np.percentile(L, 90) * dt:.2f}, max {L.max() * dt:.1f}")
+        print(f"               sällskap {100 * _C['i_kontakt'] / _C['agenttick']:.1f} % "
+              f"av agenttickarna")
+
         print(f"\n  reproduktion {100 * _R['redo'] / _R['agenttick']:.1f} % av agenttickarna är klara")
         print(f"    ser ingen alls {100 * _R['ser_ingen'] / redo:5.1f} %"
               f"   utanför parningsradie {100 * _R['utanfor_radie'] / redo:5.1f} %")
@@ -643,6 +717,7 @@ def run(a: argparse.Namespace, seed: int | None = None) -> int:
 
     if a.stats:
         instrument_mating()
+        instrument_contacts()
         for k in _R:
             _R[k] = 0
 
@@ -652,6 +727,11 @@ def run(a: argparse.Namespace, seed: int | None = None) -> int:
     _GEST["sum"] = 0.0
     _GEST["ticks"] = 0
     _GEST["peak"] = 0
+    _C["agenttick"] = 0
+    _C["i_kontakt"] = 0
+    _C["kontakter"] = 0
+    _C["langder"] = []
+    _C["state"] = {}
 
     # Samma loggar som run_population.py skriver, men utan pygame. Det gör
     # live_pop_plot.py och live_world_plot.py användbara mot en
