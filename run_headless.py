@@ -477,24 +477,29 @@ def gestation_state(pop: Population) -> tuple[int, float]:
 def format_stats(pop: Population, d: dict, tick: int, elapsed: float) -> str:
     nb = nutrient_balance(pop)
     ng, gfrac = gestation_state(pop)
-    # Raden blandade massa och näring utan att säga vilket som var vilket:
-    # `detritus=325549` är kilo torrsubstans och `fri_när=11423` är kilo
-    # näring, och de stod bredvid varandra i samma enhet. Att förnan väger
-    # hundra gånger mer än den bär i näring är dessutom hela poängen med
-    # strukturandelen — den är kol, inte kväve. Grupperna är nu märkta.
+    # Varje fält bär sitt eget prefix i stället för att ligga under en
+    # gruppetikett. `n_` är antal, `M_` massa i kilo torrsubstans, `N_` näring i
+    # kilo. Skillnaden mot grupper är att fältet blir självbeskrivande: `grep
+    # M_flora` fungerar oavsett var i raden det står, och läsaren behöver inte
+    # hålla reda på vilken grupp hen befinner sig i.
     #
-    # Precisionen är också nedskuren. Fyra decimaler på ett tal som rör sig i
-    # tusental är brus, och kadaverpoolen fick ingen plats alls fast den varit
-    # egen sedan 0121.
+    # Bakgrunden är att raden en gång skrev `detritus=325549` och
+    # `fri_när=11423` bredvid varandra — kilo torrsubstans mot kilo näring, samma
+    # enhet, olika storhet. Att förnan väger hundra gånger mer än den bär i
+    # näring är hela poängen med strukturandelen: den är kol, inte kväve.
+    #
+    # `M_`-prefixen är desamma som i världsloggen (`M_detritus`, `M_carcass`),
+    # så samma namn betyder samma sak i konsol och logg.
     return (
         f"tick {tick:7d}  t={d['t']:8.1f}  "
-        f"fauna={d['fauna_n']:4d}  flora={d['flora_n']:6d}  "
-        f"rot={d.get('flora_root_frac', 0.0):4.2f}  "
-        f"M(kg) fauna={d['fauna_mass_kg']:7.1f} flora={d['flora_mass_kg']:9.3e} "
-        f"förna={d['detritus_mass_kg']:9.3e} kadaver={d.get('carcass_mass_kg', 0.0):6.2f}  "
-        f"N(kg) fri={nb['free']:8.0f} flora={nb['in_flora']:7.0f} "
-        f"förna={nb.get('in_litter', nb['in_detritus']):7.0f}  "
-        f"föd={pop._births_total:4d}  död={pop._deaths_total:4d}  "
+        f"n_fauna={d['fauna_n']:4d}  n_flora={d['flora_n']:6d}  "
+        f"rotandel={d.get('flora_root_frac', 0.0):4.2f}  "
+        f"M_fauna={d['fauna_mass_kg']:7.1f}  M_flora={d['flora_mass_kg']:9.3e}  "
+        f"M_förna={d['detritus_mass_kg']:9.3e}  "
+        f"M_kadaver={d.get('carcass_mass_kg', 0.0):7.2f}  "
+        f"N_fri={nb['free']:8.0f}  N_flora={nb['in_flora']:7.0f}  "
+        f"N_förna={nb.get('in_litter', nb['in_detritus']):7.0f}  "
+        f"n_föd={pop._births_total:4d}  n_död={pop._deaths_total:4d}  "
         f"dräkt={ng:3d}/{gfrac*100:3.0f}%  "
         f"{elapsed / max(tick, 1) * 1000.0:.2f} ms/tick"
     )
@@ -580,10 +585,13 @@ def format_diagnostics(d: dict, tick: int, elapsed: float) -> str:
     rate = (elapsed / max(tick, 1)) * 1000.0
     return (
         f"tick {tick:7d}  t={d['t']:8.1f}  "
-        f"fauna={d['fauna_n']:4d}  flora={d['flora_n']:5d}  "
+        f"n_fauna={d['fauna_n']:4d}  n_flora={d['flora_n']:5d}  "
         f"fria={d['free_slots']:5d}/{d['capacity']:5d}  "
         f"M_flora={d['flora_mass_kg']:.4e}  M_fauna={d['fauna_mass_kg']:.4e}  "
-        f"M_detritus={d['detritus_mass_kg']:.4e}  "
+        # Samma delning som i `format_stats`: `detritus` är förnan sedan 0121,
+        # och kadavret är en egen pool. Den korta raden saknade den helt.
+        f"M_förna={d['detritus_mass_kg']:.4e}  "
+        f"M_kadaver={d.get('carcass_mass_kg', 0.0):.2f}  "
         f"{rate:.2f} ms/tick"
     )
 

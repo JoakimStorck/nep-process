@@ -2104,6 +2104,25 @@ Effekten är stark där djuren är ensamma och nästan borta där de är många 
 
 Del E:s måltal för rakhet är att den ska ligga över 0,069 **och vara tillståndsberoende**. Den andra halvan är uppfylld först nu.
 
+### Prefix i stället för gruppetiketter
+
+*0127. `n_`, `M_`, `N_` på varje fält.*
+
+0125 delade raden i grupper med rubrikerna `M(kg)` och `N(kg)`. Det löste enhetsförväxlingen men skapade en ny börda: läsaren måste hålla reda på vilken grupp hen befinner sig i, och ett fält mitt i raden säger ingenting om sig självt.
+
+Prefixen gör varje fält självbeskrivande. `n_` är antal, `M_` massa i kilo torrsubstans, `N_` näring i kilo. `grep M_flora` fungerar oavsett var i raden det står.
+
+```
+tick 1500  t=  30.0  n_fauna=  28  n_flora=  6610  rotandel=0.67
+M_fauna=   33.4  M_flora=4.711e+03  M_förna=8.506e+04  M_kadaver=   0.00
+N_fri=     337  N_flora=    146  N_förna=    358
+n_föd=   9  n_död=   1  dräkt=  2/ 94%  17.66 ms/tick
+```
+
+`M_`-prefixen är desamma som i världsloggen, så samma namn betyder samma sak i konsol och logg.
+
+**Den korta raden fick samma delning.** `format_diagnostics`, som körs utan `--stats`, skrev fortfarande `M_detritus` för det som sedan 0121 bara är förna, och saknade kadaverpoolen helt. Två rapportformat som beskriver samma tillstånd med olika namn är värre än ett otydligt.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*
