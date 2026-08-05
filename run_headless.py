@@ -477,11 +477,23 @@ def gestation_state(pop: Population) -> tuple[int, float]:
 def format_stats(pop: Population, d: dict, tick: int, elapsed: float) -> str:
     nb = nutrient_balance(pop)
     ng, gfrac = gestation_state(pop)
+    # Raden blandade massa och näring utan att säga vilket som var vilket:
+    # `detritus=325549` är kilo torrsubstans och `fri_när=11423` är kilo
+    # näring, och de stod bredvid varandra i samma enhet. Att förnan väger
+    # hundra gånger mer än den bär i näring är dessutom hela poängen med
+    # strukturandelen — den är kol, inte kväve. Grupperna är nu märkta.
+    #
+    # Precisionen är också nedskuren. Fyra decimaler på ett tal som rör sig i
+    # tusental är brus, och kadaverpoolen fick ingen plats alls fast den varit
+    # egen sedan 0121.
     return (
         f"tick {tick:7d}  t={d['t']:8.1f}  "
         f"fauna={d['fauna_n']:4d}  flora={d['flora_n']:6d}  "
-        f"M_fauna={d['fauna_mass_kg']:8.3f}  M_flora={d['flora_mass_kg']:9.3f}  "
-        f"detritus={d['detritus_mass_kg']:8.4f}  fri_när={nb['free']:8.5f}  "
+        f"rot={d.get('flora_root_frac', 0.0):4.2f}  "
+        f"M(kg) fauna={d['fauna_mass_kg']:7.1f} flora={d['flora_mass_kg']:9.3e} "
+        f"förna={d['detritus_mass_kg']:9.3e} kadaver={d.get('carcass_mass_kg', 0.0):6.2f}  "
+        f"N(kg) fri={nb['free']:8.0f} flora={nb['in_flora']:7.0f} "
+        f"förna={nb.get('in_litter', nb['in_detritus']):7.0f}  "
         f"föd={pop._births_total:4d}  död={pop._deaths_total:4d}  "
         f"dräkt={ng:3d}/{gfrac*100:3.0f}%  "
         f"{elapsed / max(tick, 1) * 1000.0:.2f} ms/tick"
@@ -530,8 +542,13 @@ def print_summary(pop: Population, d0: dict, nb0: dict, unika: int, worst_drift:
               f"     såg partner men parade inte {_R['sag_men_parade_ej']:5d}")
         print(f"    täthet {d['fauna_n'] / max(1, n_cells) * 1000.0:.2f} agenter per 1000 celler")
 
-    print(f"\n  näring (kg)  fri {nb['free']:.5f}  flora {nb['in_flora']:.5f}  "
-          f"fauna {nb['in_fauna']:.5f}  detritus {nb['in_detritus']:.5f}")
+    print(f"\n  näring (kg)  fri {nb['free']:.2f}  flora {nb['in_flora']:.2f}  "
+          f"fauna {nb['in_fauna']:.2f}  förna {nb.get('in_litter', nb['in_detritus']):.2f}  "
+          f"kadaver {nb.get('in_carcass', 0.0):.2f}")
+    tot_n = max(1e-12, nb['total'])
+    print(f"               andelar   fri {nb['free'] / tot_n * 100:.0f} %  "
+          f"flora {nb['in_flora'] / tot_n * 100:.0f} %  "
+          f"död {(nb['in_detritus']) / tot_n * 100:.0f} %")
     print(f"               tillfört {nb['added']:.5f}  förlorat {nb['lost']:.5f}  "
           f"summa {nb['total']:.5f}")
 

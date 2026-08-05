@@ -2045,6 +2045,31 @@ Refugen ensam tar bort fällan och ger både mer flora och mer fauna. Återgång
 
 Elementvis jämförelse mellan numpy-vägen och kärnan är oförändrad: massa och rotmassa exakt lika, ackumulatorerna kring 1e-16.
 
+### Rapportraden blandade massa och näring
+
+*0125. Märkta grupper, kadaverpoolen synlig, rimlig precision.*
+
+Raden såg ut så här:
+
+```
+detritus=325549.1440  fri_när=11423.54244
+```
+
+Två tal i samma enhet, bredvid varandra, som mäter olika saker: det första är kilo torrsubstans, det andra kilo näring. Att förnan väger hundra gånger mer än den bär i näring är dessutom hela poängen med strukturandelen — förnan är kol, inte kväve. Vid strukturandel 0,86 bär den 0,0065 kg näring per kilo.
+
+Grupperna är nu märkta `M(kg)` och `N(kg)`, precisionen nedskuren från fyra decimaler på tal i tusental, och kadaverpoolen har fått plats fast den varit egen sedan 0121. Rotandelen står också med — den kom med 0124 och säger hur stor del av beståndet som är anspråk utan bladverk.
+
+```
+tick 2000  t=  40.0  fauna=  18  flora=  6481  rot=0.83
+M(kg) fauna=  13.8 flora=5.925e+03 förna=7.375e+04 kadaver=  1.81
+N(kg) fri=     253 flora=    326 förna=    263
+föd=   9  död=  11  dräkt=  2/ 50%  19.23 ms/tick
+```
+
+Sammanfattningen delar näringen i förna och kadaver och skriver ut andelarna, eftersom fördelningen mellan fri, levande och död är det som säger något om systemets tillstånd — och det var den frågan p124 väckte.
+
+`diagnostics()` får `carcass_mass_kg` och `flora_root_frac`; `nutrient_balance()` får `in_litter` och `in_carcass`. `in_detritus` står kvar som summa för läsare som inte känner till delningen.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*

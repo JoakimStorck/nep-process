@@ -812,6 +812,24 @@ def check_grid_reference(grid, sample_stride: int = 1) -> list[Violation]:
     return out
 
 
+def _flora_root_frac(store) -> float:
+    """
+    Rotens andel av florans massa.
+
+    Kom med rotens återgång i 0124 och är sedan dess en av de mer talande
+    siffrorna om betningen: den säger hur stor del av beståndet som är anspråk
+    utan bladverk.
+    """
+    live = _live_slots(store)
+    flora = live[store.kind[live] == 1] if live.size else live
+    if flora.size == 0:
+        return 0.0
+    m = store.mass[flora].astype(np.float64)
+    r = np.minimum(m, store.flora_root_mass[flora].astype(np.float64))
+    tot = float(m.sum())
+    return float(r.sum() / tot) if tot > 0.0 else 0.0
+
+
 def nutrient_balance(pop) -> dict[str, float]:
     """
     Näringens fördelning och balans.
@@ -849,14 +867,15 @@ def nutrient_balance(pop) -> dict[str, float]:
     # Två dödpooler sedan kadavret skildes från förnan. Missas den ena syns det
     # som en läcka i takt med dödligheten, vilket är precis den storleksordning
     # som är svårast att skilja från en verklig läcka.
-    in_detritus = _pool_nutrient(
+    in_litter = _pool_nutrient(
         np.asarray(world.detritus_active_cells, dtype=np.int64),
         world.detritus, world.detritus_structure)
-    in_detritus += _pool_nutrient(
+    in_carcass = _pool_nutrient(
         np.asarray(getattr(world, "carcass_active_cells", np.zeros(0, np.int64)),
                    dtype=np.int64),
         getattr(world, "carcass", np.zeros(0)),
         getattr(world, "carcass_structure", np.zeros(0)))
+    in_detritus = in_litter + in_carcass
 
     live = _live_slots(store)
     flora = live[store.kind[live] == 1] if live.size else live
@@ -895,6 +914,8 @@ def nutrient_balance(pop) -> dict[str, float]:
         "in_flora": in_flora,
         "in_fauna": in_fauna,
         "in_detritus": in_detritus,
+        "in_litter": in_litter,
+        "in_carcass": in_carcass,
         "total": total,
         "added": added,
         "lost": lost,
@@ -996,5 +1017,10 @@ def diagnostics(pop) -> dict[str, Any]:
         "flora_mass_kg": flora_mass,
         "fauna_mass_kg": fauna_mass,
         "fauna_energy_J": fauna_energy,
+        # `detritus` är förnan sedan kadavret fick egen pool i 0121. Namnet
+        # står kvar för läsare som inte känner till delningen; `carcass_mass_kg`
+        # är den andra poolen.
         "detritus_mass_kg": float(np.sum(np.asarray(pop.world.detritus), dtype=np.float64)),
+        "carcass_mass_kg": float(np.sum(np.asarray(pop.world.carcass), dtype=np.float64)),
+        "flora_root_frac": _flora_root_frac(store),
     }
