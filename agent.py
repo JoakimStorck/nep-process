@@ -2105,6 +2105,9 @@ class Agent:
     _cached_agent_hit: tuple = field(init=False)         # (N, Nu, Nd, hit_slot, hit_id) från senaste see_agent_first_hit
     _cached_predator_hit: tuple = field(init=False)      # (pred_bearing, pred_dist) — närmaste hotande predator
     _mating_mode: bool = field(init=False, default=False)
+    # Sätts av reflexkedjan när djuret är parningsberett och inte ser någon
+    # artfrände alls. Läses av födostyrningen, som annars nollar utforskningen.
+    _mate_search: bool = field(init=False, default=False)
 
     def __post_init__(self) -> None:
         self.AP = replace(self.AP)
@@ -2569,6 +2572,7 @@ class Agent:
     ) -> tuple[float, float, float, float, float]:
         hunt_state = 0.0
         flee_state = 0.0
+        self._mate_search = False
     
         if (
             best_threat is not None
@@ -2611,6 +2615,26 @@ class Agent:
             thrust = max(thrust, 0.95)
             explore_drive = 0.0
     
+        elif in_mating_mode:
+            # Redo att para sig och ser ingen alls. Det fallet fanns inte i
+            # kedjan: det föll igenom till födostyrningen, som *sänker*
+            # utforskningen när organismen står på föda den vill ha. Ett mättat
+            # djur ensamt på en full betesmark fick alltså minimal utforskning,
+            # kortaste persistenstid och en bana som slingrar på fläcken.
+            #
+            # Uppmätt i p125 frö 2: från tick 20 000 dog inget djur av svält på
+            # 8 000 tick, floran låg på 92 000 plantor, och de tio som fanns
+            # kvar fick fyra ungar innan de dog av ålder — med medianavstånd 16
+            # cellbredder till närmaste artfrände mot en synradie på 7. De
+            # svalt inte. De hittade aldrig varandra.
+            #
+            # Reflexen säger *när* det är läge att färdas. **Hur** rakt avgörs
+            # av `pheno_dir_tau()` ur `_T_MOB`, som redan bär avvägningen: hög
+            # persistens ger effektiv förflyttning men dålig lokal genomsökning.
+            # Ingen ny parameter, och magnituden är evolverbar.
+            self._mate_search = True
+            explore_drive = 1.0
+
         elif N > 0.5 or neighbour_memory is not None:
             if N > 0.5:
                 a_hit = self.heading + (2.0 * math.pi * float(Nu))
@@ -2754,6 +2778,14 @@ class Agent:
         food_local = clamp(float(B0) * _herb_local + float(C0) * _scav_local, 0.0, 1.0)
     
         explore_drive *= 1.0 - hunger_now * food_local
+
+        # Söker partner och ser ingen: dämpningen ovan skulle annars nolla
+        # utforskningen just för det mätta djur som har råd att leta. Hungern
+        # får fortfarande företräde — `1 - hunger_now` går mot noll när djuret
+        # svälter, och då är föda rätt prioritet.
+        if getattr(self, "_mate_search", False):
+            explore_drive = max(explore_drive, 1.0 - hunger_now)
+
         return turn, thrust, explore_drive
     
     

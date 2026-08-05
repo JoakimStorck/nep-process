@@ -2070,6 +2070,40 @@ Sammanfattningen delar näringen i förna och kadaver och skriver ut andelarna, 
 
 `diagnostics()` får `carcass_mass_kg` och `flora_root_frac`; `nutrient_balance()` får `in_litter` och `in_carcass`. `in_detritus` står kvar som summa för läsare som inte känner till delningen.
 
+### Ensamhet nådde aldrig rörelsens regimval
+
+*0126. Söktillstånd när djuret är parningsberett och inte ser någon.*
+
+`_integrate_motion` interpolerar redan `tau_dir` mellan kringgående sök och rak färd, styrt av `explore_drive`. Mekanismen fanns alltså. Det som saknades var att ensamhet aldrig nådde den.
+
+Reflexkedjan hade fyra grenar — fly, jaga, gå till partner, flocka — och ingen för *parningsberedd utan någon i sikte*. Det fallet föll igenom till födostyrningen, som **sänker** utforskningen när organismen står på föda den vill ha:
+
+```
+explore_drive *= 1.0 - hunger_now * food_local
+```
+
+Ett mättat djur ensamt på full betesmark fick alltså minimal utforskning, kortaste persistenstid och en bana som slingrade på fläcken. Precis det djur som borde färdas stod stilla.
+
+**p125 frö 2 är fallet renodlat.** Från tick 20 000 dog inte ett enda djur av svält på 8 000 tick. Floran låg på 92 000 plantor, mer än i någon av de överlevande körningarna. De tio som fanns kvar fick fyra ungar och dog av ålder med median-D på 0,999 — och medianavståndet till närmaste artfrände var 16 cellbredder mot en synradie på 7. De svalt inte. De hittade aldrig varandra.
+
+Söktillståndet skyddas mot födodämpningen med `max(explore_drive, 1 - hunger_now)`, så hungern har fortfarande företräde: ett svältande djur letar mat, inte partner.
+
+**Reflexen säger när, `_T_MOB` säger hur mycket.** Persistenstiden i sökläget är `pheno_dir_tau()`, som redan bär avvägningen — hög persistens ger effektiv förflyttning men dålig lokal genomsökning. Ingen ny parameter, och magnituden är evolverbar.
+
+Uppmätt, samma frö och samma värld:
+
+```
+                        n   rakhet   nettoförflyttning
+96x96, 8 djur    före   5    0,161         241
+                 efter  5    0,318         496
+96x96, 40 djur   före  65    0,167         154
+                 efter 75    0,172         191
+```
+
+Effekten är stark där djuren är ensamma och nästan borta där de är många — vilket är hela poängen. Vid 40 djur rör medianen sig knappt medan p90 går från 0,398 till 0,469: det är svansen som färdas, alltså de individer som råkar vara ensamma.
+
+Del E:s måltal för rakhet är att den ska ligga över 0,069 **och vara tillståndsberoende**. Den andra halvan är uppfylld först nu.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*
