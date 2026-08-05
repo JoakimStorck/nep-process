@@ -90,6 +90,18 @@ class FrameReceiver:
             except OSError:
                 return False
 
+    def send_msg(self, msg: dict) -> bool:
+        """Som `send_command`, men för meddelanden med fler fält än ett namn."""
+        with self._send_lock:
+            sock = self._sock
+            if sock is None:
+                return False
+            try:
+                sock.sendall((json.dumps(msg) + "\n").encode("utf-8"))
+                return True
+            except OSError:
+                return False
+
     def close(self) -> None:
         self._running = False
 
@@ -252,6 +264,7 @@ def main() -> int:
     clock = pg.time.Clock()
     running = True
     seen = 0
+    last_view: dict | None = None
     try:
         while running:
             frame = rx.latest()
@@ -293,6 +306,19 @@ def main() -> int:
 
             # update() pumpar events och returnerar False när fönstret stängs.
             running = viewer.update(frame)
+
+            # Berätta för servern vad som är synligt. Den packar anspråksrader
+            # bara för de cellerna, och inga alls när cellerna är för små för
+            # att en plantas kil ska gå att se. Skickas bara när utsnittet
+            # ändrats, så en stillastående viewer kostar ingen trafik.
+            from grid import Grid as _G
+
+            _g = _G(width=int(frame.grid_width), height=int(frame.grid_height))
+            req = viewer.view_request(_g)
+            if req is not None and req != last_view:
+                if rx.send_msg(req):
+                    last_view = req
+
             seen = rx.frames
             clock.tick(int(a.fps))
     except KeyboardInterrupt:

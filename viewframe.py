@@ -35,7 +35,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import numpy as np
 
-PROTOCOL_VERSION = 3
+# 4: klienten förhandlar sitt synliga utsnitt med `cmd: "view"`, och servern
+# packar anspråksrader bara för de cellerna. Frame-formatet är oförändrat —
+# radarrayerna kunde alltid vara tomma — men förvalet är nu *inga* rader tills
+# en klient bett om dem, så en klient från version 3 skulle tappa floran tyst.
+# Handskakningen avvisar den i stället.
+PROTOCOL_VERSION = 4
 
 # Traitaxlarna floran kan färgkodas på. Ordningen är bindande: den är
 # kolumnordningen i `claim_trait` och den ordning tangenten T stegar i.
@@ -142,9 +147,20 @@ def _flora_slots(store) -> np.ndarray:
     return np.flatnonzero(store.alive[:n] & (store.kind[:n] == 1)).astype(np.int64)
 
 
-def _claim_table(pop) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def _claim_table(pop, keep_cells=None) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Ytfördelningen sorterad efter cell, som CSR.
+
+    `keep_cells` begränsar raderna till de cellerna. Tabellen är en rad per
+    planta och berörd cell och dominerar bildrutan fullständigt när floran är
+    stor: vid 818 128 plantor i en värld på 65 536 celler är den 24 MB av
+    rutans 25,6, medan de cellindexerade fälten är 1,57 oavsett bestånd.
+
+    Raderna går inte heller att se i det läget. En cell är då omkring fyra
+    pixlar och innehåller 12,5 plantor, så servern packade tolv kilar per cell
+    för att viewern skulle rita dem i fyra pixlar. `None` betyder inga rader
+    alls — inte alla — eftersom det är det billiga förvalet och klienten säger
+    till när den zoomat in tillräckligt för att kilarna ska synas.
 
     Anspråkstabellen skrivs av upptagspasset i den ordning plantorna råkar
     ligga, med grannraderna sist. Viewern ritar per cell och vill ha den
@@ -155,9 +171,24 @@ def _claim_table(pop) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     store = pop.store
     n_cells = int(pop.grid.n_cells)
 
-    slots = np.asarray(store.flora_claim_slot, dtype=np.int64)
-    cells = np.asarray(store.flora_claim_cell, dtype=np.int64)
-    share = np.asarray(store.flora_claim_share, dtype=np.float64)
+    if keep_cells is None:
+        slots = np.zeros(0, dtype=np.int64)
+        cells = np.zeros(0, dtype=np.int64)
+        share = np.zeros(0, dtype=np.float64)
+    else:
+        slots = np.asarray(store.flora_claim_slot, dtype=np.int64)
+        cells = np.asarray(store.flora_claim_cell, dtype=np.int64)
+        share = np.asarray(store.flora_claim_share, dtype=np.float64)
+        keep = np.asarray(keep_cells, dtype=np.int64)
+        if keep.size and slots.size:
+            mask = np.zeros(n_cells, dtype=bool)
+            mask[keep[(keep >= 0) & (keep < n_cells)]] = True
+            sel = mask[np.clip(cells, 0, n_cells - 1)] & (cells >= 0) & (cells < n_cells)
+            slots, cells, share = slots[sel], cells[sel], share[sel]
+        else:
+            slots = np.zeros(0, dtype=np.int64)
+            cells = np.zeros(0, dtype=np.int64)
+            share = np.zeros(0, dtype=np.float64)
 
     if slots.size == 0:
         return (
@@ -276,12 +307,18 @@ def _fauna_table(pop) -> dict[str, np.ndarray]:
     return out
 
 
-def frame_from_pop(pop, births_total: int = 0, deaths_total: int = 0) -> ViewFrame:
+def frame_from_pop(pop, births_total: int = 0, deaths_total: int = 0,
+                   claim_cells=None) -> ViewFrame:
     """
     Bygg en bildruta ur ett levande `Population`.
 
     Kostnaden är en sortering av anspråkstabellen plus några kopior. Den
     betalas en gång per tick oavsett hur många viewers som tittar.
+
+    `claim_cells` är de celler någon viewer zoomat in tillräckligt på för att
+    plantornas kilar ska vara upplösbara. `None` ger inga anspråksrader, vilket
+    är förvalet: cellfälten räcker för att rita floran som täckningsgrad, och
+    det är ändå allt en cell på fyra pixlar kan visa.
     """
     store = pop.store
     world = pop.world
@@ -291,7 +328,7 @@ def frame_from_pop(pop, births_total: int = 0, deaths_total: int = 0) -> ViewFra
     BK = max(1e-12, float(getattr(pop.WP, "B_K", 1.0)))
     CK = max(1e-12, float(getattr(pop.WP, "C_K", getattr(world, "C_K", 1.0)) or 1.0))
 
-    starts, share, fill, trait, cdir = _claim_table(pop)
+    starts, share, fill, trait, cdir = _claim_table(pop, claim_cells)
     fa = _fauna_table(pop)
 
     fl = _flora_slots(store)

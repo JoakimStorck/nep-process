@@ -49,6 +49,9 @@ class _Client:
         self.alive = True
         self.sent = 0
         self.dropped = 0
+        # Senast begärda synliga utsnitt: (cx, cy, hw, hh) i världskoordinater,
+        # eller None för "inga anspråksrader".
+        self.view = None
 
     @property
     def name(self) -> str:
@@ -100,6 +103,34 @@ class ViewerServer:
         )
 
     # ---------- publikt ----------
+    def claim_cells(self, grid) -> object:
+        """
+        Cellerna någon viewer zoomat in tillräckligt på, eller None.
+
+        Unionen över klienterna, inte en per klient: bildrutan packas en gång
+        och sänds till alla, och det vanliga fallet är en enda viewer. Två
+        viewers på olika ställen får därför varandras celler också, vilket är
+        billigare än att packa två rutor.
+
+        `None` betyder inga anspråksrader alls. Det är förvalet tills en klient
+        bett om något — en klient som aldrig frågar får floran som
+        celltäckning, vilket är det enda som ändå syns utzoomat.
+        """
+        with self._lock:
+            views = [c.view for c in self._clients if getattr(c, "view", None)]
+        if not views:
+            return None
+        out = []
+        for v in views:
+            try:
+                out.append(grid.cells_in_rect(v[0], v[1], v[2], v[3]))
+            except Exception:
+                continue
+        if not out:
+            return None
+        import numpy as _np
+        return _np.unique(_np.concatenate(out)) if len(out) > 1 else out[0]
+
     def wants_frame(self) -> bool:
         """
         Är det dags att bygga en bildruta?
@@ -326,6 +357,20 @@ class ViewerServer:
             msg = json.loads(line)
             cmd = str(msg.get("cmd", ""))
         except Exception:
+            return
+
+        # Utsnittet är inte styrning. Det ändrar inte simuleringen, bara vad
+        # servern bemödar sig att packa, och ska därför inte kräva
+        # `--serve-control`.
+        if cmd == "view":
+            try:
+                if not bool(msg.get("detail", True)):
+                    c.view = None
+                else:
+                    c.view = (float(msg["cx"]), float(msg["cy"]),
+                              float(msg["hw"]), float(msg["hh"]))
+            except Exception:
+                c.view = None
             return
 
         if not self.control:

@@ -271,6 +271,35 @@ class WorldViewer:
             else:
                 setattr(self, name, float(np.clip(getattr(self, name), half, extent - half)))
 
+    # Under så här många pixlar per cellbredd är en plantas kil inte
+    # upplösbar, och då är det slöseri att be servern packa raderna. Vid
+    # fyra pixlar och tolv plantor i cellen ritas de ovanpå varandra.
+    DETAIL_MIN_PPU = 6.0
+
+    def view_request(self, grid) -> dict | None:
+        """
+        Det synliga utsnittet, som servern kan packa anspråksrader för.
+
+        `detail: False` när cellerna är för små för att kilarna ska synas —
+        då räcker celltäckningen, och bildrutan går från tiotals megabyte till
+        ett par. Marginalen på tjugo procent gör att en panorering inte
+        blottar oritad mark innan nästa utsnitt hunnit fram.
+        """
+        if not self._viewport or self._ppu_view is None:
+            return None
+        ppu = float(self._ppu_view) * float(getattr(grid, "COL_SPACING", 1.0))
+        if ppu < self.DETAIL_MIN_PPU:
+            return {"cmd": "view", "detail": False}
+        ww, wh = self._win_size
+        return {
+            "cmd": "view",
+            "detail": True,
+            "cx": float(self._view_cx),
+            "cy": float(self._view_cy),
+            "hw": 0.6 * ww / float(self._ppu_view),
+            "hh": 0.6 * wh / float(self._ppu_view),
+        }
+
     def _px_to_world(self, px: int, py: int) -> tuple[float, float]:
         ww, wh = self._win_size
         return (

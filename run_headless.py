@@ -392,9 +392,8 @@ def parse_args() -> argparse.Namespace:
                     help="radie för insättningsfläcken; 0 = jämn utspridning")
     ap.add_argument("--flora-plant-mass", type=float, default=None,
                     help="PopParams.flora_init_plant_mass, medelmassa per sådd planta")
-    ap.add_argument("--flora-seed-kg", type=float, default=None,
-                    help="måltotal för florans sådd i kg; standard är markens "
-                         "bördighet, alltså scenariots flora.sadd")
+    ap.add_argument("--flora-ratio", type=float, default=None,
+                    help="PopParams.flora_init_mass_ratio; standard är modellens eget värde")
     ap.add_argument("--pop-log", type=str, default=None,
                     help="skriv pop.jsonl för live_pop_plot.py")
     ap.add_argument("--pop-every", type=float, default=1.0,
@@ -445,8 +444,8 @@ def build_population(a: argparse.Namespace, seed: int, hub=None) -> Population:
     PP = PopParams(init_pop=int(a.init_pop), max_pop=int(a.max_pop))
     if getattr(a, "flora_growth", None) is not None:
         PP.flora_growth_backend = str(a.flora_growth)
-    if getattr(a, "flora_seed_kg", None) is not None:
-        PP.flora_init_target_kg = float(a.flora_seed_kg)
+    if getattr(a, "flora_ratio", None) is not None:
+        PP.flora_init_mass_ratio = float(a.flora_ratio)
     if getattr(a, "flora_plant_mass", None) is not None:
         PP.flora_init_plant_mass = float(a.flora_plant_mass)
     if getattr(a, "sociability_init", None) is not None:
@@ -459,11 +458,6 @@ def build_population(a: argparse.Namespace, seed: int, hub=None) -> Population:
         PP.fauna_spawn_radius = float(a.fauna_spawn_radius)
     _sc = getattr(a, "_scenario", None)
     if _sc is not None:
-        # Scenariot äger florans utgångsläge. En uttrycklig flagga vinner ändå.
-        if getattr(a, "flora_seed_kg", None) is None:
-            PP.flora_init_target_kg = _sc.flora_seed_kg
-        if getattr(a, "flora_plant_mass", None) is None:
-            PP.flora_init_plant_mass = float(_sc.flora.plantmassa)
         PP.fauna_spawn_patches = int(_sc.fauna.flackar)
         PP.founder_group_sep = float(_sc.fauna.grupp_avstand)
         PP.founder_group_spread = float(_sc.fauna.grupp_spridning)
@@ -890,11 +884,15 @@ def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
         # ett publish() som ändå kastar bildrutan skulle kosta ett par
         # millisekunder per tick även när ingen tittar.
         if server is not None and server.wants_frame():
+            # Servern vet vilka celler viewrarna zoomat in på; bara de får
+            # anspråksrader. Utan urvalet är rutan 25,6 MB vid 818 000 plantor,
+            # varav 24 är rader som ritas i fyra pixlar per cell.
             server.publish(
                 _frame_from_pop(
                     pop,
                     births_total=int(pop._births_total),
                     deaths_total=int(pop._deaths_total),
+                    claim_cells=server.claim_cells(pop.grid),
                 )
             )
 

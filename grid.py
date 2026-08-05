@@ -400,6 +400,29 @@ class Grid:
         self._within_cache[rr] = cached
         return cached
 
+    def cells_in_rect(self, cx: float, cy: float, hw: float, hh: float,
+                      step: float = 0.5) -> np.ndarray:
+        """
+        Cellerna inom en rektangel i kontinuerligt rum, centrerad i (cx, cy).
+
+        Rektangeln får wrappa; punkterna vикas av `cell_of_many`. Rutnätet
+        samplas med `step` cellbredder, alltså tätare än en cell, så inget
+        hål uppstår mellan sampelpunkterna. Approximationen ligger i kanten:
+        en cell som bara nuddas kan missas, vilket är ofarligt för en viewer
+        som ändå har marginal utanför fönstret.
+
+        Geometrin bor här och inte hos viewern, så en hexövergång ändrar
+        utsnittsberäkningen på ett ställe.
+        """
+        st = max(0.05, float(step))
+        nx = max(1, int(2.0 * float(hw) / st) + 1)
+        ny = max(1, int(2.0 * float(hh) / st) + 1)
+        xs = np.linspace(cx - hw, cx + hw, nx)
+        ys = np.linspace(cy - hh, cy + hh, ny)
+        gx, gy = np.meshgrid(xs, ys, indexing="xy")
+        cells = self.cell_of_many(gx.ravel(), gy.ravel())
+        return np.unique(np.asarray(cells, dtype=np.int64))
+
     def cells_within_many(self, cells: object, r: int) -> np.ndarray:
         """
         Grannskapen kring många celler på en gång.

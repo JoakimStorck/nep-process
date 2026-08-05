@@ -1,0 +1,30 @@
+# Som f4-flock, men tjugo djur insatta vid tick 0 i stället för åttio vid
+# florans jämvikt. Världen och floran är identiska med f4-flock.
+#
+# Sådden skalas mot markens bördighet sedan 0130, inte mot faunans startmassa,
+# så antalet grundare påverkar inte hur mycket flora världen börjar med. Före
+# 0130 gav den här filen en fjärdedels värld.
+#
+# Floran är däremot inte i jämvikt vid tick 0. Sådden ligger över jämvikten och
+# självgallrar: 204 640 plantor vid tick 1 000, botten 70 782 vid tick 6 000,
+# jämvikt 102 205 vid 17 000. Faunan möter alltså en födobas som faller till en
+# tredjedel under sina första sextusen tick, av skäl som inte har med betningen
+# att göra. Det är skillnaden mot p126 och den är avsiktlig.
+namn: f4-256-start20
+varld:
+  bredd: 256
+  hojd: 256
+  bordighet: 4.0
+flora:
+  sadd: bordighet
+  plantmassa: 1.32
+fauna:
+  antal: 20
+  insatts_vid: start
+  flackar: 3
+  flackradie: 20.0
+  max_antal: 8192
+fysiologi:
+  fartskala: 0.5
+  sociability: 0.8
+  sociability_sd: 0.5

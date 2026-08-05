@@ -2182,34 +2182,38 @@ Skillnaden på 0,03 procent är att `seed_fauna` drar ur samma slumpström före
 
 **Kvar att veta om:** floran är inte i jämvikt vid tick 0. Sådden ligger över jämvikten och självgallrar — 204 640 plantor vid tick 1 000, botten 70 782 vid tick 6 000, jämvikt 102 205 vid 17 000. Faunan möter alltså en födobas som faller till en tredjedel under sina första sextusen tick, av skäl som inte har med betningen att göra. Det är en verklig skillnad mot p126, inte ett fel.
 
-### Florans utgångsläge in i scenariofilen
+### Viewern förhandlar sitt utsnitt
 
-*0131. `flora:`-block. Den döda kvoten borta.*
+*0132. Protokoll 4. Anspråksrader bara för synliga celler.*
 
-0130 rättade vilken regel som gällde men lämnade regeln själv osynlig: sådden avgör hur världen ser ut vid tick 0 och hade ingen plats i scenariofilen alls. Två filer som ser identiska ut kunde ge olika världar, och gjorde det.
-
-```yaml
-flora:
-  sadd: bordighet     # eller ett tal i kg
-  plantmassa: 1.32
-```
-
-`sadd: bordighet` betyder så tills markens fria näring är förbrukad, alltså exakt så mycket vävnad som bördigheten bär. Samma form som `insatts_vid: jamvikt` — en princip i stället för ett framgissat tal. Ett tal är ett måltotal i kg.
-
-`plantmassa` är medelmassan per sådd planta; antalet faller ut ur måltotalen delat med den. Det talet satt tidigare bara i `PopParams` och styrde beståndets storlek utan att synas någonstans i körningens beskrivning.
-
-**`flora_init_mass_ratio` är borta.** Den blev död i 0130 och hade ingen läsare kvar — en parameter som inte gör något men som `--flora-ratio` fortfarande lät en sätta är värre än ingen parameter alls. Flaggan heter nu `--flora-seed-kg` och sätter måltotalen direkt, i den enhet man faktiskt tänker i.
-
-Okända fält i `flora:` avvisas som i övriga block, så ett stavfel är ett fel och inte en tyst standardinställning.
-
-Utgångsläget är oförändrat för de befintliga scenarierna:
+Bildrutan bär en rad per planta och berörd cell — `claim_share`, `claim_fill`, `claim_dir` och `claim_trait`, tillsammans 28 byte per rad. Vid 256x256 med bördighet 4 blir det ohållbart:
 
 ```
-f4-flock   317 246 plantor   4,1583e5 kg
-f4-start20 317 336 plantor   4,1577e5 kg
+                        plantor   MB/ruta   varav rader   vid 15 fps
+p126  64x256            102 205      3,4         3,0        51 MB/s
+p132 256x256 (t=1000)   818 128     25,6        24,0       384 MB/s
+p132 vid sådd         1 315 216     40,2        38,6       604 MB/s
 ```
 
-**Kvar:** `apply_scenario` sätter `init_pop` och `max_pop` rakt av medan övriga fält går via `if ... is None`, så `--init_pop` biter inte när ett scenario anges. Det är samma sorts osynliga regel, men den sitter i argparse-standardvärden och kräver att de blir `None` för att gå att lösa rent.
+De cellindexerade fälten är 1,57 MB oavsett bestånd. **Nittiofyra procent av rutan var rader**, och de gick inte att se: en cell är då omkring fyra pixlar och innehåller 12,5 plantor, så servern packade tolv kilar per cell för att viewern skulle rita dem i fyra pixlar.
+
+**Klienten säger vad den ser.** `{"cmd": "view", "cx", "cy", "hw", "hh"}` i världskoordinater, skickat när utsnittet ändrats — en stillastående viewer kostar ingen trafik. Under `DETAIL_MIN_PPU` pixlar per cellbredd skickar den `detail: false` i stället, eftersom en kil då inte är upplösbar. Beslutet ligger hos klienten därför att det är där pixlarna finns.
+
+Kommandot går **före** styrgrinden: utsnittet ändrar inte simuleringen, bara vad servern bemödar sig att packa, och ska inte kräva `--serve-control`.
+
+Servern tar unionen över klienterna, inte en ruta per klient. Rutan packas en gång och sänds till alla, och det vanliga fallet är en enda viewer. Två viewers på olika ställen får varandras celler också, vilket är billigare än två packningar.
+
+`Grid.cells_in_rect()` gör världsrektangeln till celler. Geometrin bor där och inte hos viewern, så hexövergången ändrar utsnittsberäkningen på ett ställe. Rektangeln får wrappa; punkterna viks av `cell_of_many`.
+
+Uppmätt på 128x128 med 73 521 plantor, komprimerad blob på tråden:
+
+```
+inga rader (utzoomat)   0,030 MB
+40x40-utsnitt           0,070 MB
+hela världen            0,403 MB
+```
+
+**Förvalet är inga rader**, inte alla. En klient som aldrig frågar får floran som celltäckning, vilket är allt som ändå syns utzoomat. Det gör att en klient från protokoll 3 skulle tappa floran tyst — så versionen är bumpad till 4 och handskakningen avvisar den i stället.
 
 ## Steg 6c — Rörelsemotorn
 
