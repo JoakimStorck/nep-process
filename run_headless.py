@@ -957,7 +957,14 @@ def run(a: argparse.Namespace, seed: int | None = None) -> int:
     _C["i_kontakt"] = 0
     _C["kontakter"] = 0
     _C["langder"] = []
-    _C["state"] = {}
+    # In-place. `instrument_contacts()` band `st = _C["state"]` vid
+    # installationen, så en ombindning här lämnade wrappern kvar på den gamla
+    # dicten. Vid ett frö är det ofarligt — tillståndet börjar ändå tomt — men
+    # `--seeds` installerar en gång och kör flera världar, och då bar
+    # kontakterna över: en agent med samma id i nästa värld fortsatte ett möte
+    # som avslutades i den förra. `langder` behöver inte samma behandling
+    # eftersom den bara nås som `_C["langder"].append(...)`.
+    _C["state"].clear()
     # Per körning, som `_C` — inte vid avläsning, som `gestation_window()`.
     # Hamnar en räknare i det andra mönstret är den alltid noll när blocket
     # ska skrivas ut, och blocket hoppas tyst över.
