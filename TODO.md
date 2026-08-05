@@ -2182,6 +2182,35 @@ Skillnaden på 0,03 procent är att `seed_fauna` drar ur samma slumpström före
 
 **Kvar att veta om:** floran är inte i jämvikt vid tick 0. Sådden ligger över jämvikten och självgallrar — 204 640 plantor vid tick 1 000, botten 70 782 vid tick 6 000, jämvikt 102 205 vid 17 000. Faunan möter alltså en födobas som faller till en tredjedel under sina första sextusen tick, av skäl som inte har med betningen att göra. Det är en verklig skillnad mot p126, inte ett fel.
 
+### Florans utgångsläge in i scenariofilen
+
+*0131. `flora:`-block. Den döda kvoten borta.*
+
+0130 rättade vilken regel som gällde men lämnade regeln själv osynlig: sådden avgör hur världen ser ut vid tick 0 och hade ingen plats i scenariofilen alls. Två filer som ser identiska ut kunde ge olika världar, och gjorde det.
+
+```yaml
+flora:
+  sadd: bordighet     # eller ett tal i kg
+  plantmassa: 1.32
+```
+
+`sadd: bordighet` betyder så tills markens fria näring är förbrukad, alltså exakt så mycket vävnad som bördigheten bär. Samma form som `insatts_vid: jamvikt` — en princip i stället för ett framgissat tal. Ett tal är ett måltotal i kg.
+
+`plantmassa` är medelmassan per sådd planta; antalet faller ut ur måltotalen delat med den. Det talet satt tidigare bara i `PopParams` och styrde beståndets storlek utan att synas någonstans i körningens beskrivning.
+
+**`flora_init_mass_ratio` är borta.** Den blev död i 0130 och hade ingen läsare kvar — en parameter som inte gör något men som `--flora-ratio` fortfarande lät en sätta är värre än ingen parameter alls. Flaggan heter nu `--flora-seed-kg` och sätter måltotalen direkt, i den enhet man faktiskt tänker i.
+
+Okända fält i `flora:` avvisas som i övriga block, så ett stavfel är ett fel och inte en tyst standardinställning.
+
+Utgångsläget är oförändrat för de befintliga scenarierna:
+
+```
+f4-flock   317 246 plantor   4,1583e5 kg
+f4-start20 317 336 plantor   4,1577e5 kg
+```
+
+**Kvar:** `apply_scenario` sätter `init_pop` och `max_pop` rakt av medan övriga fält går via `if ... is None`, så `--init_pop` biter inte när ett scenario anges. Det är samma sorts osynliga regel, men den sitter i argparse-standardvärden och kräver att de blir `None` för att gå att lösa rent.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*

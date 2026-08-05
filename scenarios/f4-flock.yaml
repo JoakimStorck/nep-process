@@ -3,6 +3,9 @@ varld:
   bredd: 64
   hojd: 256
   bordighet: 4.0
+flora:
+  sadd: bordighet
+  plantmassa: 1.32
 fauna:
   antal: 80
   insatts_vid: jamvikt

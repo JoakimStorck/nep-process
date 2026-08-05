@@ -178,7 +178,9 @@ class PopParams:
     # omvänt med faktor 138. Talet sätter utgångsläget, inte jämvikten —
     # om dynamiken inte bär det faller floran tillbaka, och då är det den
     # dynamiken som ska rättas.
-    flora_init_mass_ratio: float = 2000.0
+    # Måltotal för sådden i kg. None = markens bördighet, alltså så tills den
+    # fria näringspoolen är förbrukad. Sätts av scenariots `flora.sadd`.
+    flora_init_target_kg: float | None = None
     # Medelmassa per sådd planta. Antalet faller ut ur måltotalen dividerat med
     # det här talet, i stället för ur världens cellantal.
     #
@@ -438,10 +440,12 @@ class Population:
         # 0,117 och 16 384 celler bär 1 917 kg näring, vilket vid typisk
         # stökiometri räcker till omkring 108 000 kg vävnad mot jämviktens
         # uppmätta 118 100.
-        free_n = float(np.sum(np.asarray(self.world.nutrient), dtype=np.float64))
-        target = free_n / max(1e-9, nutrient_content(0.5))
+        target = self.PP.flora_init_target_kg
+        if target is None:
+            free_n = float(np.sum(np.asarray(self.world.nutrient), dtype=np.float64))
+            target = free_n / max(1e-9, nutrient_content(0.5))
 
-        _ = self._seed_initial_flora(target_mass=target)
+        _ = self._seed_initial_flora(target_mass=float(target))
         self.store.rebuild_spatial_index()
 
         self._book_initial_nutrient()
@@ -1770,7 +1774,7 @@ class Population:
 
             # Sådden betalas ur marken. Tidigare myntade den näring: hela
             # stocken kom in i världen som vävnad i den sådda floran, vilket
-            # gjorde `flora_init_mass_ratio` till bördighetsreglage. Nu bär
+            # gjorde sådden till ett bördighetsreglage. Nu bär
             # `nutrient_init` bördigheten och sådden är en starttäthet.
             need = float(self.store.mass[slot]) * nutrient_content(
                 float(self.store.structure[slot])

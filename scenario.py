@@ -50,6 +50,25 @@ class VarldSpec:
 
 
 @dataclass
+class FloraSpec:
+    """
+    Florans utgångsläge.
+
+    Sådden hade ingen plats i scenariofilen alls, trots att den avgör hur
+    världen ser ut vid tick 0. Regeln låg i `Population.__init__` och bytte
+    dessutom gren beroende på om faunan var insatt än — vilket gav en
+    fjärdedels värld för samma fil, se 0130. En underförstådd regel som ändrar
+    utgångsläget hör hemma i filen, inte i koden.
+    """
+    # "bordighet" = så tills markens fria näring är förbrukad, alltså exakt så
+    # mycket vävnad som bördigheten bär. Ett tal = måltotal i kg.
+    sadd: Any = "bordighet"
+    # Medelmassa per sådd planta. Antalet faller ut ur måltotalen delat med
+    # det här talet, i stället för ur cellantalet.
+    plantmassa: float = 1.32
+
+
+@dataclass
 class FaunaSpec:
     antal: int = 20
     # Heltal = tick. "jamvikt" = när floran nått stationärt tillstånd.
@@ -81,6 +100,7 @@ class FysiologiSpec:
 class Scenario:
     namn: str = "standard"
     varld: VarldSpec = field(default_factory=VarldSpec)
+    flora: FloraSpec = field(default_factory=FloraSpec)
     fauna: FaunaSpec = field(default_factory=FaunaSpec)
     fysiologi: FysiologiSpec = field(default_factory=FysiologiSpec)
 
@@ -97,6 +117,17 @@ class Scenario:
     @property
     def detritus_init(self) -> float:
         return _DETRITUS_INIT_BASE * float(self.varld.bordighet)
+
+    @property
+    def flora_seed_kg(self) -> float | None:
+        """Måltotal för sådden i kg, eller None för bördighetsregeln."""
+        v = self.flora.sadd
+        if isinstance(v, str):
+            key = v.strip().lower()
+            if key in ("bordighet", "bördighet", "fertility"):
+                return None
+            raise ValueError(f"okänt värde för flora.sadd: {v!r}")
+        return float(v)
 
     @property
     def fauna_at_tick(self) -> int:
@@ -132,13 +163,14 @@ class Scenario:
                 raise ValueError(f"okända fält i {key}: {sorted(okänt)}")
             return cls(**raw)
 
-        known_top = {"namn", "varld", "fauna", "fysiologi"}
+        known_top = {"namn", "varld", "flora", "fauna", "fysiologi"}
         okänt = set(d) - known_top
         if okänt:
             raise ValueError(f"okända fält i scenariot: {sorted(okänt)}")
         return Scenario(
             namn=str(d.get("namn", "namnlöst")),
             varld=sub(VarldSpec, "varld"),
+            flora=sub(FloraSpec, "flora"),
             fauna=sub(FaunaSpec, "fauna"),
             fysiologi=sub(FysiologiSpec, "fysiologi"),
         )
@@ -162,6 +194,8 @@ class Scenario:
             f"scenario '{self.namn}': {self.varld.bredd}x{self.varld.hojd}, "
             f"bördighet {self.varld.bordighet:g} "
             f"(nutrient_input {self.nutrient_input:.3e}), "
+            f"flora {'bördighetens tak' if self.flora_seed_kg is None else f'{self.flora_seed_kg:g} kg'} "
+            f"a {self.flora.plantmassa:g} kg, "
             f"{self.fauna.antal} djur i {self.fauna.flackar} fläck(ar) "
             f"radie {self.fauna.flackradie:g} vid tick {self.fauna_at_tick}, "
             f"gruppavstånd {self.fauna.grupp_avstand:g}/spridning "
