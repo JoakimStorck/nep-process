@@ -23,6 +23,7 @@ from phenotype import (
 
 from grid import Grid
 from organism_store import next_organism_id
+import styrning
 
 
 # -------------------------
@@ -415,6 +416,16 @@ class AgentParams:
     threat_predation_min: float = 0.35
     hunt_score_min: float = 0.12
     attack_score_min: float = 0.18
+
+    # Flyktens egna trösklar. `flee_score_min` hade samma värde som
+    # `hunt_score_min` för att den delade konstant med jaktbeslutet — två
+    # olika beslut med en ratt, utan skäl. Defaultvärdet är oförändrat, så
+    # beteendet är detsamma tills någon flyttar det ena utan det andra.
+    #
+    # `flee_score_sat` är styrkans mättnad och är provisorisk: 0,30 är den
+    # högsta `attack_score` som observerats. Se `styrning.styrka_flykt`.
+    flee_score_min: float = 0.12
+    flee_score_sat: float = 0.30
     prey_search_radius: float = 6.0
     mate_search_radius: float = 5.0
     flee_radius: float = 6.0
@@ -2577,7 +2588,7 @@ class Agent:
         if (
             best_threat is not None
             and hunt_eff < float(self.AP.threat_predation_min)
-            and best_threat_score > float(self.AP.hunt_score_min)
+            and best_threat_score > float(self.AP.flee_score_min)
         ):
             other, dx, dy, dist = best_threat
             a_th = math.atan2(dy, dx)
@@ -2587,7 +2598,21 @@ class Agent:
             turn = clamp(turn - 0.95 * bias, -1.0, 1.0)
             thrust = clamp(max(thrust, 0.95), 0.0, 1.0)
             explore_drive *= 0.10
-            flee_state = 1.0
+
+            # `flee_state` bär numera hotets styrka i stället för en etta.
+            # Amplituden ovan är oförändrad — styrkan driver ingenting i steg
+            # 2 — men den behöver bäras ut för att kunna mätas, och flaggan är
+            # den enda vägen ut ur kedjan som redan finns.
+            #
+            # Golvet finns bara för att `_apply_food_steering` använder samma
+            # flagga som grind. Ett hot precis på tröskeln ger styrkan noll,
+            # och utan golvet skulle födostyrningen då slå på mitt i en flykt.
+            # Grinden försvinner i steg 3, och golvet med den.
+            flee_state = max(1e-9, styrning.styrka_flykt(
+                best_threat_score,
+                float(self.AP.flee_score_min),
+                float(self.AP.flee_score_sat),
+            ))
     
         elif (
             best_prey is not None
@@ -2598,12 +2623,15 @@ class Agent:
             a_hit = math.atan2(dy, dx)
             errN = self._signed_angle(a_hit - self.heading)
             biasN = clamp(errN / math.pi, -1.0, 1.0)
-            hs = clamp(hunt_eff, 0.0, 1.0)
+            hs = styrning.styrka_jakt(hunt_eff)
     
             turn = clamp(turn + 0.90 * hs * biasN, -1.0, 1.0)
             thrust = clamp(max(thrust, 0.85), 0.0, 1.0)
             explore_drive *= 0.25
-            hunt_state = 1.0
+            # Som `flee_state`: flaggan bär styrkan i stället för en etta.
+            # `hunt_state` har ingen läsare i produktionskoden, så bytet är
+            # rent additivt.
+            hunt_state = hs
     
         elif in_mating_mode and best_mate is not None:
             other, dx, dy, dist = best_mate
@@ -2649,7 +2677,7 @@ class Agent:
             REP_ZONE = 0.35
             soc_bias = 2.0 * soc - 1.0
             if Nd_f < REP_ZONE:
-                rs = 1.0 - (Nd_f / REP_ZONE)
+                rs = styrning.styrka_separation(Nd_f, REP_ZONE)
                 turn = clamp(turn - 0.70 * rs * biasN, -1.0, 1.0)
                 explore_drive = explore_drive * (1.0 - 0.3 * rs)
             elif abs(soc_bias) > 1e-6:
@@ -2663,7 +2691,7 @@ class Agent:
                 # enda kohesionstermen hade. Flockningen ska vara en drift
                 # bland flera — föda, värme, flykt och parning verkar
                 # oförändrat — inte ta över styrningen.
-                wcoh = clamp((Nd_f - REP_ZONE) / max(1e-6, 1.0 - REP_ZONE), 0.0, 1.0)
+                wcoh = styrning.avstandsvikt(Nd_f, REP_ZONE)
                 _soc = getattr(self, "_soc_sectors", None)
                 did_group = False
                 if _soc is not None and soc_bias > 0.0:
@@ -2700,8 +2728,8 @@ class Agent:
                 # Alignment: starkast på mellanavstånd, där grannen är nära nog
                 # att vara värd att följa men inte så nära att man måste väja.
                 if (not did_group) and neighbour_heading is not None and soc_bias > 0.0:
-                    w = clamp((Nd_f - REP_ZONE) / max(1e-6, 1.0 - REP_ZONE), 0.0, 1.0)
-                    walign = 4.0 * w * (1.0 - w)
+                    w = styrning.avstandsvikt(Nd_f, REP_ZONE)
+                    walign = styrning.alignment_vikt(w)
                     errA = self._signed_angle(float(neighbour_heading) - self.heading)
                     turn = clamp(turn + 0.20 * soc_bias * walign
                                  * clamp(errA / math.pi, -1.0, 1.0), -1.0, 1.0)
@@ -2755,7 +2783,7 @@ class Agent:
     ) -> tuple[float, float, float]:
         hunger_now = float(self.body.hunger())
     
-        if flee_state < 0.5 and hunger_now > 0.4:
+        if flee_state <= 0.0 and hunger_now > 0.4:
             sensors = getattr(self, "sensors", None)
             if sensors is not None:
                 accB = getattr(sensors, "_acc_dir_B", None)
@@ -2775,7 +2803,7 @@ class Agent:
                         food_angle = float(ang[i_best]) + float(self.heading)
                         err_food = self._signed_angle(food_angle - self.heading)
                         bias_food = clamp(err_food / math.pi, -1.0, 1.0)
-                        fd = clamp(hunger_now - 0.4, 0.0, 0.6) * sig
+                        fd = styrning.styrka_foda(hunger_now, sig)
     
                         turn = clamp(turn + 0.60 * fd * bias_food, -1.0, 1.0)
                         thrust = clamp(thrust + 0.3 * fd, 0.0, 1.0)
@@ -3102,7 +3130,7 @@ class Agent:
             _ca = float(getattr(self.pheno, "cold_aversion", 0.0))
             _Tloc = float(world.temperature_at(self.x, self.y)) if hasattr(world, "temperature_at") \
                 else float(np.mean(_ts))
-            _stress = clamp((float(self.AP.Tb_set) - _Tloc) / float(self.AP.Tb_set), 0.0, 1.0)
+            _stress = styrning.kold_stress(float(self.AP.Tb_set), _Tloc)
             if _ca > 1e-6 and _stress > 1e-6:
                 _S = len(_ts)
                 _dev = np.asarray(_ts, dtype=np.float64) - float(np.mean(_ts))

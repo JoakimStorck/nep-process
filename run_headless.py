@@ -292,9 +292,9 @@ def instrument_steering() -> None:
         rec[1] = t_in - rec[0]
         rec[2] = float(out[0]) - t_in
         rec[4] = float(out[0])
-        if float(out[3]) > 0.5:
+        if float(out[3]) > 0.0:
             rec[3] = "flykt"
-        elif float(out[4]) > 0.5:
+        elif float(out[4]) > 0.0:
             rec[3] = "jakt"
         elif bool(kw.get("in_mating_mode", False)) and kw.get("best_mate") is not None:
             rec[3] = "parning"
