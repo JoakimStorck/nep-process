@@ -184,7 +184,38 @@ def instrument_contacts() -> None:
 _S: dict = {"agenttick": 0, "kans_n": 0, "kans_traff": 0, "kans_hist": [0] * 20,
             "null_traff": 0.0, "null_hist": [0.0] * 20,
             "gren_n": 0, "gren_traff": 0, "gren_traff90": 0, "avv_hist": [0] * 18,
-            "kalla": {}, "gren": {}, "state": {}}
+            "kalla": {}, "gren": {}, "state": {},
+            # Fönstret är **skilt** från totalerna ovan och nollställs vid
+            # avläsning, som `gestation_window()`. Totalerna nollställs per
+            # körning, som `_C`. Att blanda de två mönstren i samma räknare är
+            # den fälla som gör ett block tyst tomt: läser man av en räknare
+            # som bara nollställs per körning växer den obegränsat, och
+            # nollställer man en total vid avläsning är den alltid noll i
+            # sammanfattningen.
+            #
+            # [kans_n, kans_traff, null_traff, gren_n, gren_traff, gren_traff90]
+            "w": [0, 0, 0.0, 0, 0, 0]}
+
+
+def steering_window() -> tuple[float, float, float, float] | None:
+    """
+    Kansellering, överskott mot nollhypotesen och riktningsavvikelse sedan
+    förra avläsningen, i procent. Nollställer fönstret.
+
+    Över 80 000 tick är en enda total ett medelvärde över tre olika regimer:
+    tjugo grundare i en flora som självgallrar, ett växande bestånd, och vad
+    jämvikten nu blir. Frågan om kanselleringen beror på täthet — flockgrenen
+    kan bara vinna när någon syns — går inte att ställa till ett sådant tal.
+    """
+    w = _S["w"]
+    if w[0] <= 0 and w[3] <= 0:
+        return None
+    kn = max(1, w[0])
+    gn = max(1, w[3])
+    out = (100.0 * w[1] / kn, 100.0 * (w[1] - w[2]) / kn,
+           100.0 * w[4] / gn, 100.0 * w[5] / gn)
+    _S["w"] = [0, 0, 0.0, 0, 0, 0]
+    return out
 
 # De åtta teckenmönstren, första tecknet fixerat till +. `|Σ|` är oförändrat
 # under global spegling, så de resterande åtta är dubletter.
@@ -282,6 +313,10 @@ def instrument_steering() -> None:
         t_fin = float(out[0])
         b = (abs(rec[0]), abs(rec[1]), abs(rec[2]), abs(t_fin - t_in))
         tot = b[0] + b[1] + b[2] + b[3]
+        # Läses om per anrop: `steering_window()` binder om listan vid
+        # avläsning, så en bindning vid installationen hade lämnat wrappern på
+        # det första fönstret för alltid.
+        w = _S["w"]
 
         _S["agenttick"] += 1
         for namn, v in zip(("mlp", "kyla", "gren", "föda"), b):
@@ -295,10 +330,12 @@ def instrument_steering() -> None:
         # betyder något.
         if tot > 0.02:
             _S["kans_n"] += 1
+            w[0] += 1
             f = 1.0 - abs(t_fin) / tot
             _S["kans_hist"][min(19, max(0, int(f * 20.0)))] += 1
             if abs(t_fin) < 0.5 * tot:
                 _S["kans_traff"] += 1
+                w[1] += 1
 
             # Nollfördelningen: samma belopp, alla teckenmönster, en åttondel
             # vikt vardera.
@@ -310,10 +347,12 @@ def instrument_steering() -> None:
                 nh[min(19, max(0, int(fn * 20.0)))] += 0.125
                 if sn < 0.5 * tot:
                     _S["null_traff"] += 0.125
+                    w[2] += 0.125
 
         gren = rec[3]
         if gren:
             _S["gren_n"] += 1
+            w[3] += 1
             d = (t_fin - rec[2]) * math.pi
             d = abs((d + math.pi) % (2.0 * math.pi) - math.pi)
             grader = d * 180.0 / math.pi
@@ -323,9 +362,11 @@ def instrument_steering() -> None:
             if grader > 30.0:
                 _S["gren_traff"] += 1
                 e[1] += 1
+                w[4] += 1
             if grader > 90.0:
                 _S["gren_traff90"] += 1
                 e[2] += 1
+                w[5] += 1
         return out
 
     Agent._decode_action_outputs = wrapped_decode
@@ -799,6 +840,15 @@ def format_stats(pop: Population, d: dict, tick: int, elapsed: float) -> str:
     nb = nutrient_balance(pop)
     g_mean, g_peak = gestation_window()
     recent, mean = tick_rate(tick, elapsed)
+    # Styrningen som fyra tal per fönster: kansellering, dess överskott mot
+    # nollhypotesen, och andelen tick som styr mer än 30 respektive 90 grader
+    # från vinnande grenens riktning. Sammanfattningen ger samma tal som en
+    # total över hela körningen; det här ger dem över tid, så att en
+    # täthetsberoende drift syns. Vid --report-every 600 är ett fönster exakt
+    # ett år.
+    sw = steering_window()
+    styr = (f"  styr={sw[0]:4.1f}/{sw[1]:+4.1f}/{sw[2]:4.1f}/{sw[3]:3.1f}"
+            if sw is not None else "")
     # Varje fält bär sitt eget prefix i stället för att ligga under en
     # gruppetikett. `n_` är antal, `M_` massa i kilo torrsubstans, `N_` näring i
     # kilo. Skillnaden mot grupper är att fältet blir självbeskrivande: `grep
@@ -823,6 +873,7 @@ def format_stats(pop: Population, d: dict, tick: int, elapsed: float) -> str:
         f"N_förna={nb.get('in_litter', nb['in_detritus']):7.0f}  "
         f"n_föd={pop._births_total:4d}  n_död={pop._deaths_total:4d}  "
         f"dräkt={g_mean:5.1f}/{g_peak:3d}  "
+        f"{styr}  "
         f"{recent:.2f} ms/tick (medel {mean:.2f})"
     )
 
@@ -1027,6 +1078,7 @@ def run(a: argparse.Namespace, seed: int | None = None) -> int:
     _S["avv_hist"] = [0] * 18
     _S["kalla"] = {}
     _S["gren"] = {}
+    _S["w"] = [0, 0, 0.0, 0, 0, 0]
     # In-place: wrappern band `st = _S["state"]` vid installationen, så en
     # ombindning här hade lämnat den kvar på den gamla dicten och burit över
     # tillstånd mellan seeds i `--seeds`.
