@@ -490,19 +490,34 @@ def tick_rate(tick: int, elapsed: float) -> tuple[float, float]:
     return recent, float(elapsed) / max(1, int(tick)) * 1000.0
 
 
-def gestation_state(pop: Population) -> tuple[int, float]:
-    """Antal dräktiga och deras median-andel av målmassan."""
-    fr = [
-        float(x.body.gest_M) / float(x.body.gest_M_target)
-        for x in pop.agents
-        if x.body.alive and bool(x.body.gestating) and float(x.body.gest_M_target) > 0.0
-    ]
-    return len(fr), (float(np.median(fr)) if fr else 0.0)
+# Dräktigheten räknades som en ögonblicksbild i den tick raden skrevs. Det är
+# fel sorts mått på en säsongsbunden process: gestationen har uppmätt period
+# 12,03 månader, alltså exakt `WorldParams.year_len`, medan rapportintervallet
+# på tusen tick är 20 månader. Ett år samplat var 1,67 år ger en svävning med
+# period tre, inte en trend — och det är den som ligger bakom att p124 växlade
+# mellan `dräkt=0/0%` och `dräkt=39/54%` mellan varannan rad.
+#
+# Måttet är därför tidsmedlet över rapportintervallet, plus toppen. Medlet
+# svarar på hur mycket reproduktion som pågår, toppen på hur stor kullen blir.
+#
+# Median-andelen av målmassan är borta. Den var meningsfull bara som
+# ögonblicksbild och därmed aliasad på samma sätt.
+_GEST = {"sum": 0.0, "ticks": 0, "peak": 0}
+
+
+def gestation_window() -> tuple[float, int]:
+    """Medel och topp sedan förra avläsningen. Nollställer fönstret."""
+    n = max(1, int(_GEST["ticks"]))
+    out = (float(_GEST["sum"]) / n, int(_GEST["peak"]))
+    _GEST["sum"] = 0.0
+    _GEST["ticks"] = 0
+    _GEST["peak"] = 0
+    return out
 
 
 def format_stats(pop: Population, d: dict, tick: int, elapsed: float) -> str:
     nb = nutrient_balance(pop)
-    ng, gfrac = gestation_state(pop)
+    g_mean, g_peak = gestation_window()
     recent, mean = tick_rate(tick, elapsed)
     # Varje fält bär sitt eget prefix i stället för att ligga under en
     # gruppetikett. `n_` är antal, `M_` massa i kilo torrsubstans, `N_` näring i
@@ -527,7 +542,7 @@ def format_stats(pop: Population, d: dict, tick: int, elapsed: float) -> str:
         f"N_fri={nb['free']:8.0f}  N_flora={nb['in_flora']:7.0f}  "
         f"N_förna={nb.get('in_litter', nb['in_detritus']):7.0f}  "
         f"n_föd={pop._births_total:4d}  n_död={pop._deaths_total:4d}  "
-        f"dräkt={ng:3d}/{gfrac*100:3.0f}%  "
+        f"dräkt={g_mean:5.1f}/{g_peak:3d}  "
         f"{recent:.2f} ms/tick (medel {mean:.2f})"
     )
 
@@ -634,6 +649,9 @@ def run(a: argparse.Namespace, seed: int | None = None) -> int:
     # `--seeds` kör flera världar i samma process; fönstret får inte bära över.
     _RATE["tick"] = 0
     _RATE["elapsed"] = 0.0
+    _GEST["sum"] = 0.0
+    _GEST["ticks"] = 0
+    _GEST["peak"] = 0
 
     # Samma loggar som run_population.py skriver, men utan pygame. Det gör
     # live_pop_plot.py och live_world_plot.py användbara mot en
@@ -843,9 +861,16 @@ def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
             timer.end_tick(pop, tick_t0, tick)
 
         if a.stats:
+            n_gest = 0
             for x in pop.agents:
                 if x.body.alive:
                     unika.add(int(x.id))
+                    if bool(x.body.gestating):
+                        n_gest += 1
+            _GEST["sum"] += n_gest
+            _GEST["ticks"] += 1
+            if n_gest > _GEST["peak"]:
+                _GEST["peak"] = n_gest
 
         if check_every and tick % check_every == 0:
             report = check_all(pop, tick=tick)

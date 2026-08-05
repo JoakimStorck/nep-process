@@ -2143,6 +2143,22 @@ Nu syns att takten faktiskt varierar med beståndet — de två sista raderna sk
 
 Fönstret nollställs per körning, eftersom `--seeds` kör flera världar i samma process. Sista raden, där tick inte hunnit öka sedan förra rapporten, faller tillbaka på det kumulativa medlet.
 
+### Dräktigheten var en ögonblicksbild av en säsong
+
+*0129. Tidsmedel och topp över rapportintervallet.*
+
+`dräkt=` räknade antalet dräktiga i just den tick raden skrevs. Det är fel sorts mått på en säsongsbunden process.
+
+Gestationen i p124 har uppmätt period **12,03 månader**, alltså exakt `WorldParams.year_len`, och pågår under en del av året. Rapportintervallet på tusen tick är 20 månader, alltså 1,67 år. Ett årligt förlopp samplat var 1,67 år ger en **svävning med period tre** — och det är precis den som ligger bakom att p124 växlade mellan `dräkt=0/0%` och `dräkt=39/54%` varannan rad. Talet mätte samplingsfasen, inte reproduktionen.
+
+Måttet är nu tidsmedlet över rapportintervallet plus toppen: `dräkt=1.6/5`. Medlet svarar på hur mycket reproduktion som pågår, toppen på hur stor kullen kan bli. Ackumuleringen sker i samma genomgång av agenterna som `unika`, alltså utan extra kostnad.
+
+Median-andelen av målmassan är borta. Den var meningsfull bara som ögonblicksbild och därmed aliasad på samma sätt.
+
+Fönstret nollställs vid avläsning och per körning.
+
+**Fallgropen är generell.** Varje mått som samplas vid rapporttillfället och beskriver något årstidsbundet — dräktighet, tillväxt, temperaturgrind — riskerar samma svävning så länge `--report-every · dt` inte är en multipel av `year_len`. Vid dt 0,02 och tolv månaders år är 600 tick ett år.
+
 ## Steg 6c — Rörelsemotorn
 
 *Kräver Steg 5h för att vara mätbar och Steg 6a för sektorpercepten. Underlag: `docs/rorelsens-arkitektur.md`, Del 2–6.*
