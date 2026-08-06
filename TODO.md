@@ -2518,7 +2518,8 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~7006~~ | markvattnet som tredje term i tillväxtens `min()` | floran | **klart** |
 | ~~7007~~ | vittring ur lutning, urlakning nedströms, havet som sänka | näringen | **klart**, 3,6x gradient |
 | ~~7008~~ | partikulär transport av förna nedströms; sjöar som fällor | faunans asätande | **klart** |
-| 7009 | den akvatiska axeln: en kroppsegenskap med nedsida i sin egen fysik | selektionen | **öppen fråga, se nedan** |
+| ~~7009~~ | täthet härledd ur strukturandel; `buoyancy` får skrivare och läsare; drag i vatten | faunans rörelse | **klart, men läsaren fyrar aldrig — se nedan** |
+| 7010 | vattendjupet som fjärde världskanal och fri MLP-ingång | selektionen | öppen |
 | ~~7010~~ | ~~vattenaxeln som nisch~~ | | **slås ihop med 7009** |
 | ~~7011~~ | ~~glesning av hydro~~ | | **utgår**, se nedan |
 | ~~1010~~ | viewern visar terräng och vatten; världen klassar, viewern färgar | ögat | **klart** |
@@ -2535,6 +2536,14 @@ I stället gjordes 7008 till partikulär transport av förna, eftersom mätninge
 **`sediment_rate` är ett reglage mellan land och vatten, inte en fri parameter.** Näringsförlusten motsvarar exakt sedimentexporten: sjöarna behåller sitt, men floderna är ett avlopp till havet. Vid 0,5 kostar det 16 procent av näringsstocken och en tredjedel av floran att göra vattnet rikare per cell än landet.
 
 **Glesning av hydro utgår.** Motivet var att ett tätt grannflöde skulle bli för dyrt. Jämviktslösningen kostar 0,216 ms per tick vid 16 384 celler och 4,1 vid 262 144 — mindre än den täta laplacianen i `transport_pass`. Görs bara om en mätning på en stor värld motiverar den.
+
+### 7009 fungerar men har inget att verka på
+
+Tätheten härleds ur strukturandelen, `buoyancy` får sin första skrivare och läsare, och draget i vatten skalas med `(1 − buoyancy) · djup`. Kalibrerat mot faunans **uppmätta** strukturspann — p5 0,211, median 0,567, p95 0,684 — vilket ger flytförmåga från 0,885 till 0,255 över den fördelning som faktiskt finns. Ett första försök med ändpunkterna 0,97 och 1,90 gav flytförmåga exakt noll för varje strukturandel över 0,5, alltså en död halva av axeln.
+
+**Men noll av fyra djur befinner sig i vatten efter 4 000 tick.** Vattnet är 22 procent av världen, men merparten är polarhav där klimatet ändå är obeboeligt; sjöar och fåror är omkring tre procent. Läsaren finns alltså men fyrar aldrig, och mekanismen går inte att döma.
+
+**Och faunan bär inte terrängvärlden.** Uppmätt i `f5-terrang` vid 64x128: 20 grundare blir 1 till 4 individer efter 4 000 tick, mot 28 i den platta `f4-start20` vid tick 1 200. Det är en större sak än vattenaxeln och bör redas ut först — vattnet kan inte differentiera en population som inte finns.
 
 ### Öppna frågor efter Steg 7
 

@@ -89,6 +89,9 @@ class Phenotype:
     # för kadavrets sammansättning; utan den skulle fysiologin få gissa sin
     # egen komposition ur en konstant.
     structure: float = 0.25
+    # Härledd ur strukturandelen, inte ett eget locus. Se
+    # `buoyancy_from_structure`.
+    buoyancy: float = 0.0
 
 
 # ---- Fixed trait indices (explicit + stable) ----
@@ -425,6 +428,7 @@ def derive_pheno(traits: np.ndarray | None, R: PhenoRanges = PhenoRanges()) -> P
         hidden_1=int(hidden_1),
         hidden_2=int(hidden_2),
         structure=float(structure_fraction(traits)),
+        buoyancy=float(buoyancy_from_structure(structure_fraction(traits))),
     )
 
 
@@ -601,6 +605,65 @@ def nutrient_content(structure: float) -> float:
     return NUTRIENT_PER_KG_LABILE * (1.0 - s) + NUTRIENT_PER_KG_STRUCT * s
 
 
+# Vävnadens täthet relativt vatten. Ben och kitin är tunga, fett och muskel
+# nära neutrala — 1,9 respektive 0,97 är rimliga tal för de två ändarna.
+#
+# **Tätheten är härledd, inte ett eget locus.** Samma disciplin som florans
+# livslängd och som att dess höjd är `m · s`: en egenskap som faller ut ur
+# kroppens sammansättning ska inte också gå att mutera oberoende av den.
+#
+# Och den ger `structure` sin sjätte konsument — på den ände som saknat
+# motkraft. En vattenaxel behöver ingen egen nedsida när den ärver en
+# avvägning som redan är kalibrerad: seg vävnad ger seghet, lång livslängd,
+# låg nedbrytningstakt och billig näring, men gör kroppen tung i vatten.
+DENSITY_LABILE = 0.95
+DENSITY_STRUCT = 1.35
+
+# Täthetsavvikelse som ger flytförmåga noll.
+#
+# Talen är satta mot faunans **uppmätta** strukturspann, inte mot dess
+# nominella. Uppmätt vid 64x128 efter 2 000 tick: p5 0,211, median 0,567, p95
+# 0,684. Över det spannet går tätheten från 1,03 till 1,23 och flytförmågan
+# från 0,90 till 0,23 — en levande gradient över hela den fördelning som
+# faktiskt finns.
+#
+# Ett första försök hade ändpunkterna 0,97 och 1,90, alltså ren benmineral i
+# den ena änden. Det gav flytförmåga exakt noll för varje strukturandel över
+# 0,5, alltså en död halva av axeln och samma klippta tak som mutationsklippet
+# en gång skapade. Verkliga ryggradsdjur ligger mellan 0,95 och 1,10 i
+# helkroppstäthet; 1,35 för ren stödjevävnad är en sammansättning av ben,
+# kitin och kollagen snarare än mineralet ensamt.
+DENSITY_DEV_REF = 0.30
+
+
+def body_density(structure: float) -> float:
+    """Kroppens täthet relativt vatten vid given strukturandel."""
+    s = min(1.0, max(0.0, float(structure)))
+    return DENSITY_LABILE * (1.0 - s) + DENSITY_STRUCT * s
+
+
+def body_density_array(structure):
+    s = np.clip(np.asarray(structure, dtype=np.float64), 0.0, 1.0)
+    return DENSITY_LABILE * (1.0 - s) + DENSITY_STRUCT * s
+
+
+def buoyancy_from_structure(structure):
+    """
+    Flytförmåga i [0, 1]: ett vid neutral täthet, noll vid full avvikelse.
+
+    `buoyancy` i manifestet är den kapacitet som styr hur en organism förhåller
+    sig till vatten. Här får den äntligen en skrivare — härledd ur kroppen — och
+    därmed en betydelse som inte kan glida isär från fysiologin.
+
+    Avvikelsen mäts åt båda håll. En kropp som är för lätt är inte bättre än en
+    som är för tung: den ligger i ytan och drivs med strömmen i stället för att
+    ta sig dit den vill. Att formen är tvåsidig är vad som gör ett inre optimum
+    möjligt i stället för en ände att kollapsa mot.
+    """
+    rho = body_density_array(structure)
+    return np.clip(1.0 - np.abs(rho - 1.0) / DENSITY_DEV_REF, 0.0, 1.0)
+
+
 DECAY_MIN_SCALE = 0.15
 
 # Matsmältningens verkningsgrad som funktion av substratets strukturandel.
@@ -629,7 +692,7 @@ DIET_EFF_EXP = 0.7
 def nutrient_content_array(structure):
     """Vektoriserad `nutrient_content`. Samma uttryck, elementvis."""
     import numpy as _np
-    s = _np.clip(_np.asarray(structure, dtype=_np.float64), 0.0, 1.0)
+    s = np.clip(np.asarray(structure, dtype=np.float64), 0.0, 1.0)
     return NUTRIENT_PER_KG_LABILE * (1.0 - s) + NUTRIENT_PER_KG_STRUCT * s
 
 

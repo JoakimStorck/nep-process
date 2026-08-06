@@ -273,6 +273,24 @@ class AgentParams:
     force_mass_exp: float = 2.0 / 3.0
     drag_lin: float = 220.0
     drag_quad: float = 1.2
+
+    # --- Vattnet som medium --------------------------------------------------
+    #
+    # Draget i vatten multipliceras med `1 + water_drag_gain · (1 − buoyancy) ·
+    # min(1, djup / water_drag_depth_ref)`. En kropp med neutral täthet möter
+    # alltså inget extra motstånd; en tät kropp som måste hålla sig uppe möter
+    # mycket.
+    #
+    # Tätheten är härledd ur strukturandelen och inte ett eget locus, så
+    # vattenaxeln ärver `structure`s befintliga avvägning i stället för att
+    # behöva en påhittad kostnad. Se phenotype.body_density.
+    water_drag_gain: float = 6.0
+    water_drag_depth_ref: float = 0.20
+    # Termisk kostnad vid nedsänkning. Vatten leder värme omkring tjugofem
+    # gånger snabbare än luft, och det är det verkliga skälet att nedsänkning
+    # är farligt för en jämnvarm organism — inte drunkning. Multiplikator på
+    # värmeförlusten, skalad på samma sätt som draget.
+    water_heatloss_gain: float = 3.0
     locomotion_eff: float = 0.25
 
     # ------------------------
@@ -2956,6 +2974,30 @@ class Agent:
         return clamp(float(bias), -1.0, 1.0), thrust, explore_drive, namn
 
 
+    def _water_factor(self) -> float:
+        """
+        Hur mycket vattnet hindrar just den här kroppen, i [0, 1].
+
+        Produkten av två ting: hur djupt cellen står under vatten, mättat mot
+        `water_drag_depth_ref`, och hur långt kroppens täthet ligger från
+        vattnets. Noll på torr mark och noll för en neutral kropp.
+
+        `buoyancy` är härledd ur strukturandelen och skriven vid födsel, så
+        beteendet kan aldrig glida isär från fysiologin — se
+        phenotype.buoyancy_from_structure.
+        """
+        world = getattr(self, "world", None)
+        if world is None or getattr(world, "drainage", None) is None:
+            return 0.0
+        d = float(world.water[world.grid.cell_of(float(self.x), float(self.y))])
+        if d <= float(world.WP.submerged_threshold):
+            return 0.0
+        ref = max(1e-9, float(self.AP.water_drag_depth_ref))
+        depth = d / ref
+        if depth > 1.0:
+            depth = 1.0
+        return depth * (1.0 - float(getattr(self.pheno, "buoyancy", 0.0)))
+
     def _integrate_motion(
         self,
         ctx: "StepCtx",
@@ -3014,6 +3056,19 @@ class Agent:
 
         c1 = float(self.AP.drag_lin)
         c2 = float(self.AP.drag_quad)
+
+        # Vattnet som medium. Draget höjs med hur illa kroppen flyter gånger
+        # hur djupt vattnet är. En neutral kropp möter inget extra motstånd; en
+        # tät kropp som måste hålla sig uppe möter mycket.
+        #
+        # Framkomlighet är därmed en relation och inte en celltyp, precis som
+        # manifestet kräver: världen lagrar vattendjup, och kostnaden faller ut
+        # ur djupet mot organismens egen täthet.
+        w_fac = self._water_factor()
+        if w_fac > 0.0:
+            mult = 1.0 + float(self.AP.water_drag_gain) * w_fac
+            c1 *= mult
+            c2 *= mult
 
         if F_prop <= 0.0:
             speed = 0.0

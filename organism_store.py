@@ -6,7 +6,7 @@ from typing import Iterable
 
 import numpy as np
 
-from phenotype import structure_fraction
+from phenotype import buoyancy_from_structure, structure_fraction
 
 # Numba är valfri. Finns den används en counting sort för CSR-bygget; annars
 # faller koden tillbaka på np.argsort. Permutationerna är bitidentiska, så
@@ -511,7 +511,12 @@ class OrganismStore:
             self.traits[slot, :n] = np.asarray(traits, dtype=np.float32).ravel()[:n]
     
         self.flood_tolerance[slot] = 0.0
-        self.buoyancy[slot] = 0.0
+        # Flytförmågan är härledd ur strukturandelen och är därmed den första
+        # mediumkapaciteten med både skrivare och läsare. Se
+        # phenotype.buoyancy_from_structure och Agent._water_factor.
+        self.buoyancy[slot] = np.float32(
+            buoyancy_from_structure(float(self.structure[slot]))
+        )
         self.kind[slot] = 0
 
     def release_slot(self, slot: int) -> None:

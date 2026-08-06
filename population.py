@@ -38,6 +38,7 @@ from phenotype import (
     flora_temp_opt,
     flora_temp_width,
     flora_uptake_capacity,
+    buoyancy_from_structure,
     structure_fraction,
     energy_density,
     nutrient_content,
@@ -1370,7 +1371,10 @@ class Population:
         self.store.structure[slot] = np.float32(struct)
     
         self.store.flood_tolerance[slot] = np.float32(0.0)
-        self.store.buoyancy[slot] = np.float32(0.0)
+        # Härledd ur strukturandelen, som för faunan. Floran rör sig inte, så
+        # fältet har ingen läsare för den — men det ska inte ljuga: en vedartad
+        # stam flyter inte bättre än ett djurskelett gör.
+        self.store.buoyancy[slot] = np.float32(buoyancy_from_structure(struct))
         
     def _fauna_release_now(self) -> bool:
         """
