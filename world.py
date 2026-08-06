@@ -17,6 +17,7 @@ except ImportError:
 
 from grid import Grid
 from terrain import TerrainParams, generate_elevation
+from drainage import build as build_drainage
 from phenotype import (
     DECAY_SCALE_LABILE,
     DECAY_SCALE_STRUCT,
@@ -301,6 +302,16 @@ class World:
             self.elevation = generate_elevation(self.grid, self.WP.terrain)
         else:
             self.elevation = float(self.WP.elevation_init)
+
+        # Dräneringsnätet är terrängens statiska konsekvens och byggs en gång.
+        # Det är inte ett världsfält utan en struktur över dem — därför en egen
+        # attribut och en egen invariant, inte en post i WORLD_CELL_FIELDS.
+        # None i en platt värld: utan höjdskillnader finns ingen riktning.
+        self.drainage = (
+            build_drainage(self.grid, self.elevation, float(self.WP.sea_level))
+            if self.WP.terrain is not None
+            else None
+        )
         self.rain_input = float(self.WP.rain_input_base)
         self.spring_input = float(self.WP.spring_input_base)
         self.infiltration = float(self.WP.infiltration_base)

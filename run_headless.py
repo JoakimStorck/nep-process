@@ -1017,6 +1017,28 @@ def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
             f"init_pop={a.init_pop} max_pop={a.max_pop} seed={seed}",
             flush=True,
         )
+        _dr = getattr(pop.world, "drainage", None)
+        if _dr is not None:
+            from drainage import describe as _describe_drainage
+
+            d = _describe_drainage(_dr)
+            # Vattnets andel av världen är det tal som avgör om världen behöver
+            # bli större, och den är inte densamma som andelen förlorad
+            # produktion: havet ligger i polarbältet där tillväxtgrinden ändå
+            # är nära noll. Därför båda talen.
+            g = np.asarray(pop.world.growth_gate_field(), dtype=np.float64)
+            wet = _dr.sea | (_dr.lake_id >= 0)
+            g_tot = float(g.sum())
+            g_lost = float(g[wet].sum())
+            print(
+                f"[terräng] hav {100*d['sea_frac']:.1f} %  sjö {100*d['lake_frac']:.1f} % "
+                f"({d['n_lakes']} st, störst {d['largest_lake']} celler)  "
+                f"land {100*d['land_frac']:.1f} %  "
+                f"största flod {d['max_upslope']:.0f} celler  "
+                f"grindviktad areaförlust {100*g_lost/max(1e-12, g_tot):.1f} %",
+                flush=True,
+            )
+
     # --- bildrutor utan fönster -------------------------------------------
     # Samma ritkod som den interaktiva viewern, men sparad till fil. Gör
     # rumslig fördelning granskbar över ssh, där ett fönster inte går att

@@ -708,9 +708,94 @@ def check_death_cause_set(pop) -> list[Violation]:
     return out
 
 
+def check_drainage(pop) -> list[Violation]:
+    """
+    Dräneringsnätets struktur.
+
+    Nätet byggs en gång och rörs aldrig, så felen här är byggfel snarare än
+    drifter — men de är tysta. Ett nät med en cykel skulle få `route()` att
+    ackumulera i evighet; en cell utan väg till havet skulle samla vatten som
+    aldrig lämnar systemet, vilket bryter vattenbalansen först efter lång tid.
+    """
+    dr = getattr(pop.world, "drainage", None)
+    if dr is None:
+        return []
+
+    n = int(pop.grid.n_cells)
+    out: list[Violation] = []
+
+    if int(dr.flow_order.shape[0]) != n:
+        out.append(Violation(
+            "drainage",
+            f"flow_order täcker {int(dr.flow_order.shape[0])} av {n} celler",
+        ))
+        return out
+
+    if np.unique(dr.flow_order).size != n:
+        out.append(Violation("drainage", "flow_order innehåller dubbletter"))
+        return out
+
+    # Topologin: varje cell måste komma före sin nedströmsgranne i ordningen.
+    # Det är cykelfrihet uttryckt som en prövbar egenskap i stället för som ett
+    # antagande om hur bygget gick till.
+    pos = np.empty(n, dtype=np.int64)
+    pos[dr.flow_order] = np.arange(n, dtype=np.int64)
+    has_to = dr.flow_to >= 0
+    if has_to.any():
+        src = np.flatnonzero(has_to)
+        bad = src[pos[src] >= pos[dr.flow_to[src]]]
+        if bad.size:
+            out.append(Violation(
+                "drainage",
+                f"{bad.size} celler ligger efter sin nedströmsgranne i "
+                f"flow_order, t.ex. {[int(c) for c in bad[:MAX_EXAMPLES]]}",
+            ))
+
+        # Nedströmsgrannen måste vara en granne.
+        nb = np.asarray(pop.grid.neighbor_idx, dtype=np.int64)
+        is_nb = (nb[src] == dr.flow_to[src][:, None]).any(axis=1)
+        if not is_nb.all():
+            stray = src[~is_nb]
+            out.append(Violation(
+                "drainage",
+                f"{stray.size} celler pekar på en cell som inte är granne, "
+                f"t.ex. {[int(c) for c in stray[:MAX_EXAMPLES]]}",
+            ))
+
+    # Havet är ändstation och får ingen riktning nedåt.
+    if bool((dr.flow_to[dr.sea] >= 0).any()):
+        out.append(Violation("drainage", "havsceller har en riktning nedströms"))
+
+    # Sjöarnas bokföring: startindex monotona och täcker lake_cells exakt.
+    ls = np.asarray(dr.lake_start, dtype=np.int64)
+    if ls.size < 1 or int(ls[0]) != 0:
+        out.append(Violation("drainage", "lake_start börjar inte på noll"))
+    elif np.any(np.diff(ls) < 0):
+        out.append(Violation("drainage", "lake_start är inte växande"))
+    elif int(ls[-1]) != int(dr.lake_cells.shape[0]):
+        out.append(Violation(
+            "drainage",
+            f"lake_start slutar på {int(ls[-1])}, lake_cells har "
+            f"{int(dr.lake_cells.shape[0])} poster",
+        ))
+    elif dr.lake_cells.size and np.unique(dr.lake_cells).size != dr.lake_cells.size:
+        out.append(Violation("drainage", "en cell tillhör två sjöar"))
+
+    # Hypsometrin ska vara växande i volym — annars går nivåuppslaget baklänges.
+    for i in range(dr.n_lakes):
+        a, b = int(ls[i]), int(ls[i + 1])
+        v = dr.lake_vol[a:b]
+        if v.size and (float(v[0]) != 0.0 or np.any(np.diff(v) < 0.0)):
+            out.append(Violation("drainage", f"sjö {i} har icke-växande hypsometri"))
+            break
+
+    return out
+
+
 ALL_CHECKS = (
     check_sparse_fields,
     check_nutrient_balance,
+    check_drainage,
     check_slot_bookkeeping,
     check_world_field_domains,
     check_body_store_mirror,
