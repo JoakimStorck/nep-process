@@ -253,7 +253,9 @@ hela step()       14,41  ->  0,047 ms
 
 Bilden ändras i Steg 4, där `nutrient` blir tätt dynamiskt och transport införs. Det är avsiktligt: den klassen finns för fält där fullt svep är genuint motiverat.
 
-Kadensklasserna ska in i manifestet innan hydro byggs, så att `hydro_pass` och `transport_pass` skrivs mot rätt struktur från början. Glesning av hydro självt hör till Steg 8 — den kräver en tät referensimplementation att välja epsilon mot och validera massbevarande emot.
+~~Kadensklasserna ska in i manifestet innan hydro byggs.~~ **Klart i 7001** — README.md har nu ett eget avsnitt, och en femte klass tillkom när hydro fick sin form: **nätverksdynamisk**, ett fält som är tätt men riktat och rörs en gång per cell i en förberäknad ordning.
+
+Glesning av hydro självt är däremot sannolikt onödig. Den motiverades av att ett tätt grannflöde skulle kosta för mycket, men jämviktslösningen i Steg 7 kostar 0,68 ms vid 262 144 celler — mindre än den täta laplacianen i `transport_pass`. Punkten flyttas till Steg 7:s sista patch och görs bara om en mätning kräver den.
 
 ## Steg 4 — Näringskretsloppet
 
@@ -2496,13 +2498,33 @@ Provisoriskt, och ska mätas om när floran är lagad:
 
 **Klart när:** inget fauna-tillstånd har två skrivare, och inget kapacitetsfält saknar läsare.
 
-## Steg 7 — Hydro
+## Steg 7 — Geologin och vattnet
 
-- `elevation` får en terränggenerator: lutande plan, bassänger, höjdryggar.
-- `hydro_pass()` över fri yta `elevation + water` med grannflöde, tvåstegsmetod, strikt kontinuitet. Härledda fält som del av samma passkontrakt.
-- `flood_tolerance` och `buoyancy` får läsare i locomotion och rörelsekostnad. Passiv drift i hydro-passet.
+*Underlag: `docs/geologin-och-vattnet.md`. Patchserien 7001 och uppåt.*
 
-Att `nutrient` sedan Steg 4 transporteras med samma mönster gör hydro till en variant snarare än en nyhet.
+Steget hette tidigare bara "Hydro" och beskrev ett explicit grannflöde med tvåstegsmetod. Mätningen inför steget ändrade formen. Tidssteget är omkring femton timmar och vatten hinner på den tiden korsa hela världen, så ett CFL-begränsat schema låter en flod behöva tio simulerade månader på att nå havet. Uppmätt kostar det dessutom 11,4 ms per tick vid 512x512 mot jämviktslösningens 0,68. **Hydro löser därför stationärt tillstånd per tick längs ett förberäknat dräneringsnät.** Fysiken är oförändrat lokal, gradientdriven och kontinuitetsbevarande; det explicita schemat behålls som valideringsorakel.
+
+Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjdskillnader — och eftersom terrängen på köpet ger det modellen saknar mest: en miljöaxel som varierar finkornigt i **två** dimensioner. Latituden är i dag den enda rumsliga axeln, och korskorrelationen i födelsetakt mellan latitudband ligger på 0,45–0,67 mot ett mål under 0,3.
+
+**Låsta beslut:** jämviktslösning, inte transient; 64x256 först och 512x512 efter florans GPU-väg; havet som ett sammanhängande bälte kring polerna; säsongsbunden och latitudberoende nederbörd med statisk orografisk modifierare; höjdgradient på temperaturen direkt.
+
+| | innehåll | konsument |
+|---|---|---|
+| ~~7001~~ | ~~dokumentet, kadensklasserna i manifestet, den här planen~~ **Klart** | — |
+| 7002 | terränggenerator via spektralsyntes över `grid.cell_center_*`; `elevation` som statiskt per-cell-fält; polarhavet; scenariofältet `varld.terrang`; viewerläge TERRÄNG | ögat |
+| 7003 | dräneringsnätet: prioritetsflod i Numba, `flow_to`, `flow_order`, `lake_id`, hypsometri, `sea_mask`, `slope`, `upslope_area` | 7004 |
+| 7004 | `hydro_pass()`: forcing, `soil_water`, routing, sjömagasin, härledda fält; vattenbalans som invariant; det explicita schemat som orakel | 7005–7009 |
+| 7005 | temperaturens höjdgradient | klimatet blir 2D |
+| 7006 | markvattnet som tredje term i tillväxtens `min()` | floran |
+| 7007 | vittring ur lutning, urlakning nedströms, medelbevarande jämvikt | näringen |
+| 7008 | dränkning: etablering och mortalitet i översvämmade celler | `submerged` |
+| 7009 | `flood_tolerance` och `buoyancy`: rörelsekostnad, skada, passiv drift | faunan |
+| 7010 | vattenaxeln som nisch: `water_opt` med motverkande ändar | selektionen |
+| 7011 | glesning — **bara om en mätning motiverar den** | prestanda |
+
+De första patcharna kräver varken fauna eller nämnvärd flora. Ett eget scenario med tom fauna hör därför till 7002, så att terrängen och vattnet går att döma utan att ekologin står i vägen.
+
+**Känd risk att avgöra i 7002:** terrängen har stor varians mellan frön. Vid ett av tre prövade frön fick kontinenten en enda avloppslös bassäng som prioritetsfloden fyllde till ett innanhav över halva landet. Det är korrekt beteende för en endorheisk bassäng, men frågan om terrängen ska villkoras — lägre strävhet, tak på största sjön, eller en svag lutning mot polerna — ska besvaras med mätningen framför sig.
 
 ## Steg 8 — Acceleration
 

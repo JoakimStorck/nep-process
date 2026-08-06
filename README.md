@@ -382,6 +382,22 @@ evaporation       — vattenförlust till atmosfär per cell
 
 Biologin läser primära och härledda fält. Den skriver aldrig till forcing-fält.
 
+### Kadensklasser
+
+Ett världsfält har både en ägare och en kadens. Ägaren säger vem som skriver; kadensen säger hur ofta fältet behöver röras. Att en tom cell ska vara billig är samma princip som att en organism utan en kapacitet inte ska kosta något för den.
+
+**Statiska** — sveps aldrig. Är värdet dessutom rumsligt konstant lagras det som skalär, inte som array; fältet materialiseras först när något faktiskt varierar det. `elevation` och forcing-fälten så länge de är parametriska.
+
+**Profilberoende** — fältet är en funktion av en enda koordinat och lagras som sådan. Klimatet varierar bara med latitud och lagras därför per band, med längd `n_bands` i stället för `n_cells`. Läsning är en gather via `Grid.band_of_cell()`, inte en omberäkning. Formen är *profil plus eventuella per-cell-modifierare*: modifieraren kan vara frånvarande och kostar då ingenting.
+
+**Glest dynamiska** — fältet bär en aktiv mängd och pass arbetar mot den. Kontraktet är att en cell utanför den aktiva mängden är exakt noll, vilket gör glesheten till en prövbar egenskap i stället för ett antagande. `detritus` och `carcass`.
+
+**Tätt dynamiska** — fullt svep är genuint motiverat. `nutrient` när det diffunderar; näring som sprider sig har inget glest stöd.
+
+**Nätverksdynamiska** — fältet är tätt men riktat. Varje cell rörs exakt en gång, i en ordning som geometrin och terrängen tillsammans bestämmer en gång för alla. Kostnaden är O(n) med perfekt lokalitet när ordningen lagras som en permutationsarray. `discharge` i hydro.
+
+Ett pass ska skrivas mot fältets kadensklass från början. Skrivs det tätt när fältet är glest måste det skrivas om.
+
 ### Hydrologi
 
 Vatten representeras som ett inkompressibelt medium diskretiserat per cell. Land och vatten är inte två ontologiskt skilda världar — de är två regimer i samma fältmodell, styrda av topografi och vattenmängd.
@@ -393,6 +409,8 @@ surface = elevation + water
 ```
 
 Flöde sker från cell till granncell baserat på skillnaden i fri yta. Flödet är lokalt och gradientdrivet. Alla flöden beräknas från cellernas tillstånd vid början av passet och appliceras simultant som nettoförändringar. Kontinuitet upprätthålls strikt: total utström från en cell får aldrig överstiga tillgängligt vatten.
+
+**Flödet löses till jämvikt, inte som en transient.** Tidssteget är omkring femton timmar, och vatten hinner på den tiden korsa hela världen — flera storleksordningar snabbare än en organism rör sig. Ett explicit schema håller informationshastigheten under ungefär en cell per tick och skulle därför låta en flod behöva tio simulerade månader på att nå havet. Den fördröjningen är numerik utan biologisk motsvarighet. Hydro löser i stället stationärt tillstånd varje tick genom att dränera längs en förberäknad ordning: fysiken är oförändrat lokal, gradientdriven och kontinuitetsbevarande, det är lösningsmetoden som skiljer. Se `docs/geologin-och-vattnet.md`.
 
 Vattentillförsel (`rain_input`, `spring_input`) och förluster (`infiltration`, `evaporation`) tillämpas som käll- respektive sänktermer per cell inom hydro-passet.
 
