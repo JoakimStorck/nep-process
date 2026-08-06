@@ -34,7 +34,8 @@ import socket
 import threading
 import time
 
-from viewframe import PROTOCOL_VERSION, ViewFrame, pack
+from viewframe import (PROTOCOL_VERSION, ViewFrame, pack, pack_static,
+                       static_from_frame)
 
 
 class _Client:
@@ -43,7 +44,7 @@ class _Client:
     # felet dyker upp i accept-tråden, alltså efter att servern rapporterat att
     # den lyssnar och utan att körningen avbryts.
     __slots__ = ("sock", "addr", "wake", "thread", "reader", "alive", "sent",
-                 "dropped", "view")
+                 "dropped", "view", "sent_static")
 
     def __init__(self, sock: socket.socket, addr) -> None:
         self.sock = sock
@@ -57,6 +58,10 @@ class _Client:
         # Senast begärda synliga utsnitt: (cx, cy, hw, hh) i världskoordinater,
         # eller None för "inga anspråksrader".
         self.view = None
+        # Statiken skickas vid handskakningen, men bara om det redan finns en
+        # bildruta att härleda den ur. Annars tar sändarslingan den vid första
+        # rutan.
+        self.sent_static = False
 
     @property
     def name(self) -> str:
@@ -88,6 +93,9 @@ class ViewerServer:
 
         self._latest: bytes | None = None
         self._latest_frame: ViewFrame | None = None
+        # Den statiska posten packas vid första bildrutan och skickas till
+        # varje klient efter handskakningen. Se `_static_blob`.
+        self._static: bytes | None = None
         self._lock = threading.Lock()
         self._clients: list[_Client] = []
         self._running = True
@@ -147,6 +155,22 @@ class ViewerServer:
         if not self._clients:
             return False
         return (time.monotonic() - self._last_publish) >= self.min_interval
+
+    def _static_blob(self, frame: ViewFrame) -> bytes:
+        """
+        Den statiska posten, packad en gång och sedan återanvänd.
+
+        Höjden ändras inte under en körning, så blobben byggs vid första
+        bildrutan och delas av alla klienter — samma princip som att rutan
+        packas en gång oavsett hur många som tittar.
+        """
+        with self._lock:
+            if self._static is not None:
+                return self._static
+        blob = pack_static(static_from_frame(frame))
+        with self._lock:
+            self._static = blob
+        return blob
 
     def publish(self, frame: ViewFrame) -> bool:
         """
@@ -280,6 +304,17 @@ class ViewerServer:
                     continue
                 sock.sendall((json.dumps({"ok": True}) + "\n").encode("utf-8"))
                 sock.settimeout(10.0)
+                # Statiken före första bildrutan. Finns ingen ännu — ingen
+                # bildruta har publicerats — skickas den när den byggs, av
+                # sändarslingan. Klienten ritar utan terräng tills dess i
+                # stället för att blockera.
+                with self._lock:
+                    frame0 = self._latest_frame
+                if frame0 is not None:
+                    sock.sendall(self._static_blob(frame0))
+                    sent_static = True
+                else:
+                    sent_static = False
             except Exception as exc:
                 self._log(f"handskakning misslyckades mot {addr}: {exc}")
                 try:
@@ -289,6 +324,7 @@ class ViewerServer:
                 continue
 
             c = _Client(sock, addr)
+            c.sent_static = sent_static
             c.thread = threading.Thread(target=self._send_loop, args=(c,), daemon=True)
             c.reader = threading.Thread(target=self._recv_loop, args=(c,), daemon=True)
             with self._lock:
@@ -398,9 +434,16 @@ class ViewerServer:
             c.wake.clear()
             with self._lock:
                 blob = self._latest
+                frame0 = self._latest_frame
             if blob is None:
                 continue
             try:
+                # En klient som anslöt innan första bildrutan fanns har ännu
+                # ingen statik. Den måste komma före rutan, annars ritar
+                # viewern en bild utan terräng och rättar den först nästa gång.
+                if not c.sent_static and frame0 is not None:
+                    c.sock.sendall(self._static_blob(frame0))
+                    c.sent_static = True
                 c.sock.sendall(blob)
                 c.sent += 1
             except Exception:

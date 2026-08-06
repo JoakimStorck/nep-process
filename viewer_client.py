@@ -41,7 +41,8 @@ import time
 
 import numpy as np
 
-from viewframe import HEADER_SIZE, PROTOCOL_VERSION, ViewFrame, payload_size, unpack
+from viewframe import (HEADER_SIZE, PROTOCOL_VERSION, ViewFrame, apply_static,
+                       message_kind, payload_size, unpack, unpack_static)
 
 
 class FrameReceiver:
@@ -133,6 +134,9 @@ class FrameReceiver:
                 self._sleep(self.retry_s)
                 continue
 
+            # Statiken gäller per anslutning: servern kan ha startats om med
+            # en annan värld sedan sist.
+            static = None
             self.connected = True
             with self._send_lock:
                 self._sock = sock
@@ -142,11 +146,14 @@ class FrameReceiver:
                 while self._running:
                     head = self._recv_exact(sock, HEADER_SIZE)
                     payload = self._recv_exact(sock, payload_size(head))
-                    frame = unpack(head, payload)
+                    self.bytes_in += HEADER_SIZE + len(payload)
+                    if message_kind(head) == "static":
+                        static = unpack_static(head, payload)
+                        continue
+                    frame = apply_static(unpack(head, payload), static)
                     with self._lock:
                         self._frame = frame
                     self.frames += 1
-                    self.bytes_in += HEADER_SIZE + len(payload)
                     self.last_frame_at = time.monotonic()
             except Exception as exc:
                 self.status = f"anslutningen bröts: {exc.__class__.__name__} — försöker igen"

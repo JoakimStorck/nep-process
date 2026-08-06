@@ -45,7 +45,11 @@ import numpy as np
 # cell som land, fåra, sjö eller hav. Klassningen görs i världen och inte i
 # viewern: trösklarna mellan de fyra hör till modellen, och en mottagare som
 # räknade om dem ur djupet skulle rita en annan värld än den som simuleras.
-PROTOCOL_VERSION = 5
+# 6: höjden skickas en gång vid handskakningen i stället för i varje bildruta.
+# Den är statisk, och att sända om den femton gånger i sekunden var två
+# tredjedelar av det terrängen kostade på tråden. `wet_kind` och `soil01`
+# stannar i bildrutan — sjönivåer och fåror ändras med årstiden.
+PROTOCOL_VERSION = 6
 
 # Vattnets topologi per cell. Ordningen är bindande — den är värdet i
 # `ViewFrame.wet_kind`.
@@ -121,6 +125,10 @@ class ViewFrame:
     #
     # `soil01` är markfukten som andel av fältkapacitet, alltså det tal florans
     # tillväxt faktiskt läser.
+    # `elevation01`, `elev_min` och `elev_max` är statiska och skickas inte i
+    # bildrutan — se `WorldStatic` och `_WIRE_STATIC`. De finns kvar som fält
+    # eftersom lokala renderingar bygger rutan direkt ur populationen och då
+    # ska ha allt på ett ställe; det är bara tråden som delar upp dem.
     elevation01: np.ndarray = field(default_factory=lambda: np.zeros(0, np.float32))
     wet_kind: np.ndarray = field(default_factory=lambda: np.zeros(0, np.uint8))
     soil01: np.ndarray = field(default_factory=lambda: np.zeros(0, np.float32))
@@ -474,6 +482,67 @@ import struct
 import zlib
 
 _MAGIC = b"NEPV"
+_MAGIC_STATIC = b"NEPS"
+
+
+@dataclass
+class WorldStatic:
+    """
+    Det som inte ändras under en körning. Skickas en gång per klient, direkt
+    efter handskakningen och före första bildrutan.
+
+    Höjden är världens enda genuint statiska cellfält, och den är samtidigt det
+    dyraste: uppmätt två tredjedelar av vad terrängen lade på tråden, sänt om
+    femton gånger i sekunden utan att ändras. Att sända den en gång är inte en
+    optimering utan samma princip som kadensmodellen: ett fält som inte ändras
+    ska inte röras varje tick.
+
+    Vattnet hör *inte* hit. Sjöar fylls och töms med årstiden och fåror torkar
+    ut, så `wet_kind` och `soil01` stannar i bildrutan.
+    """
+
+    protocol: int = PROTOCOL_VERSION
+    grid_width: int = 0
+    grid_height: int = 0
+    has_terrain: bool = False
+    elev_min: float = 0.0
+    elev_max: float = 0.0
+    elevation01: np.ndarray = field(default_factory=lambda: np.zeros(0, np.float32))
+
+
+# Fält i ViewFrame som bärs av WorldStatic i stället och därför hoppas över vid
+# packning. Mottagaren fyller dem ur den statiska posten.
+_WIRE_STATIC: frozenset[str] = frozenset({"elevation01", "elev_min", "elev_max"})
+
+
+def static_from_frame(frame: ViewFrame) -> WorldStatic:
+    """Plocka ut den statiska delen ur en färdig bildruta."""
+    return WorldStatic(
+        grid_width=int(frame.grid_width),
+        grid_height=int(frame.grid_height),
+        has_terrain=bool(frame.has_terrain),
+        elev_min=float(frame.elev_min),
+        elev_max=float(frame.elev_max),
+        elevation01=np.asarray(frame.elevation01, dtype=np.float32).copy(),
+    )
+
+
+def apply_static(frame: ViewFrame, static: "WorldStatic | None") -> ViewFrame:
+    """
+    Fyll bildrutans statiska fält ur den post som kom vid handskakningen.
+
+    Utan en statisk post lämnas fälten tomma, och viewern ritar då utan
+    terräng i stället för att krascha — en klient ska inte behöva veta om
+    servern körde en platt värld eller om posten uteblev.
+    """
+    if static is None:
+        return frame
+    frame.elevation01 = np.asarray(static.elevation01, dtype=np.float32)
+    frame.elev_min = float(static.elev_min)
+    frame.elev_max = float(static.elev_max)
+    if not bool(static.has_terrain):
+        frame.has_terrain = False
+    return frame
 
 # Fält som kvantiseras till uint8, med det intervall de normeras över.
 _WIRE_U8: dict[str, tuple[float, float]] = {
@@ -498,8 +567,16 @@ _WIRE_U8: dict[str, tuple[float, float]] = {
 _WIRE_CAST: dict[str, str] = {"claim_starts": "int32"}
 
 
-def pack(frame: ViewFrame, compress: bool = True) -> bytes:
-    """Serialisera en bildruta. Returnerar ett komplett ramat meddelande."""
+def pack(frame: ViewFrame, compress: bool = True, *, magic: bytes = _MAGIC,
+         skip: frozenset[str] = _WIRE_STATIC) -> bytes:
+    """
+    Serialisera en bildruta eller en statisk post. Returnerar ett komplett
+    ramat meddelande.
+
+    Rutinen itererar över dataklassens fält och är därmed oberoende av vilken
+    klass den får. `magic` skiljer de två meddelandetyperna åt på tråden, och
+    `skip` utelämnar de fält som bärs av den andra.
+    """
     from dataclasses import fields as _fields
 
     scalars: dict[str, object] = {}
@@ -507,6 +584,8 @@ def pack(frame: ViewFrame, compress: bool = True) -> bytes:
     bufs: list[bytes] = []
 
     for f in _fields(frame):
+        if f.name in skip:
+            continue
         v = getattr(frame, f.name)
         if isinstance(v, np.ndarray):
             q = None
@@ -540,22 +619,42 @@ def pack(frame: ViewFrame, compress: bool = True) -> bytes:
     if compress:
         payload = zlib.compress(payload, 1)
         flags = 1
-    return _MAGIC + struct.pack("<BI", flags, len(payload)) + payload
+    return magic + struct.pack("<BI", flags, len(payload)) + payload
+
+
+def pack_static(static: WorldStatic, compress: bool = True) -> bytes:
+    """Serialisera den statiska posten."""
+    return pack(static, compress, magic=_MAGIC_STATIC, skip=frozenset())
 
 
 HEADER_SIZE = len(_MAGIC) + 5
 
 
+def message_kind(head: bytes) -> str:
+    """"frame" eller "static" ur meddelandets första byten."""
+    if len(head) < HEADER_SIZE:
+        raise ValueError("för kort huvud")
+    if head[:4] == _MAGIC:
+        return "frame"
+    if head[:4] == _MAGIC_STATIC:
+        return "static"
+    raise ValueError("okänt magiskt tal på tråden")
+
+
 def payload_size(head: bytes) -> int:
     """Läs nyttolastens längd ur de första HEADER_SIZE byten."""
-    if len(head) < HEADER_SIZE or head[:4] != _MAGIC:
-        raise ValueError("inte en ViewFrame — fel magiskt tal")
+    message_kind(head)
     _flags, n = struct.unpack("<BI", head[4:HEADER_SIZE])
     return int(n)
 
 
-def unpack(head: bytes, payload: bytes) -> ViewFrame:
-    """Återskapa en bildruta ur ram och nyttolast."""
+def unpack_static(head: bytes, payload: bytes) -> WorldStatic:
+    """Återskapa den statiska posten."""
+    return unpack(head, payload, cls=WorldStatic)
+
+
+def unpack(head: bytes, payload: bytes, cls=ViewFrame):
+    """Återskapa en bildruta eller statisk post ur ram och nyttolast."""
     flags, _n = struct.unpack("<BI", head[4:HEADER_SIZE])
     if flags & 1:
         payload = zlib.decompress(payload)
@@ -570,7 +669,7 @@ def unpack(head: bytes, payload: bytes) -> ViewFrame:
             f"{PROTOCOL_VERSION} — kör samma commit i båda ändar"
         )
 
-    frame = ViewFrame(**header["scalars"])
+    frame = cls(**header["scalars"])
     off = 4 + hlen
     for spec in header["arrays"]:
         dt = np.dtype(spec["d"])
