@@ -100,7 +100,7 @@ W_PARNING = 0.95
 W_SEPARATION = 0.70
 W_KOHESION = 0.40
 W_ALIGNMENT = 0.20
-W_FODA = 0.60          # mot en styrka i 0–0,6; blir 0,36 mot en normerad
+W_FODA = 0.36          # mot en styrka i 0–1 sedan dödzonen togs bort
 W_KYLA = 0.70
 
 
@@ -322,38 +322,33 @@ def styrka_nedkylning(Tb: float, Tb_min: float, span: float = 10.0) -> float:
         return 0.0
     return _clamp((Tb_min - Tb) / span, 0.0, 1.0)
 
-def styrka_foda(hunger: float, sig: float, h_min: float = 0.4) -> float:
+def styrka_foda(hunger: float, sig: float) -> float:
     """
-    Hungern gånger födosignalens styrka, **0–0,6**.
+    Födosökets styrka, 0–1: aptiten gånger födosignalens styrka.
 
-    Uttrycket är oförändrat: `clamp(hunger − 0,4; 0; 0,6) · sig`.
+    **Dödzonen är borta.** Uttrycket var `clamp(hunger − 0,4; 0; 0,6) · sig`,
+    alltså noll tills reserven var fyrtio procent tömd. Ett djur som såg en
+    äng med halv reserv gick förbi den.
 
-    **Taket 0,6 är avgjort.** Det är inte en avkortning utan en skalning:
-    `hunger` går 0–1, så `hunger − 0,4` når som mest exakt 0,6 och klampen
-    binder aldrig uppåt. Den är alltså en gammal skalning som hör hemma i
-    vikten, och `styrka_foda_normerad()` är samma storhet på 0–1.
+    Uppmätt passerar aptiten sin egen grind i 4,68 procent av kroppsstegen.
+    Det avsiktliga födosöket var i praktiken avstängt — och när flyttalsdammet
+    som gav full aptit i fyra procent av stegen togs bort i 0151 halverades
+    impulsen att söka mat. Djuren i p151 var lättare genom hela
+    grundarkraschen, 0,911 mot 0,081 kg vid tick 18000, och beståndet dog ut.
 
-    Golvet 0,4 är däremot verkligt och avsiktligt: under det svarar djuret inte
-    på föda alls. Det är en dödzon, inte en normering, och ska överleva som
-    styrkans nollpunkt.
+    Ett lågt anspråk i trappan ska ha den här formen: vanligt, svagt, alltid
+    riktat mot maten, och förlorande mot flocken när djuret är mätt. Inte en
+    reflex som slår på fullt när djuret redan ligger efter. Samma fel som i
+    svälten, en nivå ner — en tröskel där det borde vara en gradient.
 
-    `sig` är födosignalen ur sektoraggregatet, redan 0–1.
+    Amplituden vid full aptit är oförändrad: vikten går från 0,60 mot en
+    styrka i 0–0,6 till 0,36 mot en styrka i 0–1. Det som ändras är att
+    intervallet däremellan inte längre är noll.
+
+    `sig` ligger kvar i amplituden i det här steget. Att flytta den till
+    bäringen är beslut C och hör till arbitreringen, där bäringen finns.
     """
-    return _clamp(hunger - h_min, 0.0, 0.6) * sig
-
-
-def styrka_foda_normerad(hunger: float, sig: float, h_min: float = 0.4) -> float:
-    """
-    Samma styrka på 0–1, mot vikten 0,36 i stället för 0,60.
-
-    **Noll anropare tills steg 3**, av skälet i modulens docstring. Att lämna
-    en skalningsfunktion utan anropare är precis det mönster som gav
-    `phenotype.py` sju döda accessorer och `population.py` en parallell
-    implementation med hårdkodade index. Risken hanteras på ett sätt: när
-    steg 3 tar den i bruk ska `styrka_foda()` tas bort i samma patch, så att
-    det aldrig finns två levande definitioner av samma styrka.
-    """
-    return _clamp((hunger - h_min) / 0.6, 0.0, 1.0) * sig
+    return _clamp(hunger, 0.0, 1.0) * sig
 
 
 # --- Nivå 3: termisk stress -----------------------------------------------

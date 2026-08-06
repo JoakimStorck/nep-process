@@ -2826,7 +2826,12 @@ class Agent:
     ) -> tuple[float, float, float]:
         hunger_now = float(self.body.hunger())
     
-        if flee_state <= 0.0 and hunger_now > 0.4:
+        # Ingen aptitgrind. Dödzonen på 0,4 gjorde födosöket till en reflex
+        # som slog på först när reserven var fyrtio procent tömd; nu är
+        # anspråket graderat hela vägen och svagt när djuret är mätt.
+        # `sig > 0,05` nedan står kvar — den handlar om ifall mat syns, inte
+        # om ifall djuret vill ha den.
+        if flee_state <= 0.0:
             sensors = getattr(self, "sensors", None)
             if sensors is not None:
                 accB = getattr(sensors, "_acc_dir_B", None)
@@ -2843,8 +2848,8 @@ class Agent:
                         bias_food = clamp(err_food / math.pi, -1.0, 1.0)
                         fd = styrning.styrka_foda(hunger_now, sig)
     
-                        turn = clamp(turn + 0.60 * fd * bias_food, -1.0, 1.0)
-                        thrust = clamp(thrust + 0.3 * fd, 0.0, 1.0)
+                        turn = clamp(turn + 0.36 * fd * bias_food, -1.0, 1.0)
+                        thrust = clamp(thrust + 0.18 * fd, 0.0, 1.0)
     
         _diet_local = float(getattr(self.pheno, "diet", 0.5))
         _herb_local = (1.0 - _diet_local) ** 0.7

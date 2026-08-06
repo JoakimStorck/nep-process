@@ -2415,6 +2415,27 @@ gör det till en riktig axel enligt husregeln: en bank är dyr att bygga och
 läcker. Den ger också frömassan en andra konsekvens i motsatt riktning — stora
 frön etablerar bättre men lever kortare i banken.
 
+### Aptitens massterm importerar florabristen
+
+`hunger()` returnerar `max(reservunderskott, massunderskott)`, där
+massatermen är `(M_exp − M)/(M_exp − M_min)`. Den kom till av ett riktigt
+skäl: `Ecap = reserve_cap · M`, så när djuret magrar krymper både reserven och
+taket och kvoten står nästan still — ett djur på väg mot `M_min` rapporterade
+aptiten 0,33.
+
+Men det är samma kategorifel som svälten hade en nivå upp. Att vara liten är
+ett tillstånd, inte en aptit, och i p148 låg hela populationen stadigt på 69
+procent av `expected_mass` **därför att floran inte levererar**. Massatermen
+importerar alltså florabristen rakt in i födosökets styrka, och när dödzonen
+nu är borta väger den tyngre än förut.
+
+Rätt fix är troligen inte massatermen utan att mäta reserven mot *förväntad*
+kapacitet: `Et / (reserve_cap · M_exp)` faller genuint när djuret tynar, utan
+att importera ett kroniskt massunderskott. Då kan massatermen tas bort helt.
+
+Bör göras efter fröbanken, inte före — annars kalibreras aptiten mot en värld
+som ska ändras.
+
 ### Skademodellens svältterm
 
 `dD_starve` drivs fortfarande av `massunderskott()`, alltså massan relativt

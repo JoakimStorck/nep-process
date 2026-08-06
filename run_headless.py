@@ -415,10 +415,10 @@ def instrument_steering() -> None:
         _aB = getattr(_sens, "_acc_dir_B", None) if _sens is not None else None
         _aC = getattr(_sens, "_acc_dir_C", None) if _sens is not None else None
         _h = float(self.body.hunger())
-        if _aB is not None and _aC is not None and len(_aB) > 0 and _h > 0.4:
+        if _aB is not None and _aC is not None and len(_aB) > 0:
             _sig, _ = _st.foda_signal(_aB, _aC, float(getattr(self.pheno, "diet", 0.5)))
             if _sig > 0.05:
-                _ra("föda", _st.styrka_foda_normerad(_h, _sig))
+                _ra("föda", _st.styrka_foda(_h, _sig))
 
         out = orig_food(self, *ar, **kw)
         rec = st.pop(int(getattr(self, "id", 0)), None)
