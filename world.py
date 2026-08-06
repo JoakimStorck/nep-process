@@ -20,6 +20,7 @@ from terrain import TerrainParams, generate_elevation
 from drainage import build as build_drainage
 from hydro import (
     derive_water as hydro_derive_water,
+    leach_pass as hydro_leach,
     lake_levels as hydro_lake_levels,
     route_reservoirs as hydro_route,
     soil_pass as hydro_soil_pass,
@@ -292,6 +293,25 @@ class WorldParams:
     # levandeomsättning på 24 månader; den verkliga blev längre. 4,6e-5 är
     # samma härledning med den uppmätta omsättningen.
     nutrient_input: float = 4.6e-5
+    # --- Näringen följer terrängen ----------------------------------------
+    #
+    # Vittringen är källan och urlakningen sänkan. Ingenting återförs från
+    # havet: det som lakas ut är borta, precis som i en verklig landekologi,
+    # där budgeten är vittring in mot urlakning ut och havet är en sänka på
+    # ekologisk tidsskala.
+    #
+    # Vittringsvikten normeras till medelvärde ett över land, så att den totala
+    # tillförseln är exakt densamma som med ett konstant fält. Bara den
+    # rumsliga strukturen tillkommer; identiteten som `nutrient_init` och
+    # `detritus_init` härleddes ur står orörd.
+    #
+    # Exponenten styr hur skarpt vittringen följer lutningen. Färsk berggrund
+    # exponeras där materialet rör sig, alltså i brant terräng.
+    weathering_slope_exp: float = 0.5
+    # Andel av den lösta näringen som faktiskt följer med vattnet. Under ett
+    # svarar mot att en del är bunden till partiklar. Takten i övrigt kommer ur
+    # vattenbudgeten och inte ur en parameter — se hydro.leach_pass.
+    leach_efficiency: float = 0.6
     # Näringsupptag per månad och **areaenhet** vid uptake_capacity = 1.
     #
     # Var ett tak per individ på 2,86e6, alltså sju till åtta tiopotenser för
@@ -450,6 +470,20 @@ class World:
         # invarianten som är möjlig. I float32 ackumulerar diffusionens
         # laplacian ett fel kring 5e-7 per tusen pass; i float64 är det 1e-15.
         self.nutrient = np.full(nc, float(self.WP.nutrient_init), dtype=np.float64)
+        # Sådden läggs på land. Med havet som ren sänka lakas dess andel ut
+        # under inkörningen och är borta för alltid — uppmätt 21,4 procent av
+        # den fria näringen i havsceller, alltså en värld som startar med en
+        # femtedel för lite bördighet och en inkörning som mäter omfördelning i
+        # stället för ekologi. Totalen är oförändrad, så jämviktsidentiteten
+        # bakom `nutrient_init` står orörd.
+        if self.WP.terrain is not None:
+            _sea = np.asarray(self.elevation, dtype=np.float64) < float(self.WP.sea_level)
+            _nland = int((~_sea).sum())
+            if _nland > 0:
+                self.nutrient[:] = 0.0
+                self.nutrient[~_sea] = (
+                    float(self.WP.nutrient_init) * nc / float(_nland)
+                )
         # detritus är glest dynamiskt: nollskilt i en bråkdel av cellerna, och
         # ett fullt svep skulle mest multiplicera nollor. Fältet bär därför en
         # aktiv mängd, och kontraktet är att inaktiva celler är exakt noll.
@@ -459,6 +493,14 @@ class World:
         # dessa två fält. Kostnaden är minne, inte tid — fälten är glest
         # dynamiska och sveps bara över den aktiva mängden.
         self.detritus = np.full(nc, float(self.WP.detritus_init), dtype=np.float64)
+        if self.WP.terrain is not None:
+            _sea2 = np.asarray(self.elevation, dtype=np.float64) < float(self.WP.sea_level)
+            _nl2 = int((~_sea2).sum())
+            if _nl2 > 0:
+                self.detritus[:] = 0.0
+                self.detritus[~_sea2] = (
+                    float(self.WP.detritus_init) * nc / float(_nl2)
+                )
         self._detritus_member = self.detritus > _DETRITUS_EPS
         self._detritus_active = np.flatnonzero(self._detritus_member).astype(np.int32, copy=False)
 
@@ -568,6 +610,8 @@ class World:
         self._water_added_total = 0.0
         self._water_lost_total = 0.0
         self._water_stock_init = self.water_stock()
+        self._leach_acc = np.zeros(2, dtype=np.float64)
+        self._weathering = self._build_weathering()
 
         # time
         self.t = 0.0
@@ -1024,18 +1068,64 @@ class World:
         return (float(np.sum(self.soil_water, dtype=np.float64))
                 + float(np.sum(self.lake_storage, dtype=np.float64)))
 
+    def _build_weathering(self) -> np.ndarray | None:
+        """
+        Vittringsvikt per cell, normerad till medelvärde ett över hela världen.
+
+        Havet får noll: berggrund under vatten vittrar inte till markvatten som
+        någon växt når. Vikten flyttas till land, så den totala tillförseln är
+        exakt densamma som med ett konstant fält och jämviktsidentiteten står
+        orörd. Det är samma disciplin som ljuset fick — inför strukturen, rör
+        inte nivån.
+        """
+        dr = self.drainage
+        if dr is None:
+            return None
+        land = ~dr.sea
+        if not land.any():
+            return None
+        s = np.asarray(dr.slope, dtype=np.float64)
+        # Lutningen är noll på plana ytor och inne i sjöar. Ett golv gör att
+        # även en flack cell vittrar något, annars vore en slätt steril.
+        base = (np.maximum(s, 1e-3) ** float(self.WP.weathering_slope_exp))
+        w = np.where(land, base, 0.0)
+        tot = float(w.sum())
+        if tot <= 0.0:
+            return None
+        return (w * (float(self.grid.n_cells) / tot)).astype(np.float64, copy=False)
+
     def nutrient_input_pass(self) -> float:
         """
-        Extern näringstillförsel. Forcing, alltså rumsligt konstant tills något
-        varierar den — se docs/varldens-kadensmodell.md.
+        Vittring. Rumsligt konstant i en platt värld, lutningsstyrd med terräng.
         """
         add = float(self.WP.dt) * float(self.WP.nutrient_input)
         if add == 0.0:
             return 0.0
-        self.nutrient += add
+        if self._weathering is None:
+            self.nutrient += add
+        else:
+            self.nutrient += add * self._weathering
         total = add * float(self.grid.n_cells)
         self._nutrient_added_total += total
         return total
+
+    def leaching_pass(self) -> tuple[float, float]:
+        """
+        Urlakning nedströms. Returnerar (nådde havet, flyttad mängd).
+
+        Körs efter hydro, eftersom den läser den avrinning hydro just räknat.
+        """
+        dr = self.drainage
+        if dr is None:
+            return 0.0, 0.0
+        hydro_leach(
+            self.nutrient, self.soil_water, self._runoff,
+            dr.flow_to, dr.flow_order, dr.lake_id, dr.sea,
+            float(self.WP.leach_efficiency), self._leach_acc,
+        )
+        lost = float(self._leach_acc[0])
+        self._nutrient_lost_total += lost
+        return lost, float(self._leach_acc[1])
 
     def add_nutrient(self, cell: int, amount: float) -> float:
         """
@@ -1255,6 +1345,11 @@ class World:
         self.nutrient_input_pass()
         dM_water_added, dM_water_removed = self.hydro_pass()
         dM_transport = self.transport_pass()
+        # Urlakningen efter hydro och före nedbrytningen: den läser den
+        # avrinning hydro just räknat, och näring som frigörs i den här ticken
+        # ska ligga kvar till nästa i stället för att sköljas ut samma tick den
+        # mineraliserades.
+        self.leaching_pass()
         dM_detritus_decay, dM_nutrient_from_detritus = self.decomposition_pass()
         self.update_flux(
             dM_growth=0.0,

@@ -212,6 +212,83 @@ def route_reservoirs(supply, flow_to, flow_order, outlet_lake, lake_id,
 
 
 @_njit(cache=True, fastmath=True)
+def leach_pass(nutrient, soil, runoff, flow_to, flow_order, lake_id, sea,
+               efficiency, acc):
+    """
+    Urlakning: löst näring följer vattnet ett steg nedströms per tick.
+
+    **Takten kommer ur vattnets egen budget och inte ur en ny parameter.**
+    Näringen är löst i markvattnet, så den andel av vattnet som lämnar cellen
+    bär med sig samma andel av det lösta:
+
+        andel = avrinning / (markvatten + avrinning)
+
+    Det ger utan kalibrering det man vill ha: en brant cell med mycket
+    avrinning och lite kvarhållet vatten lakas ur snabbt, en flack dalbotten
+    långsamt. `efficiency` under ett svarar mot att en del av näringen är
+    bunden till partiklar och inte följer med i lösning.
+
+    **Gradienten kommer ur routingen, inte ur takten.** Varje cell skickar sin
+    urlakning ett steg nedåt, så en cell långt ned i nätet tar emot allt som
+    passerat ovanför. Att takten är densamma överallt hindrar alltså inte att
+    stocken blir monotont växande nedströms — det är ackumulationen som gör
+    lågland bördigt, precis som i en verklig flodslätt.
+
+    Havet är sänka. Näring som når det lämnar modellen; ingenting återförs.
+    Budgeten är vittring in mot urlakning ut, vilket är hur en landekologi
+    faktiskt hushållar.
+
+    acc[0] = summa som nådde havet, acc[1] = summa som flyttades.
+    """
+    n = nutrient.shape[0]
+    out_sea = 0.0
+    moved = 0.0
+
+    # Havet töms först. Näring når det inte bara genom urlakning: diffusionen i
+    # `transport_pass` trycker in den över kustlinjen, och flora som dör i en
+    # havscell mineraliserar där. Uppmätt 9,88 kg efter 500 tick i en värld
+    # utan biologi alls, enbart från diffusionen. Utan den här raden blir havet
+    # en pool som växer monotont och som ingenting kan nå — samma sorts tyst
+    # ansamling som den låsta reproduktionsreserven en gång var.
+    for i in range(n):
+        if sea[i] and nutrient[i] > 0.0:
+            out_sea += nutrient[i]
+            nutrient[i] = 0.0
+
+    for m in range(flow_order.shape[0]):
+        c = flow_order[m]
+        if sea[c]:
+            continue
+        q = runoff[c]
+        if q <= 0.0:
+            continue
+        avail = nutrient[c]
+        if avail <= 0.0:
+            continue
+        denom = soil[c] + q
+        if denom <= 0.0:
+            continue
+        frac = efficiency * q / denom
+        if frac > 1.0:
+            frac = 1.0
+        take = avail * frac
+        nutrient[c] = avail - take
+        moved += take
+        t = flow_to[c]
+        if t < 0:
+            # Ändstation utan väg ut — lägg tillbaka hellre än att tappa den
+            # tyst. Kan bara inträffa i en sänka utan utlopp.
+            nutrient[c] = avail
+            moved -= take
+        elif sea[t]:
+            out_sea += take
+        else:
+            nutrient[t] += take
+    acc[0] = out_sea
+    acc[1] = moved
+
+
+@_njit(cache=True, fastmath=True)
 def lake_levels(storage, lake_start, lake_cells, lake_vol, elev, level, area):
     """
     Nivå och yta ur magasinet, per sjö. `searchsorted` för hand, eftersom

@@ -1233,6 +1233,20 @@ def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
                 f"vattenbalans {abs(_resid) / max(1e-12, float(w._water_added_total)):.1e} rel",
                 flush=True,
             )
+            _land2 = (~_dr.sea) & (_dr.lake_id < 0)
+            if _land2.any():
+                _n = np.asarray(w.nutrient)[_land2]
+                _up = np.asarray(_dr.upslope)[_land2]
+                _q = np.quantile(_up, [0.25, 0.75])
+                _lo = _n[_up <= _q[0]].mean()
+                _hi = _n[_up >= _q[1]].mean()
+                print(
+                    f"[näring] fri per landcell: rygg {_lo:.4f}  dal {_hi:.4f}  "
+                    f"kvot {_hi / max(1e-12, _lo):.2f}x   "
+                    f"vittrat {float(w._nutrient_added_total):.1f} kg  "
+                    f"urlakat {float(w._nutrient_lost_total):.1f} kg",
+                    flush=True,
+                )
             print(
                 f"[flora] begränsande resurs: vatten "
                 f"{float(getattr(pop, '_last_flora_water_limited', 0.0)):.3f}  ljus "
