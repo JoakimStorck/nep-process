@@ -123,13 +123,24 @@ def styrka_flykt(threat_score: float, sc_min: float, sc_sat: float) -> float:
     `threat_score` är motpartens `attack_score` mot mig, alltså dess värdering
     av mig som byte. Avbildningen är linjär från tröskeln till mättnad.
 
-    **Mättnadsvärdet är provisoriskt.** 0,30 kommer från den högsta observerade
-    `attack_score` i 9 736 tick med byte i sikte: max +0,313, median −0,307,
-    p90 −0,030. Det är ett empiriskt tak, inte ett härlett. Två saker kan
-    flytta det — en omkalibrering av `attack_risk` i Steg 6c, som är planerad
-    och vidgar fördelningen uppåt, och att fördelningen mättes i en annan värld
-    än f4-flock. Mättnaden ligger därför i `AgentParams` och ska mätas om innan
-    styrkan får driva amplitud.
+    **Mättnaden är `attack_score_min`, inte ett mätvärde.** Den första
+    versionen satte 0,30 efter det högsta `attack_score` som observerats i
+    testvärlden. Det band i 4,3 procent av p145, där svansen gick till 0,515 —
+    ett observerat maximum är ett stickprov ur en fördelning som dessutom rör
+    sig, och `predation` gick från 0,394 till 0,687 inom samma körning.
+
+    Båda ändpunkterna är därför beslutskonstanter. Under `flee_score_min` har
+    jag inte upptäckt hotet; vid `attack_score_min` kan motparten anfalla nu,
+    och mer brådskande än så blir det inte — man kan inte fly hårdare än
+    maximalt. Driften försvinner per konstruktion: kalibrerar Steg 6c om
+    `attack_risk` flyttas fördelningen och trösklarna tillsammans, eftersom
+    trösklarna är det fördelningen mäts emot.
+
+    Upplösningen hamnar också där massan ligger. Med mättnad 0,52 föll
+    medianhotet 0,163 på styrkan 0,11 och skalan användes i sin nedersta
+    femtedel; med 0,18 får samma hot 0,72. Priset är att allt över 0,18 blir
+    likvärdigt — för *valet* betydelselöst, eftersom nivå 1 vinner så snart
+    styrkan är skild från noll, och för *kraften* i steg 4 avsiktligt.
 
     I steg 2 driver den ingenting. Den bärs ut ur reflexkedjan som `flee_state`
     för att kunna mätas.

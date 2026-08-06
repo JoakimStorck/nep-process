@@ -417,15 +417,14 @@ class AgentParams:
     hunt_score_min: float = 0.12
     attack_score_min: float = 0.18
 
-    # Flyktens egna trösklar. `flee_score_min` hade samma värde som
-    # `hunt_score_min` för att den delade konstant med jaktbeslutet — två
-    # olika beslut med en ratt, utan skäl. Defaultvärdet är oförändrat, så
-    # beteendet är detsamma tills någon flyttar det ena utan det andra.
+    # Flyktens egen tröskel. Den hade samma värde som `hunt_score_min` för att
+    # den delade konstant med jaktbeslutet — två olika beslut med en ratt,
+    # utan skäl. Defaultvärdet är oförändrat.
     #
-    # `flee_score_sat` är styrkans mättnad och är provisorisk: 0,30 är den
-    # högsta `attack_score` som observerats. Se `styrning.styrka_flykt`.
+    # Någon `flee_score_sat` finns inte. Flyktstyrkans mättnad *är*
+    # `attack_score_min`: den punkt där motparten kan anfalla. Se
+    # `styrning.styrka_flykt`.
     flee_score_min: float = 0.12
-    flee_score_sat: float = 0.30
     prey_search_radius: float = 6.0
     mate_search_radius: float = 5.0
     flee_radius: float = 6.0
@@ -2603,7 +2602,7 @@ class Agent:
             flee_state = max(1e-9, styrning.styrka_flykt(
                 best_threat_score,
                 float(self.AP.flee_score_min),
-                float(self.AP.flee_score_sat),
+                float(self.AP.attack_score_min),
             ))
     
         elif (
