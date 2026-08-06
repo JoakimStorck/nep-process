@@ -347,6 +347,7 @@ class Population:
     # Andel växande plantor där ljuset är den knappare resursen. Är den nära
     # noll eller ett är den ena resursen inert och kalibreringen fel.
     _last_flora_light_limited: float = 0.0
+    _last_flora_water_limited: float = 0.0
     # Hur många plantor som passerar varje reproduktionsgrind var för sig.
     # Summan av poolen kan inte skilja en tom median från en annan flaskhals.
     _last_gate_alive: int = 0
@@ -734,6 +735,7 @@ class Population:
                 "gate_size": int(getattr(self, "_last_gate_size", 0)),
                 "gate_all": int(getattr(self, "_last_gate_all", 0)),
                 "flora_light_limited": float(getattr(self, "_last_flora_light_limited", 0.0)),
+                "flora_water_limited": float(getattr(self, "_last_flora_water_limited", 0.0)),
                 "flora_mean_structure": float(flora_info["flora_mean_structure"]),
                 "flora_cells_occupied": float(flora_info["flora_cells_occupied"]),
                 "flora_per_cell": float(flora_info["flora_per_cell"]),
@@ -2306,14 +2308,45 @@ class Population:
         store.flora_carbon_pool[fl] += to_carbon
         light_growth = light - to_carbon
 
+        # --- 6b. vattnet ------------------------------------------------------
+        # Samma delning som näringen: rotarean mot cellens totala anspråk. Bara
+        # egen cell — vatten spiller inte till grannringen, eftersom marken
+        # redan flyttat det åt oss i hydros återinfiltration.
+        #
+        # Havsceller och sjöceller har `soil_water = 0` och därmed noll
+        # vattentak. Det är hela regeln för att växter inte står i vatten:
+        # ingen artgräns, ingen etableringsspärr, bara en resurs som saknas.
+        w_avail = np.zeros(fl.size, dtype=np.float64)
+        soil = np.asarray(world.soil_water, dtype=np.float64)
+        own = row_cell == cells[row_plant]
+        if np.any(own):
+            np.add.at(w_avail, row_plant[own],
+                      share_row[own] * soil[row_cell[own]]
+                      * float(self.WP.water_extract_rate) * dt)
+
         # --- 7. tillväxt: min() över resurser ---------------------------------
-        # Näring ur reserven, kol ur ljuset. Liebigs minimumlag: den knappaste
-        # sätter takten. Kolet lagras bara i reproduktionspoolen — fotosyntat
-        # som varken byggs in eller avsätts samma tick är borta.
-        can_grow = holds & (m < m_adult) & (reserve > 0.0) & (light_growth > 0.0)
+        # Näring ur reserven, kol ur ljuset, vatten ur marken. Liebigs
+        # minimumlag: den knappaste sätter takten. Kolet lagras bara i
+        # reproduktionspoolen — fotosyntat som varken byggs in eller avsätts
+        # samma tick är borta.
+        # Noll betyder att vatten inte är en resurs i den här världen — se
+        # `_water_per_kg_effective`.
+        w_per_kg = self._water_per_kg_effective()
+        if w_per_kg > 0.0:
+            dm_water = w_avail / w_per_kg
+            water_binds = dm_water > 0.0
+        else:
+            dm_water = np.full(fl.size, np.inf, dtype=np.float64)
+            water_binds = np.ones(fl.size, dtype=bool)
+        can_grow = (holds & (m < m_adult) & (reserve > 0.0)
+                    & (light_growth > 0.0) & water_binds)
         room = np.where(can_grow, m_adult - m, 0.0)
         dm_nutrient = np.where(can_grow, reserve / np.maximum(cost, 1e-12), 0.0)
-        dm_want = np.minimum(room, np.minimum(dm_nutrient, np.where(can_grow, light_growth, 0.0)))
+        dm_want = np.minimum(
+            room,
+            np.minimum(np.minimum(dm_nutrient, np.where(can_grow, light_growth, 0.0)),
+                       np.where(can_grow, dm_water, 0.0)),
+        )
 
         target = m + dm_want
         stored = target.astype(np.float32)
@@ -2344,9 +2377,19 @@ class Population:
                 * (1.0 - struct[g])
             ).astype(np.float32)
 
-        self._last_flora_light_limited = float(
-            np.mean(light_growth[can_grow] < dm_nutrient[can_grow])
-        ) if np.any(can_grow) else 0.0
+        # Transpirationen lämnar marken och bokförs i vattenledgern.
+        if w_per_kg > 0.0 and np.any(grew):
+            world.take_soil_water(cells[grew], dm[grew] * w_per_kg)
+
+        if np.any(can_grow):
+            lg = light_growth[can_grow]
+            dn = dm_nutrient[can_grow]
+            dw = dm_water[can_grow]
+            self._last_flora_light_limited = float(np.mean((lg < dn) & (lg <= dw)))
+            self._last_flora_water_limited = float(np.mean((dw < dn) & (dw < lg)))
+        else:
+            self._last_flora_light_limited = 0.0
+            self._last_flora_water_limited = 0.0
 
         produced = float(dm[grew].sum()) if np.any(grew) else 0.0
         taken = float(spent.sum())
@@ -2355,6 +2398,20 @@ class Population:
             self._flora_summary_cache = None
 
         return float(produced), float(taken), float(died)
+
+    def _water_per_kg_effective(self) -> float:
+        """
+        Vattenbehovet, eller noll när vatten inte är en resurs.
+
+        En värld utan terräng har ingen hydrologi: `soil_water` allokeras men
+        fylls aldrig på. Läser tillväxten det fältet ändå stannar floran helt —
+        uppmätt tappade f4-start20 sextio procent av sin biomassa. Vatten
+        begränsar därför bara där det faktiskt modelleras, på samma sätt som
+        `hydro_pass` faller tillbaka på sitt gamla uttryck.
+        """
+        if getattr(self.world, "drainage", None) is None:
+            return 0.0
+        return max(0.0, float(self.WP.water_per_kg))
 
     def _flora_cell_buffers(self, n_cells: int) -> tuple:
         """Fyra återanvända cellindexerade skrivbuffertar åt tillväxtkärnan."""
@@ -2430,6 +2487,7 @@ class Population:
         claimed, lam, hsum, cellacc = self._flora_cell_buffers(n_cells)
 
         (shed_total, n_age, n_starve, produced, taken, died, light_lim,
+         water_lim, transpired,
          row_plant, row_cell, row_share) = flora_growth.growth_kernel(
             store.mass[fl], struct32, store.flora_adult_mass[fl],
             store.flora_root_mass[fl], store.flora_seed_mass[fl], store.energy[fl],
@@ -2439,7 +2497,7 @@ class Population:
             store.flora_reserve[fl], store.flora_repro_pool[fl],
             store.flora_carbon_pool[fl],
             cells, temp, draws,
-            world.nutrient, self.grid.neighbor_idx,
+            world.nutrient, self.grid.neighbor_idx, world.soil_water,
             dt, BK,
             float(self.WP.uptake_rate_max),
             float(self.WP.root_area_per_kg),
@@ -2447,6 +2505,8 @@ class Population:
             float(self.WP.light_extinction),
             max(1e-12, float(self.WP.light_height_ref)),
             float(self.WP.light_input) * dt,
+            self._water_per_kg_effective(),
+            float(self.WP.water_extract_rate) * dt,
             float(self.PP.flora_min_mass_frac) * BK,
             float(self.PP.flora_seedling_floor),
             float(self.PP.flora_max_seeds_per_tick),
@@ -2457,6 +2517,10 @@ class Population:
             shed_out, dying_out, dm_out, grow_out,
             claimed, lam, hsum, cellacc,
         )
+
+        # Kärnan har redan dragit transpirationen ur `world.soil_water`, i
+        # samma ordning som numpy-vägen. Här bokförs den bara i vattenledgern.
+        world.book_transpiration(float(transpired))
 
         store.mass[fl] = mass_out
         store.flora_root_mass[fl] = root_out
@@ -2492,6 +2556,7 @@ class Population:
 
         store.set_flora_claims(claimed, fl[row_plant], row_cell, row_share)
         self._last_flora_light_limited = float(light_lim)
+        self._last_flora_water_limited = float(water_lim)
 
         if produced > 0.0 or died > 0.0 or shed_total > 0.0:
             self._flora_summary_cache = None

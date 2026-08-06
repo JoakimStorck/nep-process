@@ -117,9 +117,10 @@ def _growth_kernel_impl(
     reserve, pool, carbon,
     cells, temp, draws,
     # --- värld -----------------------------------------------------------
-    nutrient, neighbor_idx,
+    nutrient, neighbor_idx, soil_water,
     # --- skalärer --------------------------------------------------------
     dt, BK, u_area, sra, sla, k_ext, h_ref, L_cell,
+    w_per_kg, w_extract,
     m_floor_abs, seedling_floor, seed_cap_mult, e_labile, root_dieback,
     # --- utdata per planta -----------------------------------------------
     mass_out, root_out, energy_out, reserve_out, pool_out, carbon_out,
@@ -143,7 +144,7 @@ def _growth_kernel_impl(
     elementvisa jämförelsen mot numpy-vägen står kvar.
 
     Returnerar `(shed_total, n_age, n_starve, produced, taken, died,
-    light_limited, row_plant, row_cell, row_share)`.
+    light_limited, water_limited, transpired, row_plant, row_cell, row_share)`.
     """
     n = m32.shape[0]
     n_cells = nutrient.shape[0]
@@ -156,6 +157,7 @@ def _growth_kernel_impl(
     leaf = np.empty(n, np.float64)
     height = np.empty(n, np.float64)
     access = np.zeros(n, np.float64)
+    w_avail = np.zeros(n, np.float64)
     take = np.empty(n, np.float64)
     eff = np.empty(n, np.float64)
     alloc = np.empty(n, np.float64)
@@ -290,7 +292,7 @@ def _growth_kernel_impl(
                 dv = np.float64(mass_out[i])
                 if dv > 0.0:
                     died += dv
-        return (shed_total, n_age, n_starve, 0.0, 0.0, died, 0.0,
+        return (shed_total, n_age, n_starve, 0.0, 0.0, died, 0.0, 0.0, 0.0,
                 np.empty(0, np.int32), np.empty(0, np.int32),
                 np.empty(0, np.float64))
 
@@ -381,6 +383,25 @@ def _growth_kernel_impl(
         for c in range(n_cells):
             nutrient[c] -= cellacc[c]
 
+    # --- 3b. vattnet per planta ------------------------------------------
+    #
+    # Samma delning som näringen: rotarean mot cellens totala anspråk. Bara
+    # egen cell — vatten spiller inte till grannringen som näringen gör,
+    # eftersom marken redan har flyttat det åt oss i hydros återinfiltration.
+    #
+    # Havsceller och sjöceller har `soil_water = 0` och därmed noll vattentak.
+    # Det är hela regeln för att växter inte står i vatten: ingen artgräns,
+    # ingen etableringsspärr, bara en resurs som saknas. Plantan som ändå
+    # hamnar där växer inte, faller under svältgränsen och dör — samma väg ut
+    # som torkan ger.
+    for i in range(n):
+        w_avail[i] = 0.0
+    for t in range(n_rows):
+        i = row_plant[t]
+        c = row_cell[t]
+        if c == cells[i]:
+            w_avail[i] = row_share[t] * soil_water[c] * w_extract
+
     # --- 4. bladarean per cell -------------------------------------------
     for c in range(n_cells):
         lam[c] = 0.0
@@ -451,23 +472,49 @@ def _growth_kernel_impl(
         adult = np.float64(adult32[i])
         if adult < 1e-12:
             adult = 1e-12
+        # w_per_kg <= 0 betyder att vatten inte är en resurs i den här världen.
+        # En platt värld har ingen hydrologi, och då ska markvattnet inte
+        # begränsa något — annars skulle varje scenario före Steg 7 stanna av,
+        # eftersom fältet står på noll och aldrig fylls på.
+        if w_per_kg > 0.0:
+            dm_water = w_avail[i] / w_per_kg
+            if dm_water <= 0.0:
+                continue
+        else:
+            dm_water = 1e300
         if not (m[i] < adult and res > 0.0 and light_growth > 0.0):
             continue
         cst = cost[i]
         if cst < 1e-12:
             cst = 1e-12
         dm_nutrient = res / cst
-        grow_out[i] = 2 if light_growth < dm_nutrient else 1
+        # Vem som band: 1 näring, 2 ljus, 3 vatten. Liebigs minimumlag med tre
+        # poster i stället för två.
+        if dm_water < dm_nutrient and dm_water < light_growth:
+            grow_out[i] = 3
+        elif light_growth < dm_nutrient:
+            grow_out[i] = 2
+        else:
+            grow_out[i] = 1
         want = adult - m[i]
         if dm_nutrient < want:
             want = dm_nutrient
         if light_growth < want:
             want = light_growth
+        if dm_water < want:
+            want = dm_water
         stored = _store_down(m[i] + want)
         dm = stored - m[i]
         if dm <= 0.0:
             continue
         dm_out[i] = dm
+        # Vattnet som byggde vävnaden lämnar marken. Transpiration bunden till
+        # tillväxten och inte till bladarean: en planta som står stilla av
+        # näringsbrist tar inget vatten. Biologiskt förenklat — stomata står
+        # öppna för kolets skull även när kvävet är slut — men det håller
+        # vattenbalansen sluten utan ett andra flöde att bokföra.
+        if w_per_kg > 0.0:
+            soil_water[cells[i]] -= dm * w_per_kg
         reserve_out[i] = res - dm * cost[i]
         rm = np.float64(root_out[i])
         if rm > m[i]:
@@ -484,22 +531,29 @@ def _growth_kernel_impl(
     died = 0.0
     n_grow = 0
     light_lim = 0
+    water_lim = 0
+    transpired = 0.0
     for i in range(n):
         produced += dm_out[i]
         taken += dm_out[i] * cost[i]
+        if w_per_kg > 0.0:
+            transpired += dm_out[i] * w_per_kg
         g = grow_out[i]
         if g != 0:
             n_grow += 1
             if g == 2:
                 light_lim += 1
+            elif g == 3:
+                water_lim += 1
         if dying_out[i] != 0:
             dv = np.float64(mass_out[i])
             if dv > 0.0:
                 died += dv
 
     ll = np.float64(light_lim) / np.float64(n_grow) if n_grow > 0 else 0.0
-    return (shed_total, n_age, n_starve, produced, taken, died, ll,
-            row_plant, row_cell, row_share)
+    wl = np.float64(water_lim) / np.float64(n_grow) if n_grow > 0 else 0.0
+    return (shed_total, n_age, n_starve, produced, taken, died, ll, wl,
+            transpired, row_plant, row_cell, row_share)
 
 
 growth_kernel = _njit(cache=True, nogil=True)(_growth_kernel_impl)

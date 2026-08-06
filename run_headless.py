@@ -1233,6 +1233,13 @@ def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
                 f"vattenbalans {abs(_resid) / max(1e-12, float(w._water_added_total)):.1e} rel",
                 flush=True,
             )
+            print(
+                f"[flora] begränsande resurs: vatten "
+                f"{float(getattr(pop, '_last_flora_water_limited', 0.0)):.3f}  ljus "
+                f"{float(getattr(pop, '_last_flora_light_limited', 0.0)):.3f}  "
+                f"(resten näring)",
+                flush=True,
+            )
         print(
             f"SLUT: {tick} tick på {elapsed:.1f}s "
             f"({elapsed / max(tick, 1) * 1000.0:.2f} ms/tick), "

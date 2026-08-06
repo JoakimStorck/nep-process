@@ -65,7 +65,8 @@ except Exception:  # pragma: no cover - beror på miljön
 
 @_njit(cache=True, fastmath=True, parallel=True)
 def soil_pass(soil, bands, rain_band, T_band, T_off, T0, T_span, oro,
-              et_max_dt, capacity, baseflow_k, sea, runoff, acc):
+              et_max_dt, capacity, baseflow_k, sea, lake_id, water,
+              submerged_thr, runoff, acc):
     """
     Markvattnet, punktvis. Returnerar via `runoff` och två summor i `acc`.
 
@@ -93,9 +94,16 @@ def soil_pass(soil, bands, rain_band, T_band, T_off, T0, T_span, oro,
     p_tot = 0.0
     e_tot = 0.0
     for i in _prange(n):
-        if sea[i]:
+        # En cell under vatten har ingen mark att lagra fukt i. Havet gäller
+        # alltid; en sjöcell gäller när magasinets yta faktiskt står över den,
+        # så att en strand blir bar mark när nivån sjunker i stället för att
+        # vara permanent dränkt av sjöns största utbredning.
+        #
+        # Det som fanns kvar blir avrinning i stället för att försvinna, så att
+        # övergången mellan de två regimerna bevarar massa.
+        if sea[i] or (lake_id[i] >= 0 and water[i] > submerged_thr):
+            runoff[i] = soil[i]
             soil[i] = 0.0
-            runoff[i] = 0.0
             continue
         b = bands[i]
         p = rain_band[b] * oro[i]

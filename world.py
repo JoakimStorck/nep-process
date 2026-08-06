@@ -219,7 +219,7 @@ class WorldParams:
     # än ryggar — den topografiska fuktgradienten uppstår aldrig. Taket är
     # absolut och inte en andel: som andel förlorade en flod hela sitt flöde på
     # tjugo celler och inga fåror kunde bildas.
-    reinfiltration_max: float = 0.30
+    reinfiltration_max: float = 1.0
     # Öppet vatten avdunstar utan markens torrhetsbroms. Multiplikator på
     # `et_max` för sjöyta.
     lake_evap_mult: float = 1.0
@@ -234,6 +234,30 @@ class WorldParams:
     # markflöde, inte en vattenyta en organism kan möta. Skalfritt: talet
     # betyder samma sak oavsett nederbörd och världsstorlek.
     channel_min_upslope: float = 20.0
+
+    # --- Vattnet som florans tredje resurs ---------------------------------
+    #
+    # Vattenbehov per kilo byggd vävnad. Sätter hur hårt vattnet binder mot
+    # näring och ljus; kalibrerat mot att `flora_water_limited` och
+    # `flora_light_limited` blir jämförbara, på samma sätt som ljuset
+    # kalibrerades mot näringen. Uppmätt vid 64x128 över 5 000 tick:
+    #
+    #     0,03   vatten 0,004  ljus 0,272   bebodda 61,5 %   12 325 kg
+    #     0,06          0,025       0,243            59,4    11 777
+    #     0,12          0,196       0,251            48,8     7 067
+    #     0,25          0,429       0,127            19,8     1 577
+    water_per_kg: float = 0.12
+    # Andel av cellens markvatten som är åtkomlig för upptag per **månad**.
+    # Under ett betyder att marken inte kan tömmas på en gång — växten når det
+    # lätt tillgängliga först, och resten binds hårdare i porerna.
+    #
+    # Var en andel per *tick*, vilket är fel skalningsklass: 0,25 per tick är
+    # 12,5 gånger per månad, alltså tjugo gånger nederbörden, och floran
+    # dränerade marken till 0,12 av fältkapacitet så att varje fåra torkade ut.
+    # Värre än så var att utfallet berodde på `dt` — halverat tidssteg hade gett
+    # halverad månadstakt. Samma sorts fel som bruset som skalade med `dt` i
+    # stället för med roten ur det.
+    water_extract_rate: float = 0.25
 
     # -------------------------
     # Detritus / decay
@@ -913,7 +937,9 @@ class World:
             float(WP.et_max) * dt,
             float(WP.soil_capacity),
             float(WP.baseflow_frac) * dt,
-            dr.sea, self._runoff, self._hydro_acc,
+            dr.sea, dr.lake_id, self.water,
+            float(WP.submerged_threshold),
+            self._runoff, self._hydro_acc,
         )
         added = float(self._hydro_acc[0])
         removed = float(self._hydro_acc[1])
@@ -1027,6 +1053,38 @@ class World:
             return 0.0
         self.nutrient[c] += amt
         return amt
+
+    def take_soil_water(self, cells, amounts) -> float:
+        """
+        Dra transpirerat vatten ur marken och bokför det som förlust.
+
+        Symmetriskt med `take_nutrient`: biologin äger inte fysiken, men den
+        får konsumera världens fält genom världen. Skillnaden är att näringen
+        cirkulerar medan vattnet lämnar systemet — transpirerat vatten går till
+        atmosfären, precis som avdunstningen i hydro-passet.
+        """
+        if self.drainage is None:
+            return 0.0
+        c = np.asarray(cells, dtype=np.int64)
+        a = np.asarray(amounts, dtype=np.float64)
+        if c.size == 0:
+            return 0.0
+        np.subtract.at(self.soil_water, c, a)
+        total = float(a.sum())
+        self._water_lost_total += total
+        return total
+
+    def book_transpiration(self, amount: float) -> None:
+        """
+        Bokför vatten som redan dragits ur `soil_water` av tillväxtkärnan.
+
+        Kärnan får inte göra världsanrop, så den muterar fältet på plats precis
+        som den gör med `nutrient`, och ledgern uppdateras här. Transpirerat
+        vatten lämnar systemet till atmosfären, som avdunstningen.
+        """
+        a = float(amount)
+        if a > 0.0:
+            self._water_lost_total += a
 
     def take_nutrient(self, cell: int, amount: float) -> float:
         """Ta upp till `amount` kg näring ur en cell. Returnerar faktiskt uttag."""

@@ -827,6 +827,21 @@ def check_water_balance(pop, rel_tol: float = 1e-9) -> list[Violation]:
     if not hasattr(world, "_water_added_total"):
         return []
 
+    # Marken kan inte bära ett underskott. Floran drar transpiration efter
+    # hydro-passet, begränsad av sin andel gånger `water_extract_frac`, så
+    # summan över en cell ska aldrig kunna överstiga vad som fanns. Blir den
+    # negativ är delningen fel, och felet skulle annars gömma sig: balansen
+    # sluter sig ändå, eftersom uttaget bokförs oavsett om det fanns täckning.
+    soil = np.asarray(getattr(world, "soil_water", np.zeros(0)))
+    neg = np.flatnonzero(soil < 0.0)
+    out: list[Violation] = []
+    if neg.size:
+        out.append(Violation(
+            "water_balance",
+            f"markvattnet är negativt i {neg.size} celler, minst "
+            f"{float(soil.min()):.3e}, t.ex. {[int(c) for c in neg[:MAX_EXAMPLES]]}",
+        ))
+
     stock = float(world.water_stock())
     start = float(getattr(world, "_water_stock_init", 0.0))
     added = float(world._water_added_total)
@@ -836,13 +851,13 @@ def check_water_balance(pop, rel_tol: float = 1e-9) -> list[Violation]:
     scale = max(abs(start), abs(stock), abs(added), 1e-12)
     rel = abs(resid) / scale
     if rel > rel_tol:
-        return [Violation(
+        out.append(Violation(
             "water_balance",
             f"vattenbalansen sluter inte: stock {stock:.6e} start {start:.6e} "
             f"tillfört {added:.6e} förlorat {lost:.6e} rest {resid:.3e} "
             f"({rel:.2e} relativt)",
-        )]
-    return []
+        ))
+    return out
 
 
 ALL_CHECKS = (
