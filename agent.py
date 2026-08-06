@@ -425,6 +425,10 @@ class AgentParams:
     # `attack_score_min`: den punkt där motparten kan anfalla. Se
     # `styrning.styrka_flykt`.
     flee_score_min: float = 0.12
+
+    # Andel av underhållet som måste betalas ur egen vävnad för att djuret ska
+    # räknas vara i energiunderskott. Se `Body._i_underskott_last_step`.
+    underskott_min: float = 0.01
     prey_search_radius: float = 6.0
     mate_search_radius: float = 5.0
     flee_radius: float = 6.0
@@ -516,8 +520,16 @@ class Body:
     out_excreta_struct_kg: float = 0.0   # dess massviktade strukturandel, i kg
     out_nutrient_kg: float = 0.0         # fri näring till cellen
 
-    # Sant om organismen kataboliserade egen vävnad under senaste steget.
-    _catabolized_last_step: bool = False
+    # Sant om organismen var i verkligt energiunderskott under senaste steget,
+    # alltså tvingades betala en märkbar del av underhållet ur egen vävnad.
+    #
+    # Hette `_catabolized_last_step` och sattes av `dM_cat > 0.0` utan epsilon.
+    # Uppmätt avfyrade den i 4,0 procent av kroppsstegen med medianen
+    # `dM_cat = 1,7e-17 kg` — flyttalsdamm i subtraktionen `E_out_drain − paid`,
+    # inte katabolism. Eftersom `hunger()` returnerar 1,0 så snart flaggan är
+    # sann gick aptiten till full styrka i var tjugofemte kroppssteg utan
+    # biologisk grund.
+    _i_underskott_last_step: bool = False
 
     # Andelen av steget underhåll som reserven inte räckte till. Flaggan ovan
     # räcker för aptiten, som bara behöver veta *om*; svältstyrkan behöver veta
@@ -695,7 +707,7 @@ class Body:
         borde ligga över. Aptiten måste därför också mätas mot vad organismen
         *borde* väga, inte bara mot vad den råkar rymma.
         """
-        if bool(getattr(self, "_catabolized_last_step", False)):
+        if bool(getattr(self, "_i_underskott_last_step", False)):
             return 1.0
 
         Et   = self.E_total()
@@ -1033,7 +1045,7 @@ class Body:
         # eller överförd till foster. Behövs för att energiledgern ska sluta.
         E_material = 0.0
         E_overflow = 0.0
-        self._catabolized_last_step = False
+        self._i_underskott_last_step = False
         self._svalt_andel = 0.0
 
         # ---------------------------------------------------------
@@ -1220,6 +1232,22 @@ class Body:
         deficit = max(0.0, E_out_drain - paid)
         E_paid_drain = paid
         self._svalt_andel = styrning.styrka_svalt(deficit, E_out_drain)
+
+        # Flaggan sätts på andelen, inte på att katabolismen råkade bli
+        # nollskild. Två skäl utöver dammet. Andelen har en innebörd — ett
+        # djur som måste ta en procent av sitt underhåll ur kroppen är i
+        # verkligt underskott — och tröskeln är okänslig: de nollskilda
+        # värdena ligger antingen kring 1e-16 eller över 1e-2, alltså fjorton
+        # tiopotenser isär, och varje tröskel mellan 1e-12 och 1e-2 ger samma
+        # 0,42 procent kvar. Den är alltså vald för mening, inte för passform.
+        #
+        # Och den fångar ett fall den gamla missade: ett djur som redan står
+        # på `M_min` kan inte katabolisera, så `dM_cat` blir noll trots att
+        # underskottet är totalt. Det djuret svälter som mest och rapporterade
+        # tidigare ingen hunger alls.
+        self._i_underskott_last_step = (
+            self._svalt_andel > float(getattr(self.AP, "underskott_min", 0.01))
+        )
     
         # ---------------------------------------------------------
         # (3) Catabolism: cover remaining deficit (if any), above M_min
@@ -1237,7 +1265,6 @@ class Body:
             dM_cat   = min(want_cat, free)
 
             if dM_cat > 0.0:
-                self._catabolized_last_step = True
                 E_from_M = self._catabolize(dM_cat, _structure)
                 _k_cat_dmg = float(getattr(AP, 'k_cat_dmg', 1.0))
                 dD_cat = _k_cat_dmg * dM_cat / max(float(self.M), 1e-9)
