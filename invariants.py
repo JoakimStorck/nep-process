@@ -766,6 +766,20 @@ def check_drainage(pop) -> list[Violation]:
     if bool((dr.flow_to[dr.sea] >= 0).any()):
         out.append(Violation("drainage", "havsceller har en riktning nedströms"))
 
+    # Och omvänt: ingen landcell får vara ändstation. En sådan cell tar emot
+    # avrinning som aldrig når havet, vilket är vatten som försvinner tyst.
+    # Felet fanns på riktigt: när sjöns fyllda yta blev platt hittade brantaste
+    # fallet ingen riktning alls, 37 av 37 sjöar blev ändstationer, och 88
+    # procent av all avrinning strandade utan att synas i något annat mått än
+    # vattenbalansen.
+    stranded = np.flatnonzero((dr.flow_to < 0) & (~dr.sea))
+    if stranded.size:
+        out.append(Violation(
+            "drainage",
+            f"{stranded.size} landceller är ändstationer utan väg till havet, "
+            f"t.ex. {[int(c) for c in stranded[:MAX_EXAMPLES]]}",
+        ))
+
     # Sjöarnas bokföring: startindex monotona och täcker lake_cells exakt.
     ls = np.asarray(dr.lake_start, dtype=np.int64)
     if ls.size < 1 or int(ls[0]) != 0:
@@ -792,9 +806,49 @@ def check_drainage(pop) -> list[Violation]:
     return out
 
 
+def check_water_balance(pop, rel_tol: float = 1e-9) -> list[Violation]:
+    """
+    Vattnet är en sluten storhet över en absorberande rand.
+
+    Stocken är markvatten plus sjömagasin. Kanalvatten är i transit och lagras
+    inte — det följer av att hydro löser jämvikt per tick i stället för att
+    integrera en transient, och är alltså en modellutsaga och inte en
+    approximation.
+
+    Balansen är exakt av strukturella skäl: routing är en ren överföring och
+    reservoaren en ren omfördelning mellan magasin och spill. Toleransen är
+    därför satt vid flyttalsbrus och inte vid en modelltolerans. Faller den
+    isär är det ett verkligt fel — vatten som strandar i en cell utan väg ut,
+    eller ett spill som räknas två gånger.
+    """
+    world = pop.world
+    if getattr(world, "drainage", None) is None:
+        return []
+    if not hasattr(world, "_water_added_total"):
+        return []
+
+    stock = float(world.water_stock())
+    start = float(getattr(world, "_water_stock_init", 0.0))
+    added = float(world._water_added_total)
+    lost = float(world._water_lost_total)
+
+    resid = (stock - start) - (added - lost)
+    scale = max(abs(start), abs(stock), abs(added), 1e-12)
+    rel = abs(resid) / scale
+    if rel > rel_tol:
+        return [Violation(
+            "water_balance",
+            f"vattenbalansen sluter inte: stock {stock:.6e} start {start:.6e} "
+            f"tillfört {added:.6e} förlorat {lost:.6e} rest {resid:.3e} "
+            f"({rel:.2e} relativt)",
+        )]
+    return []
+
+
 ALL_CHECKS = (
     check_sparse_fields,
     check_nutrient_balance,
+    check_water_balance,
     check_drainage,
     check_slot_bookkeeping,
     check_world_field_domains,

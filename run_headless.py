@@ -1205,6 +1205,24 @@ def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
             print(format_stats(pop, diagnostics(pop), tick, elapsed), flush=True)
         else:
             print(format_diagnostics(diagnostics(pop), tick, elapsed), flush=True)
+        _dr = getattr(pop.world, "drainage", None)
+        if _dr is not None and not a.quiet:
+            # Markfukten vid slutet, inte vid start: vid tick noll står den på
+            # fältkapacitet överallt och säger ingenting.
+            w = pop.world
+            _land = (~_dr.sea) & (_dr.lake_id < 0)
+            _m = np.asarray(w.soil_water)[_land] / max(1e-12, float(w.WP.soil_capacity))
+            _stock = float(w.water_stock())
+            _resid = ((_stock - float(w._water_stock_init))
+                      - (float(w._water_added_total) - float(w._water_lost_total)))
+            print(
+                f"[hydro] markfukt p10/median/p90 "
+                f"{np.quantile(_m, 0.1):.2f}/{np.quantile(_m, 0.5):.2f}/{np.quantile(_m, 0.9):.2f}  "
+                f"fåror {100.0 * float(np.mean((np.asarray(w.water) > 0)[_land])):.2f} %  "
+                f"sjömagasin {float(w.lake_storage.sum()):.2f} av {float(_dr.lake_cap.sum()):.2f}  "
+                f"vattenbalans {abs(_resid) / max(1e-12, float(w._water_added_total)):.1e} rel",
+                flush=True,
+            )
         print(
             f"SLUT: {tick} tick på {elapsed:.1f}s "
             f"({elapsed / max(tick, 1) * 1000.0:.2f} ms/tick), "

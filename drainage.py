@@ -62,15 +62,17 @@ class Drainage:
     Terrängens statiska hydrologiska struktur.
 
     filled       f32[n]   fylld höjd; över `elevation` inne i en sänka
-    flow_to      i32[n]   granne nedströms; -1 i havet och i en sjö som inte
-                          är sitt eget utlopp
+    flow_to      i32[n]   granne nedströms; -1 bara i havet och i en sänka utan
+                          utlopp
     slope        f32[n]   höjdfall mot flow_to i fylld höjd
     flow_order   i32[n]   topologisk ordning, källa -> mynning
     sea          bool[n]  under havsnivån
     lake_id      i32[n]   -1 utanför sjö
+    outlet_lake  i32[n]   sjöns index om cellen är dess utlopp, annars -1
     lake_cells   i32[]    sjöarnas celler, sorterade efter höjd, sjö för sjö
     lake_start   i32[]    startindex per sjö i lake_cells, med slutvakt
     lake_vol     f64[]    kumulativ volym vid varje celltröskel
+    lake_cap     f64[]    volym vid brädden; däröver spiller sjön
     lake_outlet  i32[]    utloppscell per sjö; dit spillet går
     upslope      f32[n]   uppströms cellantal vid enhetsavrinning
     """
@@ -81,9 +83,11 @@ class Drainage:
     flow_order: np.ndarray
     sea: np.ndarray
     lake_id: np.ndarray
+    outlet_lake: np.ndarray
     lake_cells: np.ndarray
     lake_start: np.ndarray
     lake_vol: np.ndarray
+    lake_cap: np.ndarray
     lake_outlet: np.ndarray
     upslope: np.ndarray
 
@@ -93,9 +97,20 @@ class Drainage:
 
 
 def _priority_flood(elev: np.ndarray, neighbor_idx: np.ndarray,
-                    sea: np.ndarray) -> np.ndarray:
+                    sea: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """
-    Fyller sänkor så att varje cell har en icke-stigande väg till havet.
+    Fyller sänkor så att varje cell har en icke-stigande väg till havet, och
+    lämnar samtidigt trädet den byggde.
+
+    Trädet behövs. Efter fyllningen är sjöns yta platt, och brantaste fallet
+    hittar då **ingen** riktning alls inne i en sänka: alla grannar ligger på
+    samma fyllda nivå, och tröskelcellen utanför likaså. Utan trädet blev varje
+    sjö en ändstation — uppmätt strandade 88 procent av all avrinning där, och
+    vattenbalansen fattades 27 procent.
+
+    Floden går från havet och uppåt, så den cell en granne först nås ifrån
+    ligger alltid nedströms. Trädet är rotat i havet och därmed acykliskt av
+    konstruktion.
 
     Heapen bär cellindex som andra nyckel, så att lika höjder bryts
     deterministiskt. Utan det beror utfallet på heapens interna ordning och
@@ -104,6 +119,7 @@ def _priority_flood(elev: np.ndarray, neighbor_idx: np.ndarray,
     n = int(elev.shape[0])
     k = int(neighbor_idx.shape[1])
     filled = np.full(n, np.inf, dtype=np.float64)
+    parent = np.full(n, -1, dtype=np.int32)
     seen = np.zeros(n, dtype=bool)
 
     heap: list[tuple[float, int]] = []
@@ -132,15 +148,23 @@ def _priority_flood(elev: np.ndarray, neighbor_idx: np.ndarray,
                 continue
             e = float(elev[nb])
             cand = lv if e < lv else e
-            if cand < filled[nb]:
-                filled[nb] = cand
-                seen[nb] = True
-                heapq.heappush(heap, (cand, nb))
-    return filled
+            filled[nb] = cand
+            parent[nb] = c
+            seen[nb] = True
+            heapq.heappush(heap, (cand, nb))
+    return filled, parent
 
 
 @_njit(cache=True)
-def _flow_dirs(filled, neighbor_idx, sea):
+def _flow_dirs(filled, neighbor_idx, sea, parent):
+    """
+    Brantaste fallet där ett fall finns, flodträdet där det inte gör det.
+
+    Sluttningar dräneras därmed efter sin egen gradient, medan plana ytor —
+    sjöar och utfyllda sänkor — följer trädet till tröskeln. Blandningen är
+    acyklisk: den fyllda höjden avtar aldrig längs en väg, och de plana
+    partierna följer ett träd rotat i havet.
+    """
     n = filled.shape[0]
     k = neighbor_idx.shape[1]
     to = np.full(n, -1, dtype=np.int32)
@@ -156,6 +180,9 @@ def _flow_dirs(filled, neighbor_idx, sea):
             if d > bestd:
                 bestd = d
                 best = nb
+        if best < 0:
+            best = parent[i]
+            bestd = 0.0
         to[i] = best
         slope[i] = bestd
     return to, slope
@@ -259,47 +286,78 @@ def build(grid, elevation: np.ndarray, sea_level: float = 0.0) -> Drainage:
     idx = np.ascontiguousarray(grid.neighbor_idx, dtype=np.int32)
 
     sea = elev < float(sea_level)
-    filled = _priority_flood(elev, idx, sea)
-    to, slope = _flow_dirs(filled, idx, sea)
+    filled, parent = _priority_flood(elev, idx, sea)
+    to, slope = _flow_dirs(filled, idx, sea, parent)
 
     lake_id, groups = _label_lakes(filled, elev, idx, sea)
 
-    # Inne i en sjö går flödet inte cell till cell — hela bassängen är ett
-    # magasin. Bara utloppscellen har en riktning nedåt, och den behåller sin.
+    # Inne i en sjö bär inte cell-till-cell-flödet någon fysik — hela bassängen
+    # är ett magasin. Men avrinningen som faller *på* sjön måste nå magasinet,
+    # och magasinet ligger vid utloppscellen. Flodträdet ger den vägen gratis:
+    # eftersom floden går nedifrån och upp pekar varje sjöcell mot den granne
+    # som ligger närmare tröskeln, och exakt en cell per sjö pekar ut ur den.
     lake_cells_l: list[np.ndarray] = []
     lake_start_l: list[int] = [0]
     lake_vol_l: list[np.ndarray] = []
+    lake_cap_l: list[float] = []
     lake_outlet_l: list[int] = []
+    outlet_lake = np.full(n, -1, dtype=np.int32)
 
-    for members in groups:
+    for gid, members in enumerate(groups):
         mem = np.asarray(members, dtype=np.int32)
-        # Utloppet är den cell i sjön vars nedströmsgranne ligger utanför den.
-        outlet = -1
-        for c in mem:
-            t = int(to[c])
-            if t >= 0 and lake_id[t] != lake_id[c]:
-                outlet = int(c)
-                break
-        if outlet < 0:
-            # Sjön har ingen väg ut — bara möjligt om prioritetsfloden inte
+        outs = [int(c) for c in mem
+                if int(to[c]) >= 0 and lake_id[int(to[c])] != gid]
+        if len(outs) == 0:
+            # Sänkan har ingen väg ut — bara möjligt om prioritetsfloden inte
             # nådde havet. Låt lägsta cellen bli ändstation.
             outlet = int(mem[np.argmin(filled[mem])])
             to[outlet] = -1
+        else:
+            # Flera tröskelceller på exakt samma nivå är en verklig
+            # oavgjordhet: bassängen skulle spilla åt två håll. Magasinet kan
+            # bara ha ett utlopp, så det brantaste vinner och cellindex bryter
+            # lika — determinism före realism, eftersom skillnaden är en
+            # flyttalstie.
+            outlet = min(outs, key=lambda c: (-float(slope[c]), c))
+
+        # Cellerna dräneras till utloppet med ett bredden-först-träd i
+        # grannmatrisen. Utan det kan en sjöcell peka ut ur sjön förbi
+        # magasinet, och tillflödet räknas två gånger.
+        in_lake = set(int(c) for c in mem)
+        seen_l = {outlet}
+        queue = [outlet]
+        qi = 0
+        while qi < len(queue):
+            a = queue[qi]
+            qi += 1
+            row = idx[a]
+            for j in range(int(idx.shape[1])):
+                nb = int(row[j])
+                if nb in in_lake and nb not in seen_l:
+                    seen_l.add(nb)
+                    to[nb] = a
+                    slope[nb] = 0.0
+                    queue.append(nb)
+        if len(seen_l) != mem.size:
+            raise RuntimeError(
+                f"sjö {gid} är inte sammanhängande i grannmatrisen: "
+                f"{len(seen_l)} av {mem.size} celler nåddes från utloppet"
+            )
 
         order_by_z = mem[np.argsort(elev[mem], kind="stable")]
         z = elev[order_by_z]
         # Volym när ytan står vid tröskel i: summan av (z_i - z_j) för j < i.
         # Cellarean är 1, så volym och djup delar enhet.
         vol = np.concatenate(([0.0], np.cumsum(np.arange(1, z.size) * np.diff(z))))
-
-        for c in mem:
-            if int(c) != outlet:
-                to[c] = -1
+        # Brädden är den fyllda nivån: däröver spiller sjön genom utloppet.
+        cap = float(np.sum(filled[order_by_z] - z))
 
         lake_cells_l.append(order_by_z)
         lake_vol_l.append(vol)
+        lake_cap_l.append(cap)
         lake_start_l.append(lake_start_l[-1] + int(order_by_z.size))
         lake_outlet_l.append(outlet)
+        outlet_lake[outlet] = gid
 
     lake_cells = (np.concatenate(lake_cells_l).astype(np.int32, copy=False)
                   if lake_cells_l else np.zeros(0, dtype=np.int32))
@@ -307,6 +365,7 @@ def build(grid, elevation: np.ndarray, sea_level: float = 0.0) -> Drainage:
                 if lake_vol_l else np.zeros(0, dtype=np.float64))
     lake_start = np.asarray(lake_start_l, dtype=np.int32)
     lake_outlet = np.asarray(lake_outlet_l, dtype=np.int32)
+    lake_cap = np.asarray(lake_cap_l, dtype=np.float64)
 
     order, m = _topo_order(to)
     if m != n:
@@ -324,9 +383,11 @@ def build(grid, elevation: np.ndarray, sea_level: float = 0.0) -> Drainage:
         flow_order=order,
         sea=sea,
         lake_id=lake_id,
+        outlet_lake=outlet_lake,
         lake_cells=lake_cells,
         lake_start=lake_start,
         lake_vol=lake_vol,
+        lake_cap=lake_cap,
         lake_outlet=lake_outlet,
         upslope=upslope.astype(np.float32, copy=False),
     )

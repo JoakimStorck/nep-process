@@ -18,6 +18,12 @@ except ImportError:
 from grid import Grid
 from terrain import TerrainParams, generate_elevation
 from drainage import build as build_drainage
+from hydro import (
+    derive_water as hydro_derive_water,
+    lake_levels as hydro_lake_levels,
+    route_reservoirs as hydro_route,
+    soil_pass as hydro_soil_pass,
+)
 from phenotype import (
     DECAY_SCALE_LABILE,
     DECAY_SCALE_STRUCT,
@@ -143,6 +149,57 @@ class WorldParams:
     spring_input_base: float = 0.0
     infiltration_base: float = 0.0
     evaporation_base: float = 0.0
+
+    # --- Terrängburen hydrologi -------------------------------------------
+    #
+    # Aktiv bara när `terrain` är satt. I en platt värld finns ingen riktning
+    # och hydro faller tillbaka på det rumsligt konstanta forcing-uttrycket,
+    # vilket gör varje scenario före Steg 7 bitidentiskt.
+    #
+    # Enheten för vatten är densamma som för höjd, eftersom fri yta är summan.
+
+    # Nederbörd per månad vid referenstemperaturen, före orografi.
+    rain_base: float = 0.65
+    # Varm luft bär mer fukt — ungefär en fördubbling per tio grader. Eftersom
+    # temperaturen redan är en bandprofil med årstid faller våta tropiker,
+    # torra poler och en sommarregnperiod ut av sig själva, utan att någon av
+    # de tre kodas som regel och utan kostnad utöver n_bands.
+    rain_T_ref: float = 25.0
+    rain_T_doubling: float = 10.0
+    # Orografiskt lyft: nederbörden växer med höjden. Ingen regnskugga — den
+    # kräver en förhärskande vindriktning och hör till senare arbete.
+    rain_oro_gain: float = 0.6
+
+    # Markens fältkapacitet. Överskott blir avrinning samma tick.
+    soil_capacity: float = 0.60
+    # Potentiell avdunstning per månad vid full tillväxtgrind. Den faktiska
+    # avtar linjärt med torrhet, så att markfuktigheten blir en gradient i
+    # stället för en binär grind.
+    et_max: float = 1.15
+    # Andel av markvattnet som lämnar som basflöde per månad. Det är det som
+    # håller fåror rinnande mellan regnen; utan det torkar varje vattendrag ut
+    # samma tick som regnet slutar.
+    baseflow_frac: float = 0.25
+    # Infiltrationstak per cell och månad för vatten som passerar. Utan
+    # återinfiltration är markvattnet rent punktvis och dalar blir inte blötare
+    # än ryggar — den topografiska fuktgradienten uppstår aldrig. Taket är
+    # absolut och inte en andel: som andel förlorade en flod hela sitt flöde på
+    # tjugo celler och inga fåror kunde bildas.
+    reinfiltration_max: float = 0.30
+    # Öppet vatten avdunstar utan markens torrhetsbroms. Multiplikator på
+    # `et_max` för sjöyta.
+    lake_evap_mult: float = 1.0
+
+    # Fårans djup ur genomströmningen: Mannings form förenklad till en
+    # potenslag, eftersom bredden inte modelleras.
+    channel_k: float = 0.010
+    channel_exp: float = 0.40
+    channel_slope_floor: float = 1e-3
+    # Gränsen mellan fåra och sluttning, uttryckt i hur många cellers
+    # medelavrinning som måste passera. Under den är vattnet ytavrinning och
+    # markflöde, inte en vattenyta en organism kan möta. Skalfritt: talet
+    # betyder samma sak oavsett nederbörd och världsstorlek.
+    channel_min_upslope: float = 20.0
 
     # -------------------------
     # Detritus / decay
@@ -385,6 +442,66 @@ class World:
 
         # --- härledda: flödesstyrkan är noll tills hydro räknar grannflöde ---
         self.flow_strength = 0.0
+
+        # --- hydrologins tre lager -------------------------------------------
+        #
+        # Allokeras bara i en terrängvärld. En platt värld har ingen riktning
+        # och hydro faller tillbaka på det gamla forcing-uttrycket.
+        # soil_water i float64 av samma skäl som nutrient och detritus: det är
+        # den bevarade storhet vattenbalansen påstås om. I float32 ackumulerade
+        # avrundningen systematiskt och balansen drev 5,4e-8 relativt, linjärt
+        # i tid; i float64 ligger den vid 1e-16.
+        self.soil_water = np.zeros(nc, dtype=np.float64)
+        # discharge i float64: sjöarnas magasin och havets utflöde summeras ur
+        # den, och vattenbalansen ska kunna påstås på 1e-6.
+        self.discharge = np.zeros(nc, dtype=np.float64)
+        self._runoff = np.zeros(nc, dtype=np.float64)
+        self._hydro_acc = np.zeros(2, dtype=np.float64)
+        if self.drainage is not None:
+            dr = self.drainage
+            nl = int(dr.n_lakes)
+            # Magasinet är per bassäng, inte per cell. En sjö kan därmed inte
+            # darra kring en tröskel, eftersom den inte har något
+            # per-cell-tillstånd att darra i.
+            self.lake_storage = np.zeros(nl, dtype=np.float64)
+            self._lake_level = np.zeros(max(nl, 1), dtype=np.float64)
+            self._lake_area = np.zeros(max(nl, 1), dtype=np.float64)
+            # Sjöarna börjar fulla. En tom sänka som fylls under inkörningen
+            # vore samma sorts övergående omfördelning som `nutrient_init`
+            # rättade för näringen.
+            self.lake_storage[:] = dr.lake_cap
+            # Den orografiska modifieraren är statisk. Höjden normeras mot
+            # landets högsta punkt, så att talet betyder samma sak oavsett
+            # `relief`.
+            z = np.asarray(self.elevation, dtype=np.float64)
+            zmax = float(z.max())
+            self._oro = (
+                1.0 + float(self.WP.rain_oro_gain) * np.maximum(z, 0.0) / max(zmax, 1e-9)
+            ).astype(np.float64, copy=False)
+            self.soil_water[:] = float(self.WP.soil_capacity)
+            self.soil_water[dr.sea] = 0.0
+            self._update_lake_levels()
+            # Bandindex per cell är statiskt. Att slå upp det varje tick vore
+            # ett fullt svep för information som geometrin bestämde en gång.
+            self._cell_bands = np.asarray(
+                self.grid.bands_of_cells(np.arange(nc)), dtype=np.int64
+            )
+            self._lake_bands = np.asarray(
+                self.grid.bands_of_cells(dr.lake_outlet), dtype=np.int64
+            )
+            self._n_land = int((~dr.sea).sum())
+        else:
+            self.lake_storage = np.zeros(0, dtype=np.float64)
+            self._lake_level = np.zeros(1, dtype=np.float64)
+            self._lake_area = np.zeros(1, dtype=np.float64)
+            self._oro = None
+
+        # Vattnets externa flöden, ackumulerade sedan start. Stocken är
+        # markvatten plus sjömagasin; kanalvatten är i transit och lagras inte,
+        # vilket följer av jämviktsantagandet.
+        self._water_added_total = 0.0
+        self._water_lost_total = 0.0
+        self._water_stock_init = self.water_stock()
 
         # time
         self.t = 0.0
@@ -649,15 +766,103 @@ class World:
         """Bool per cell, water över tröskeln. Härledd, se surface_level."""
         return self.water > np.float32(self.WP.submerged_threshold)
 
+    def _update_lake_levels(self) -> None:
+        dr = self.drainage
+        if dr is None or dr.n_lakes == 0:
+            return
+        hydro_lake_levels(
+            self.lake_storage, dr.lake_start, dr.lake_cells, dr.lake_vol,
+            np.asarray(self.elevation, dtype=np.float64),
+            self._lake_level, self._lake_area,
+        )
+
+    def _rain_band(self) -> np.ndarray:
+        """
+        Nederbörd per band och tick, före orografi.
+
+        Clausius–Clapeyron i förenklad form: mängden fördubblas per
+        `rain_T_doubling` grader. Profilen är därmed en funktion av `T_band`,
+        som redan bär både latitud och årstid — våta tropiker, torra poler och
+        sommarregn utan att någon av dem kodas.
+        """
+        WP = self.WP
+        dT = (self.T_band.astype(np.float64) - float(WP.rain_T_ref))
+        return float(WP.rain_base) * np.exp2(dT / max(1e-9, float(WP.rain_T_doubling)))
+
     def hydro_pass(self) -> tuple[float, float]:
         """
-        Minimal hydro-skelett för fas 1.5. Ännu inget grannflöde.
+        Vattnet i jämvikt över terrängen, eller det gamla forcing-uttrycket i
+        en platt värld.
+
+        Returnerar (tillfört, borttaget) för ledgern.
+        """
+        if self.drainage is not None:
+            return self._hydro_pass_terrain()
+        return self._hydro_pass_uniform()
+
+    def _hydro_pass_terrain(self) -> tuple[float, float]:
+        WP = self.WP
+        dt = float(WP.dt)
+        dr = self.drainage
+
+        # 1. Marken, punktvis. Forcingen räknas inne i kärnan ur bandprofilerna
+        #    och den statiska orografin — se hydro.soil_pass.
+        hydro_soil_pass(
+            self.soil_water, self._cell_bands,
+            self._rain_band() * dt, self.g_band.astype(np.float64), self._oro,
+            float(WP.et_max) * dt,
+            float(WP.soil_capacity),
+            float(WP.baseflow_frac) * dt,
+            dr.sea, self._runoff, self._hydro_acc,
+        )
+        added = float(self._hydro_acc[0])
+        removed = float(self._hydro_acc[1])
+
+        # 2. Sjöytan avdunstar utan markens torrhetsbroms. Per bassäng, alltså
+        #    några hundra tal.
+        if dr.n_lakes:
+            et_lake = (self.g_band[self._lake_bands].astype(np.float64)
+                       * float(WP.et_max) * float(WP.lake_evap_mult) * dt)
+            loss = np.minimum(self.lake_storage, et_lake * self._lake_area[:dr.n_lakes])
+            self.lake_storage -= loss
+            removed += float(loss.sum())
+
+        # 3. Routing med sjöarna som magasin. Ett svep, varje cell en gång.
+        hydro_route(
+            self._runoff, dr.flow_to, dr.flow_order, dr.outlet_lake, dr.lake_id,
+            self.lake_storage, dr.lake_cap, dr.sea,
+            self.soil_water, float(WP.soil_capacity),
+            float(WP.reinfiltration_max) * dt,
+            self.discharge, self._hydro_acc,
+        )
+        # Det som når havet lämnar landvattenbudgeten. Havet är en absorberande
+        # rand och ackumulerar inget tryck mot omgivningen — manifestets
+        # hydrologiska randregim.
+        removed += float(self._hydro_acc[0])
+
+        # 4. Nivåer och härledda fält.
+        self._update_lake_levels()
+        # Fåra eller sluttning: tröskeln uttrycks i cellers medelavrinning, så
+        # att den betyder samma sak oavsett nederbörd och världsstorlek.
+        q_min = float(WP.channel_min_upslope) * added / max(1.0, float(self._n_land))
+        hydro_derive_water(
+            np.asarray(self.elevation, dtype=np.float32), dr.sea, dr.lake_id,
+            self._lake_level, self.discharge, dr.slope,
+            float(WP.channel_k), float(WP.channel_exp),
+            float(WP.channel_slope_floor), q_min, self.water,
+        )
+        self.flow_strength = float(np.mean(self.discharge, dtype=np.float64))
+
+        self._water_added_total += added
+        self._water_lost_total += removed
+        return added, removed
+
+    def _hydro_pass_uniform(self) -> tuple[float, float]:
+        """
+        Minimalt forcing-uttryck för en platt värld. Oförändrat sedan fas 1.5.
 
         Forcing-termerna är rumsligt konstanta, så nettotillskottet per tick är
-        ett tal och inte ett fält. Det gör att passet gör en enda vektoriserad
-        operation över `water` i stället för ett dussin. När forcing blir
-        rumsligt varierande promoveras termerna till arrayer och uttrycket
-        nedan fungerar oförändrat.
+        ett tal och inte ett fält.
         """
         dt = float(self.WP.dt)
         dwater = dt * (
@@ -682,6 +887,16 @@ class World:
         removed = float(np.sum(np.minimum(w, np.float32(-dwater)), dtype=np.float64))
         np.maximum(w + np.float32(dwater), np.float32(0.0), out=w)
         return 0.0, removed
+
+    def water_stock(self) -> float:
+        """
+        Vattnet som lagras: markvatten plus sjömagasin. Kanalvatten är i
+        transit och lagras inte — det följer av att hydro löser jämvikt.
+        """
+        if self.drainage is None:
+            return float(np.sum(self.water, dtype=np.float64))
+        return (float(np.sum(self.soil_water, dtype=np.float64))
+                + float(np.sum(self.lake_storage, dtype=np.float64)))
 
     def nutrient_input_pass(self) -> float:
         """
