@@ -89,6 +89,40 @@ class WorldParams:
     T0: float = 0.0
     T1: float = 20.0
 
+    # Höjdgradient: grader per höjdenhet, mätt mot en referensyta.
+    #
+    # Referensytan är landets medelhöjd i samma latitudband, inte havsnivån.
+    # Skälet är att terrängens kontinentala lutning är ett dräneringsgrepp och
+    # inte orografi: den stiger från kust mot inland och följer alltså
+    # latituden. Mätt mot rå höjd tappade ekvatorn 7,3 grader vid lapse 2,0
+    # medan rad 32 tappade 2,1 — lutningen åt upp latitudgradienten och
+    # klimatet inverterades. Mot bandets landmedel bidrar den exakt noll, och
+    # bara verklig lokal relief kyler.
+    #
+    # Att referensytan är en bandstorhet gör inte världen bandformad: den
+    # beräknas en gång ur den statiska terrängen, och resultatet varierar per
+    # cell. Temperaturen och tillväxtgrinden är per cell från och med nu.
+    #
+    # Uppmätt lokal relief: p5 till p95 kring ±0,25 höjdenheter och max +0,4
+    # till +0,5, stabilt över 64x256, 256x256 och 512x512.
+    #
+    # Nivån vald mot vad den gör med tillväxtgrinden inom ett band, inte mot
+    # gradens storlek. Uppmätt vid 64x256, rad 32–63:
+    #
+    #     lapse  8   ΔT max  -3,3   grind 0,20–0,62   area 98,9 % av platt
+    #     lapse 16   ΔT max  -6,6   grind 0,09–0,62   area 97,7 %
+    #     lapse 24   ΔT max  -9,8   grind 0,00–0,62   area 96,3 %
+    #
+    # Vid 24 uppstår höglandsceller med grinden i noll — alpin öken är ett
+    # verkligt fenomen, men inte ett vi vill införa oavsiktligt. Vid 16 blir
+    # spridningen inom band 0,065 mot 0,000 före steget, till en kostnad av
+    # 2,3 procent grindviktad area.
+    #
+    # Grinden mättar över 20 grader, så höjden biter bara i de tempererade
+    # banden. Det är rätt: en kulle vid ekvatorn ändrar ingenting, en kulle vid
+    # trädgränsen ändrar allt.
+    lapse_rate: float = 16.0
+
     # -------------------------
     # Hydrology / terrain / world fields
     # -------------------------
@@ -369,6 +403,9 @@ class World:
             if self.WP.terrain is not None
             else None
         )
+        # Höjdens statiska temperaturmodifierare. Byggs före hydrolagren,
+        # eftersom markens avdunstning läser tillväxtgrinden per cell.
+        self._T_offset = self._build_T_offset()
         self.rain_input = float(self.WP.rain_input_base)
         self.spring_input = float(self.WP.spring_input_base)
         self.infiltration = float(self.WP.infiltration_base)
@@ -486,10 +523,15 @@ class World:
             self._cell_bands = np.asarray(
                 self.grid.bands_of_cells(np.arange(nc)), dtype=np.int64
             )
-            self._lake_bands = np.asarray(
-                self.grid.bands_of_cells(dr.lake_outlet), dtype=np.int64
-            )
             self._n_land = int((~dr.sea).sum())
+            # Numba-kärnan tar en array, inte en union av skalär och array. I
+            # en terrängvärld finns alltid en modifierare; är lapse_rate noll
+            # är den nollfylld och kostar bara sin minnestrafik.
+            off = self._T_offset
+            self._T_offset_arr = (
+                np.asarray(off, dtype=np.float64) if isinstance(off, np.ndarray)
+                else np.full(nc, float(off), dtype=np.float64)
+            )
         else:
             self.lake_storage = np.zeros(0, dtype=np.float64)
             self._lake_level = np.zeros(1, dtype=np.float64)
@@ -550,6 +592,35 @@ class World:
         # initialize temperature profiles at t=0
         self._update_temperature()
 
+    def _build_T_offset(self):
+        """
+        Statisk temperaturmodifierare per cell: höjdgradienten.
+
+        Kadensdokumentet förutsåg formen — *profil plus eventuella
+        per-cell-modifierare* — och att modifieraren kan vara frånvarande och
+        då inte kosta något. I en platt värld returneras skalären 0,0, och
+        klimatet är bitidentiskt med före Steg 7.
+
+        Referensytan är landets medelhöjd per latitudband. Se `lapse_rate`.
+        """
+        if self.WP.terrain is None or float(self.WP.lapse_rate) == 0.0:
+            return 0.0
+        z = np.asarray(self.elevation, dtype=np.float64)
+        bands = np.asarray(self.grid.bands_of_cells(np.arange(int(self.grid.n_cells))))
+        land = z >= float(self.WP.sea_level)
+        nb = int(self.grid.n_bands)
+        wsum = np.bincount(bands, weights=land.astype(np.float64), minlength=nb)
+        zsum = np.bincount(bands, weights=np.where(land, z, 0.0), minlength=nb)
+        # Band utan land — de rena havsbanden — får havsnivån som referens.
+        ref = np.where(wsum > 0.0, zsum / np.maximum(wsum, 1e-12),
+                       float(self.WP.sea_level))
+        # Bara upphöjning kyler. En sänka under omlandet blir inte varmare än
+        # sitt band: inversion är ett verkligt fenomen men inte ett vi
+        # modellerar, och en varm grop vore lika mycket ett artefakt som en
+        # kall ekvator.
+        rel = np.maximum(z - ref[bands], 0.0)
+        return (-float(self.WP.lapse_rate) * rel).astype(np.float32, copy=False)
+
 
     # -------------------------
     # Temperature / season
@@ -577,19 +648,44 @@ class World:
 
         self.g_band = g_band
 
+    def _gate_from_T(self, T):
+        """
+        Tillväxtgrinden ur temperaturen. Formen ligger på ett ställe, eftersom
+        den nu räknas från fyra håll: cell, cellmängd, helt fält och hydro.
+        """
+        T0 = float(self.WP.T0)
+        T1 = float(self.WP.T1)
+        if T1 <= T0 + 1e-9:
+            return (np.asarray(T) >= T0).astype(np.float32)
+        g = (np.asarray(T, dtype=np.float32) - np.float32(T0)) / np.float32(T1 - T0)
+        return np.clip(g, 0.0, 1.0).astype(np.float32, copy=False)
+
     def temperature_of_cell(self, cell: int) -> float:
         """Temperatur i en cell. Den form biologin ska använda."""
-        return float(self.T_band[self.grid.band_of_cell(cell)])
+        T = float(self.T_band[self.grid.band_of_cell(cell)])
+        off = self._T_offset
+        return T + (float(off[int(cell)]) if isinstance(off, np.ndarray) else float(off))
 
     def temperature_of_cells(self, cells: np.ndarray) -> np.ndarray:
-        """Temperatur för en mängd celler, utan att materialisera hela fältet."""
-        return self.T_band[self.grid.bands_of_cells(cells)]
+        """
+        Temperatur för en mängd celler, utan att materialisera hela fältet.
+
+        Bandprofilen bär latitud och årstid; den statiska modifieraren bär
+        höjden. Summan är en per-cell-storhet, men den kostar bara två
+        gathers över den efterfrågade delmängden — inget svep över världen.
+        """
+        cells = np.asarray(cells)
+        T = self.T_band[self.grid.bands_of_cells(cells)]
+        off = self._T_offset
+        if isinstance(off, np.ndarray):
+            return T + off[cells]
+        return T
 
     def growth_gate_of_cell(self, cell: int) -> float:
-        return float(self.g_band[self.grid.band_of_cell(cell)])
+        return float(self._gate_from_T(self.temperature_of_cell(cell)))
 
     def growth_gate_of_cells(self, cells: np.ndarray) -> np.ndarray:
-        return self.g_band[self.grid.bands_of_cells(cells)]
+        return self._gate_from_T(self.temperature_of_cells(cells))
 
     def temperature_field(self) -> np.ndarray:
         """
@@ -599,11 +695,11 @@ class World:
         Avsedd för visning och diagnostik, inte för systempass — dessa ska
         använda temperature_of_cell() eller temperature_of_cells().
         """
-        return self.T_band[self.grid.bands_of_cells(np.arange(int(self.grid.n_cells)))]
+        return self.temperature_of_cells(np.arange(int(self.grid.n_cells)))
 
     def growth_gate_field(self) -> np.ndarray:
         """Hela tillväxtgrindsfältet per cell. Samma kostnadsanmärkning som ovan."""
-        return self.g_band[self.grid.bands_of_cells(np.arange(int(self.grid.n_cells)))]
+        return self._gate_from_T(self.temperature_field())
 
     def temperature_at(self, x: float, y: float) -> float:
         """
@@ -807,9 +903,13 @@ class World:
 
         # 1. Marken, punktvis. Forcingen räknas inne i kärnan ur bandprofilerna
         #    och den statiska orografin — se hydro.soil_pass.
+        T0 = float(WP.T0)
+        T_span = max(1e-9, float(WP.T1) - T0)
         hydro_soil_pass(
             self.soil_water, self._cell_bands,
-            self._rain_band() * dt, self.g_band.astype(np.float64), self._oro,
+            self._rain_band() * dt,
+            self.T_band.astype(np.float64), self._T_offset_arr,
+            T0, T_span, self._oro,
             float(WP.et_max) * dt,
             float(WP.soil_capacity),
             float(WP.baseflow_frac) * dt,
@@ -821,7 +921,7 @@ class World:
         # 2. Sjöytan avdunstar utan markens torrhetsbroms. Per bassäng, alltså
         #    några hundra tal.
         if dr.n_lakes:
-            et_lake = (self.g_band[self._lake_bands].astype(np.float64)
+            et_lake = (self.growth_gate_of_cells(dr.lake_outlet).astype(np.float64)
                        * float(WP.et_max) * float(WP.lake_evap_mult) * dt)
             loss = np.minimum(self.lake_storage, et_lake * self._lake_area[:dr.n_lakes])
             self.lake_storage -= loss

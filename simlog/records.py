@@ -236,7 +236,9 @@ def world_record(t: float, world: World, with_percentiles: bool = True) -> Dict[
         "C": stats(C) if with_percentiles else {"mean": float(C.mean()), "sum": float(C.sum())},
     }
 
-    # Temperaturfältet är legitim world-data; per cell sedan geometrin blev abstrakt.
+    # Temperaturfältet är legitim world-data; per cell sedan geometrin blev
+    # abstrakt. Bandprofilen räcker som sammanfattning — höjdmodifieraren är
+    # statisk och skulle bara flytta fördelningens vänstra svans.
     T = getattr(world, "T_band", None)
     if T is not None:
         T = np.asarray(T, dtype=np.float32)

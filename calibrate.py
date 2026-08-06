@@ -128,7 +128,10 @@ def sample(pop, tick: int, elapsed: float) -> dict:
             "per_cell_mean": float(counts.mean()),
             "shared_cell_frac": float(np.mean(counts[np.searchsorted(occupied, cells)] > 1)),
             # Differentiering: samvariation mellan trait och lokal miljö.
-            "struct_temp_corr": _corr(struct, np.asarray(w.T_band)[bands]),
+            # Temperaturen via accessorn, inte via T_band direkt: bandprofilen är
+            # bara halva storheten sedan höjden fick en modifierare, och en
+            # direkt läsning skulle tyst mäta fel miljö i en terrängvärld.
+            "struct_temp_corr": _corr(struct, np.asarray(w.temperature_of_cells(cells))),
             "uptake_nutr_corr": _corr(upt, np.asarray(w.nutrient)[cells]),
             "uptake_mass_corr": _corr(upt, m),
         })

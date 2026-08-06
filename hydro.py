@@ -64,8 +64,8 @@ except Exception:  # pragma: no cover - beror på miljön
 
 
 @_njit(cache=True, fastmath=True, parallel=True)
-def soil_pass(soil, bands, rain_band, g_band, oro, et_max_dt, capacity,
-              baseflow_k, sea, runoff, acc):
+def soil_pass(soil, bands, rain_band, T_band, T_off, T0, T_span, oro,
+              et_max_dt, capacity, baseflow_k, sea, runoff, acc):
     """
     Markvattnet, punktvis. Returnerar via `runoff` och två summor i `acc`.
 
@@ -74,6 +74,12 @@ def soil_pass(soil, bands, rain_band, g_band, oro, et_max_dt, capacity,
     stod för sju av åtta millisekunder vid 262 144 celler — samma
     representationsfel som `docs/varldens-kadensmodell.md` hittade i
     temperaturen. Profilerna har längd `n_bands`; uppslaget är en gather.
+
+    **Tillväxtgrinden räknas per cell, inte per band.** Temperaturen är
+    bandprofilen plus höjdens statiska modifierare, och grinden är en klippt
+    linjär funktion av den summan — alltså inte konstant inom ett band. Att
+    räkna den här kostar ingenting: svepet går ändå över varje cell, och
+    alternativet vore ett tätt fält som materialiseras och kastas.
 
     Ordningen är nederbörd, avdunstning, mättnadsöverskott, basflöde. Att lägga
     avdunstningen före överskottet gör att ett regn som ändå avdunstar aldrig
@@ -99,7 +105,13 @@ def soil_pass(soil, bands, rain_band, g_band, oro, et_max_dt, capacity,
         # Avdunstningen avtar med torrhet: full potential vid mättnad, noll vid
         # tom mark. Utan den termen torkar marken ut till exakt noll och
         # markfuktigheten blir en binär grind i stället för en gradient.
-        e = g_band[b] * et_max_dt * (s / capacity)
+        T = T_band[b] + T_off[i]
+        g = (T - T0) / T_span
+        if g < 0.0:
+            g = 0.0
+        elif g > 1.0:
+            g = 1.0
+        e = g * et_max_dt * (s / capacity)
         if e > s:
             e = s
         s -= e

@@ -1038,6 +1038,16 @@ def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
                 f"grindviktad areaförlust {100*g_lost/max(1e-12, g_tot):.1f} %",
                 flush=True,
             )
+            _off = getattr(pop.world, "_T_offset", 0.0)
+            if isinstance(_off, np.ndarray) and float(_off.min()) < 0.0:
+                _gl = g[(~_dr.sea) & (_dr.lake_id < 0)]
+                print(
+                    f"[klimat] höjdgradient {float(_off.min()):.1f} °C på högsta punkten  "
+                    f"tillväxtgrind p10/median/p90 "
+                    f"{np.quantile(_gl, 0.1):.2f}/{np.quantile(_gl, 0.5):.2f}/"
+                    f"{np.quantile(_gl, 0.9):.2f}",
+                    flush=True,
+                )
 
     # --- bildrutor utan fönster -------------------------------------------
     # Samma ritkod som den interaktiva viewern, men sparad till fil. Gör
