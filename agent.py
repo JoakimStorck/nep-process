@@ -1330,20 +1330,12 @@ class Body:
         m_rel = float(self.M) / max(M_expected, 1e-9)
         m_ok   = float(getattr(AP, 'starve_mass_ok_frac',   0.85))
         m_crit = float(getattr(AP, 'starve_mass_crit_frac', 0.55))
-        if m_rel >= m_ok:
-            mass_severity = 0.0
-        elif m_rel <= m_crit:
-            mass_severity = 1.0
-        else:
-            mass_severity = (m_ok - m_rel) / max(m_ok - m_crit, 1e-9)
+        mass_severity = styrning.styrka_svalt(m_rel, m_ok, m_crit)
         dD_starve = dt * float(getattr(AP, 'starve_damage_gain', 0.025)) * mass_severity
 
         Tb_now = float(self.Tb)
-        if Tb_now < _Tb_min:
-            sev    = clamp((_Tb_min - Tb_now) / 10.0, 0.0, 1.0)
-            dD_cold = dt * _cold_dmg * sev
-        else:
-            dD_cold = 0.0
+        sev = styrning.styrka_nedkylning(Tb_now, _Tb_min)
+        dD_cold = dt * _cold_dmg * sev if sev > 0.0 else 0.0
 
         dD_in      = dD_eff + dD_met + dD_age + dD_starve + dD_cold
         dD_pos_rate = dD_in / max(dt, 1e-9)

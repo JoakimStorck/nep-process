@@ -140,6 +140,52 @@ def styrka_flykt(threat_score: float, sc_min: float, sc_sat: float) -> float:
 
 
 # --- Nivå 2: svält --------------------------------------------------------
+#
+# Aptit är inte ett nödläge. `styrka_foda()` nedan är närvarande i 63 procent
+# av alla agenttick med medianstyrkan 0,385, och ett anspråk med den profilen
+# kan inte ligga näst överst i en trappa — det äter allt under sig oavsett λ.
+# Uppmätt i p145 skulle flockgrenen gå från att vinna 53 procent av tickarna
+# till omkring 5.
+#
+# Svält är något annat än hunger, och måttet finns redan: `mass_severity`
+# driver `dD_starve` och är noll så länge djuret följer sin tillväxtkurva.
+# Principen är att **ett nödläges styrka ska vara samma storhet som faktiskt
+# skadar djuret.** Då är kalibreringen redan gjord, nollpunkten är fysiologisk
+# i stället för vald, och styrkan är per konstruktion noll i drift.
+
+
+def styrka_svalt(m_rel: float, m_ok: float, m_crit: float) -> float:
+    """
+    Utmärgling, 0–1: massan relativt förväntad massa för åldern.
+
+    Noll vid `starve_mass_ok_frac` (0,85) och uppåt — djuret följer kurvan.
+    Ett vid `starve_mass_crit_frac` (0,55) och neråt. Linjär emellan.
+
+    Samma uttryck som driver `dD_starve`. Ett djur vars styrka här är skild
+    från noll håller på att ta skada av svält, inte att bli sugen på lunch.
+    """
+    if m_rel >= m_ok:
+        return 0.0
+    if m_rel <= m_crit:
+        return 1.0
+    return (m_ok - m_rel) / max(m_ok - m_crit, 1e-9)
+
+
+def styrka_nedkylning(Tb: float, Tb_min: float, span: float = 10.0) -> float:
+    """
+    Nedkylning, 0–1: kroppstemperaturens underskott mot `Tb_min`.
+
+    Noll så länge termoregleringen håller, ett vid `span` grader under.
+    Samma uttryck som driver `dD_cold`.
+
+    Skilj den från `kold_stress()`, som mäter *omgivningens* underskott mot
+    börtemperaturen och därför är påslagen i 100 procent av tickarna. Den är
+    vanlig termoreglering — en normal aktivitet, inte ett nödläge — och hör
+    hemma längst ner i trappan, inte på nivå 3.
+    """
+    if Tb >= Tb_min:
+        return 0.0
+    return _clamp((Tb_min - Tb) / span, 0.0, 1.0)
 
 def styrka_foda(hunger: float, sig: float, h_min: float = 0.4) -> float:
     """

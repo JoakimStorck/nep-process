@@ -278,6 +278,8 @@ _S_RA_SPANN = {
     # histogrammet räcker förbi ett.
     "föda": (0.0, 2.0),
     "kyla": (0.0, 1.0),
+    "svält": (0.0, 1.0),
+    "nedkylning": (0.0, 1.0),
 }
 
 
@@ -490,6 +492,21 @@ def instrument_steering() -> None:
 
     def wrapped_plan(self, world, *ar, **kw):
         import styrning as _st
+
+        # Nödlägena: samma storheter som driver dD_starve och dD_cold.
+        # `_M_expected` är förra tickens cache ur `Body.step()` — en tick
+        # gammal, vilket inte spelar roll för en fördelning och sparar en
+        # omräkning av tillväxtkurvan.
+        _b = self.body
+        _me = float(getattr(_b, "_M_expected", 0.0))
+        if _me > 0.0:
+            _ra("svält", _st.styrka_svalt(
+                float(_b.M) / _me,
+                float(getattr(self.AP, "starve_mass_ok_frac", 0.85)),
+                float(getattr(self.AP, "starve_mass_crit_frac", 0.55))))
+        _ra("nedkylning", _st.styrka_nedkylning(
+            float(_b.Tb), float(self.AP.Tb_min)))
+
         _ca = float(getattr(self.pheno, "cold_aversion", 0.0))
         if _ca > 1e-6 and hasattr(world, "temperature_at"):
             _stress = _st.kold_stress(float(self.AP.Tb_set),
@@ -1109,8 +1126,12 @@ def print_summary(pop: Population, d0: dict, nb0: dict, unika: int, worst_drift:
             e = _S_RA.get(k)
             if e and e[0]:
                 lo, hi = _S_RA_SPANN[k]
+                # Andelen i det nedersta facket är måttet på om ett anspråk
+                # duger som nödläge: ett som sällan är noll kan inte ligga
+                # högt i trappan.
                 print(f"    {k:<13} n {e[0]:8d}  median {_hist_median(e[4], lo, hi):.3f}"
-                      f"  medel {e[3] / e[0]:.3f}  spann {e[1]:.3f}–{e[2]:.3f}")
+                      f"  medel {e[3] / e[0]:.3f}  spann {e[1]:.3f}–{e[2]:.3f}"
+                      f"  under {lo + (hi - lo) / 20:.2f}: {100 * e[4][0] / e[0]:.1f} %")
         for k in ("mlp", "kyla", "gren", "föda"):
             e = _S["kalla"].get(k)
             if e and e[0]:
