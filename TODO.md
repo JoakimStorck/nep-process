@@ -2370,6 +2370,86 @@ produkten stämmer analytiskt — även en omassociering på sista biten driver 
 banorna på några hundra tick. Steg 2 ska därför vara **bitidentisk**, inte bara
 ekvivalent.
 
+### Florans luckor saknar pionjärer
+
+Uppmätt i p148, 80 000 tick på `f4-flock`:
+
+```
+  i   flora_n   celler  per cell    frön  etabl   frömassa  medianmassa  rotandel
+  0    317719    16384     19,4    7683      0     0,0429      1,314       0,50
+237     81773    16219      5,0     861     62     0,1814      0,297       0,58
+790     55203    14043      3,9     104     39     0,1718      0,226       0,69
+```
+
+Fröproduktionen har fallit 200-faldigt, frömassan har fyrdubblats, och 2 300
+celler — fjorton procent av världen — står tomma. Luckorna finns. Det saknas
+frön att fylla dem med.
+
+**Varför fröna blev stora.** `p = m²/(m² + h²)` med `h = 0,05 · e^(2·trängsel)`.
+I det täta ungbeståndet var trängseln omkring 2,3 och `h ≈ 5 kg`; ett frö på
+0,043 kg fick etableringssannolikheten sju hundratusendelar, och första
+rapporten har noll etableringar på 7 683 frön. Selektionen gjorde det enda den
+kunde. Sedan tunnade betet ut beståndet, trängseln föll till omkring 0,07 och
+`h ≈ 0,057` — nu skulle ett frö på 0,05 kg vinna med runt sextio procent i
+förväntad avkomma. Axeln vänder också: frömassan toppade på 0,187 och är nere
+på 0,15–0,17. Selektionen är bara långsam jämfört med hur snabbt betet ändrar
+världen.
+
+**Två strukturella brister.**
+
+Fröproduktionen kollapsar med plantstorleken: medianplantan väger 0,20 kg mot
+1,31, och 69 procent är rot. Avsättningen går ur inkomsten, inkomsten ur
+bladarean, och bladarean är det betet tar. Bete → små plantor → få frön →
+luckor består → glesare bestånd → mindre plantor. Positiv återkoppling mot ett
+glest tillstånd, inte en jämvikt.
+
+Och **det finns ingen fröbank**. Etableringen avgörs i samma tick som fröet
+landar; det som misslyckas blir detritus. Ett frö kan inte vänta på en lucka,
+vilket är precis vad pionjärstrategin bygger på i verkligheten. Utan bank måste
+den lilla genotypen råka producera ett frö som råkar landa i en av 2 300 tomma
+celler — och hela världen gör 110 frön per rapportintervall.
+
+**Förslag.** Frön som inte etablerar sig läggs i en per-cell-pool med en
+överlevnadstakt och prövar igen varje tick. Förlusttakten är avvägningen som
+gör det till en riktig axel enligt husregeln: en bank är dyr att bygga och
+läcker. Den ger också frömassan en andra konsekvens i motsatt riktning — stora
+frön etablerar bättre men lever kortare i banken.
+
+### Vad florabristen gör med styrningens beslut
+
+Faunan i p148 ligger stadigt på 69 procent av `expected_mass` därför att floran
+inte kan leverera, inte därför att målvikten är felkalibrerad. Rör alltså inte
+`expected_mass`.
+
+Följden för behovstrappan är att våra beslut ska delas i två högar. **Styrningen
+byggs efter hur det bör fungera, inte för att kompensera en floramodell som ska
+lagas.**
+
+Står oberoende av floran, eftersom de kommer ur trösklar, fysiologi eller
+struktur:
+
+- flyktens mättnad = `attack_score_min`
+- `styrka_angrepp` som kapacitet gånger närhet, kapaciteten utvärderad vid
+  kontakt
+- nedkylning ur `Tb` mot `Tb_min`
+- parningsdriften som tid gånger den bindande av massöverskott och reserv
+- `sig` som bäring, hungern som styrka
+- regeln att ett nödläges styrka ska vara nära noll i normaldrift
+
+Att svälten byggs på katabolism i stället för massunderskott hör också hit, men
+**av det biologiska skälet, inte det uppmätta**: kronisk låg tillgång ger mindre
+vuxna, inte sjuka vuxna, och ett litet djur i energibalans är friskt. Att
+`mass_severity` låg på 0,52 i median i p148 är ett symptom på floran och får
+inte ensamt bära beslutet.
+
+Provisoriskt, och ska mätas om när floran är lagad:
+
+- **λ.** Väljs ur den uttalade avsikten — ett maximalt socialt önskemål ska
+  kunna slå en svag hunger men aldrig en verklig flykt — och inte ur p148:s
+  fördelningar, som är fördelningar för ett överbetat system.
+- nivåernas inbördes ordning i botten, särskilt födosök mot flock
+- varje mättnadsvärde som skulle ha lästs ur en fördelning
+
 ## Steg 6b — Fauna store-first
 
 *Störst risk, störst utdelning.*
