@@ -580,7 +580,7 @@ def build_population(a: argparse.Namespace, seed: int, hub=None) -> Population:
     # Världsparametrar som kan överskridas från kommandoraden. Bördigheten och
     # förlustandelen är härledda tal, inte fria — men de behöver kunna varieras
     # för att härledningen ska gå att pröva. Se docs/vaxternas-livscykel.md.
-    wp_over: dict[str, float] = {}
+    wp_over: dict = {}
     for cli, name in (
         (a.nutrient_init, "nutrient_init"),
         (a.detritus_init, "detritus_init"),
@@ -591,6 +591,13 @@ def build_population(a: argparse.Namespace, seed: int, hub=None) -> Population:
     ):
         if cli is not None:
             wp_over[name] = float(cli)
+
+    # Terrängen kommer bara från scenariot. Den har elva tal och hör inte hemma
+    # på kommandoraden — det var just den sortens spridning `scenario.py` finns
+    # till för att stoppa.
+    _sc_terr = getattr(a, "_scenario", None)
+    if _sc_terr is not None and _sc_terr.terrain is not None:
+        wp_over["terrain"] = _sc_terr.terrain
 
     if int(a.size) > 0:
         WP = WorldParams(size=int(a.size), width=0, height=0, dt=float(a.dt), **wp_over)
@@ -629,6 +636,13 @@ def build_population(a: argparse.Namespace, seed: int, hub=None) -> Population:
         PP.fauna_spawn_radius = float(a.fauna_spawn_radius)
     _sc = getattr(a, "_scenario", None)
     if _sc is not None:
+        # `flora.sadd` som tal hade ingen läsare: `Scenario.flora_seed_kg`
+        # räknades ut och kastades, och `PopParams.flora_init_target_kg` sattes
+        # aldrig. Varje scenario fick alltså tyst bördighetsregeln oavsett vad
+        # filen sa. Det är samma sorts fält-utan-läsare som kapacitetsmodellen,
+        # och det upptäcktes när geo-scenariot bad om en hundradels sådd och
+        # fick full.
+        PP.flora_init_target_kg = _sc.flora_seed_kg
         PP.fauna_spawn_patches = int(_sc.fauna.flackar)
         PP.founder_group_sep = float(_sc.fauna.grupp_avstand)
         PP.founder_group_spread = float(_sc.fauna.grupp_spridning)
@@ -1003,7 +1017,6 @@ def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
             f"init_pop={a.init_pop} max_pop={a.max_pop} seed={seed}",
             flush=True,
         )
-
     # --- bildrutor utan fönster -------------------------------------------
     # Samma ritkod som den interaktiva viewern, men sparad till fil. Gör
     # rumslig fördelning granskbar över ssh, där ett fönster inte går att

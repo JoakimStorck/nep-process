@@ -47,6 +47,10 @@ class VarldSpec:
     # En multiplikator på näringsflödet. Skalar nutrient_input, nutrient_init
     # och detritus_init tillsammans, eftersom jämvikten är linjär i flödet.
     bordighet: float = 1.0
+    # Terrängen. Utelämnad eller None ger en platt värld, vilket är vad varje
+    # scenario före Steg 7 antog — de behöver därför inte ändras. Nycklarna är
+    # fälten i terrain.TerrainParams; okända nycklar är fel, inte tystnad.
+    terrang: dict | None = None
 
 
 @dataclass
@@ -117,6 +121,20 @@ class Scenario:
     @property
     def detritus_init(self) -> float:
         return _DETRITUS_INIT_BASE * float(self.varld.bordighet)
+
+    @property
+    def terrain(self):
+        """TerrainParams, eller None för en platt värld."""
+        raw = self.varld.terrang
+        if raw is None:
+            return None
+        from terrain import TerrainParams
+
+        known = set(TerrainParams.__dataclass_fields__)
+        okänt = set(raw) - known
+        if okänt:
+            raise ValueError(f"okända fält i varld.terrang: {sorted(okänt)}")
+        return TerrainParams(**raw)
 
     @property
     def flora_seed_kg(self) -> float | None:
@@ -190,8 +208,19 @@ class Scenario:
             yaml.safe_dump(self.to_dict(), fh, allow_unicode=True, sort_keys=False)
 
     def summary(self) -> str:
+        tp = self.terrain
+        terr = (
+            "platt värld"
+            if tp is None
+            else (
+                f"terräng frö {tp.seed} relief {tp.relief:g} "
+                f"band {tp.lambda_min:g}–{tp.lambda_max:g} celler β{tp.beta:g} "
+                f"kust |lat| {tp.coast_lat:g}"
+            )
+        )
         return (
-            f"scenario '{self.namn}': {self.varld.bredd}x{self.varld.hojd}, "
+            f"scenario '{self.namn}': {terr}, "
+            f"{self.varld.bredd}x{self.varld.hojd}, "
             f"bördighet {self.varld.bordighet:g} "
             f"(nutrient_input {self.nutrient_input:.3e}), "
             f"flora {'bördighetens tak' if self.flora_seed_kg is None else f'{self.flora_seed_kg:g} kg'} "

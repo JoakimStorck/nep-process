@@ -1,0 +1,41 @@
+# Terräng och vatten utan ekologi i vägen.
+#
+# Steg 7:s första patchar handlar om geologin och hydrologin, och de går att
+# döma bäst i en värld där ingenting annat rör sig. Faunan är därför borta helt
+# och floran sådd till en hundradel av bördighetens tak — nog för att fältens
+# konsumenter ska ha en läsare, för lite för att 300 000 plantor ska dölja
+# landskapet i viewern.
+#
+# Bördigheten är densamma som i f4-start20, så att näringsjämvikten går att
+# jämföra rakt av när vittringen blir terrängberoende i 7007.
+namn: geo
+varld:
+  bredd: 64
+  hojd: 256
+  bordighet: 4.0
+  terrang:
+    seed: 1
+    relief: 1.0
+    # Bandet i cellbredder. 48 ligger under världens kortaste sida (64), så
+    # landskapet får ingen världsspännande gradient som följer latituden.
+    lambda_max: 48.0
+    lambda_min: 3.0
+    # Spektrallutning. Låga värden ger finkornigt landskap där varje sänka är
+    # sin egen ändstation; höga ger få stora former och inga sjöar.
+    beta: 2.4
+    # Kontinental lutning från kust mot inland. Utan den blir landskapet en
+    # platå av gupp utan gradient: uppmätt 33 procent sjö och största flod 168
+    # celler. Vid 3,0 blir det 3 procent sjö och 856.
+    tilt: 3.0
+    # Kusten i |lat|: 1 vid polen, 0 vid ekvatorn. 0,93 lägger kustlinjen kring
+    # rad 25 av 256, alltså ett polarbälte där tillväxtgrinden ändå är nära noll.
+    coast_lat: 0.93
+    coast_width: 0.06
+    sea_depth: 1.0
+flora:
+  sadd: 4000.0
+  plantmassa: 1.32
+fauna:
+  antal: 0
+  insatts_vid: start
+  max_antal: 64

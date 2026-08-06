@@ -16,6 +16,7 @@ except ImportError:
     _NUMBA_AVAILABLE = False
 
 from grid import Grid
+from terrain import TerrainParams, generate_elevation
 from phenotype import (
     DECAY_SCALE_LABILE,
     DECAY_SCALE_STRUCT,
@@ -89,6 +90,13 @@ class WorldParams:
 
     elevation_init: float = 0.0
     water_init: float = 0.0
+    # Terrängen. None = platt värld, och `elevation` förblir en skalär i sin
+    # statiska kadensklass. Sätts den promoveras fältet till en per-cell-array
+    # en gång vid världens tillkomst och rörs aldrig därefter.
+    #
+    # Havsnivån är noll per definition, så en cell med negativ höjd ligger under
+    # havet. Enheten delas med `water`, eftersom fri yta är summan av de två.
+    terrain: TerrainParams | None = None
     # Sådden av näring, fördelad som vid jämvikt.
     #
     # `nutrient_init` är den **fria**, växttillgängliga poolen — inte näring
@@ -285,7 +293,14 @@ class World:
         nc = int(self.grid.n_cells)
 
         # --- statiska: skalära tills terräng eller väder gör dem rumsliga ---
-        self.elevation = float(self.WP.elevation_init)
+        #
+        # Promoveringen skalär -> array är en engångshändelse som fältet självt
+        # hanterar; anropare behöver inte veta vilken form det har.
+        # `check_world_field_domains` prövar båda formerna.
+        if self.WP.terrain is not None:
+            self.elevation = generate_elevation(self.grid, self.WP.terrain)
+        else:
+            self.elevation = float(self.WP.elevation_init)
         self.rain_input = float(self.WP.rain_input_base)
         self.spring_input = float(self.WP.spring_input_base)
         self.infiltration = float(self.WP.infiltration_base)
@@ -293,6 +308,13 @@ class World:
 
         # --- dynamiska: per cell ---
         self.water = np.full(nc, np.float32(self.WP.water_init), dtype=np.float32)
+        # Havet fylls till nivå noll vid världens tillkomst. Det är en
+        # begynnelsevillkor och inte hydrologi: en cell under havsnivån har
+        # vatten från första ticken, och `surface_level` är därmed konsistent
+        # innan något pass har kört. Hydro tar över underhållet i 7004.
+        if self.WP.terrain is not None:
+            deep = np.maximum(-np.asarray(self.elevation, dtype=np.float32), np.float32(0.0))
+            np.maximum(self.water, deep, out=self.water)
         # nutrient lagras i float64 till skillnad från övriga fält. Det är den
         # bevarade storhet vi vill kunna påstå balans om: näring cirkulerar
         # medan kol flödar igenom, så näringsbalansen är den enda hårda
