@@ -442,7 +442,8 @@ class AgentParams:
     # Viktigt efter energikonsolideringen: tillväxt får bara ske hos omogna
     # individer och bara när reservgraden är tillräckligt hög. Annars driver
     # modellen in i en growth→catabolism-spiral direkt från warm start.
-    growth_rate_per_s: float = 0.19
+    # `growth_rate_per_s` är borta. Takten härleds nu per individ ur
+    # `child_M`, `M_target` och `A_mature`; se `growth_rate()`.
     growth_R_min: float = 0.30   # ingen aktiv tillväxt under denna reservgrad
     growth_R_full: float = 0.60  # full tillväxthastighet först här
 
@@ -496,6 +497,63 @@ class AgentParams:
 # -------------------------
 # Body: energy + mass (unbounded) + damage/fatigue (bounded)
 # -------------------------
+
+
+# --- Somatisk tillväxt: von Bertalanffy -----------------------------------
+#
+# Tillväxten var en konstant absolut takt utan ålders- eller storleksterm — en
+# rak linje som tog tvärt slut vid `M_target`. Det är varken snabb
+# ungdomstillväxt eller avklingning, och den var densamma för alla genotyper,
+# så en stor genotyp behövde 17,4 månader där en liten behövde 6,8.
+#
+# Von Bertalanffy är standardformen och ger båda egenskaperna gratis. I
+# längdmått `u = (M/M_∞)^⅓` avtar kvarvarande gap exponentiellt:
+#
+#     u(t) = 1 − (1 − u₀)·e^(−k·t)          M(t) = M_∞ · u(t)³
+#     dM/dt = 3k · M^⅔ · (M_∞^⅓ − M^⅓)
+#
+# `k` härleds per individ ur `A_mature` i stället för att vara en global ratt:
+# **vid `A_mature` har djuret 95 procent av sin målmassa.** Det är hela
+# kalibreringen, och den gör `A_mature` till ett tal med innebörd i stället för
+# en horisont fysiologin ändå inte kunde hålla.
+GROWTH_MATURE_FRAC = 0.95
+
+
+def growth_k(child_M: float, M_target: float, A_mature: float) -> float:
+    """Von Bertalanffys `k` per individ, ur kravet att `M(A_mature)` är
+    `GROWTH_MATURE_FRAC` av `M_target`."""
+    if M_target <= 0.0 or A_mature <= 1e-9:
+        return 0.0
+    u0 = min(0.999999, max(0.0, (max(0.0, child_M) / M_target) ** (1.0 / 3.0)))
+    uA = GROWTH_MATURE_FRAC ** (1.0 / 3.0)
+    if uA <= u0:
+        return 0.0
+    return -math.log((1.0 - uA) / (1.0 - u0)) / A_mature
+
+
+def growth_curve_mass(child_M: float, M_target: float, A_mature: float,
+                      age: float) -> float:
+    """Kurvans massa vid en ålder. Monoton, når `M_target` asymptotiskt."""
+    if M_target <= child_M:
+        return M_target
+    k = growth_k(child_M, M_target, A_mature)
+    if k <= 0.0:
+        return M_target
+    u0 = (max(0.0, child_M) / M_target) ** (1.0 / 3.0)
+    u = 1.0 - (1.0 - u0) * math.exp(-k * max(0.0, age))
+    return M_target * (u * u * u)
+
+
+def growth_rate(child_M: float, M_target: float, A_mature: float,
+                M: float) -> float:
+    """Momentan tillväxthastighet i kg per tidsenhet vid massan `M`."""
+    if M <= 0.0 or M >= M_target:
+        return 0.0
+    k = growth_k(child_M, M_target, A_mature)
+    if k <= 0.0:
+        return 0.0
+    return 3.0 * k * (M ** (2.0 / 3.0)) * (M_target ** (1.0 / 3.0) - M ** (1.0 / 3.0))
+
 
 @dataclass
 class Body:
@@ -894,12 +952,28 @@ class Body:
         return 0.0
 
     def expected_mass(self, pheno: Phenotype, age_s: float) -> float:
-        """Förväntad kroppsmassa givet utvecklingsstadium."""
+        """
+        Förväntad kroppsmassa givet ålder — **lösningen till tillväxt-
+        ekvationen**, inte en oberoende gissning.
+
+        Tidigare var den linjär från `child_M` till `M_target` över
+        `A_mature`, medan fysiologin växte med en konstant `0,19 kg/månad`
+        gatad på reserven. De två kurvorna hade inget med varandra att göra,
+        och för mediangenotypen begärde förväntan **1,8 gånger** den snabbaste
+        tillväxt kroppen kunde leverera: 2,643 kg på 7,77 månader kräver 0,340
+        kg/månad, taket var 0,190. Ett djur med full reserv, obegränsat med mat
+        och noll underskott låg alltså efter kurvan hela sin uppväxt, och
+        `dD_starve` blev en konstant skatt på alla juveniler — hårdare på stora
+        genotyper, vilket är ett selektionstryck ingen valt.
+
+        Nu är kurvan och takten samma sak, uttryckt två gånger: här som funktion
+        av åldern, i `(3B)` som momentan hastighet. Ändras den ena måste den
+        andra följa med.
+        """
         child_M = max(float(self.AP.M_min), float(getattr(pheno, "child_M", self.AP.M_min)))
         M_target = max(child_M, float(getattr(pheno, "M_target", float(self.AP.M0))))
         A_mature = max(1e-9, float(getattr(pheno, "A_mature", 1.0)))
-        u_age = clamp(float(age_s) / A_mature, 0.0, 1.0)
-        return child_M + u_age * (M_target - child_M)
+        return growth_curve_mass(child_M, M_target, A_mature, float(age_s))
 
     def step(
         self,
@@ -1030,7 +1104,6 @@ class Body:
         _wear_a0      = float(AP.wear_a0)
         _wear_aE      = float(AP.wear_aE)
         _wear_aD      = float(AP.wear_aD)
-        _growth_rate  = float(AP.growth_rate_per_s)
         # M_target: genetiskt bestämd vuxenmassa från phenotype
         _M_target     = float(getattr(pheno, "M_target", float(AP.M0)))
         # Egen strukturandel: styr katabolismens utbyte, exkrementets
@@ -1300,7 +1373,14 @@ class Body:
                 # syntesarbetet som tilläggskostnad. Materialet stryper, inte
                 # byggkostnaden.
                 _kg_per_kg_growth = 1.0 + (_growth_build_E_kg / _E_labile)
-                dM_want = min(_growth_rate * dt * growth_gate,
+                # Samma kurva som `expected_mass`, uttryckt som hastighet.
+                _r = growth_rate(
+                    max(float(AP.M_min), float(getattr(pheno, "child_M", AP.M_min))),
+                    _M_target,
+                    max(1e-9, float(getattr(pheno, "A_mature", 1.0))),
+                    float(self.M),
+                )
+                dM_want = min(_r * dt * growth_gate,
                               _M_target - float(self.M))
                 dM_want = min(dM_want, self.M_reserve() / _kg_per_kg_growth)
 
