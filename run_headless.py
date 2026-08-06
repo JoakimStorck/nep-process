@@ -88,7 +88,11 @@ def instrument_contacts() -> None:
 
     from agent import Agent
 
-    orig = Agent._apply_reflex_drives
+    # Lindade `_apply_reflex_drives` fram till steg 3. Den metoden finns inte
+    # längre; `_samla_anspravk` anropas på exakt samma ställe i kedjan, en gång
+    # per levande agent och tick, och har samma egenskap: den ser
+    # `_cached_agent_hit` efter sensingen.
+    orig = Agent._samla_anspravk
     st = _C["state"]
 
     def wrapped(self, *ar, **kw):
@@ -114,196 +118,57 @@ def instrument_contacts() -> None:
                 _C["i_kontakt"] += 1
         return out
 
-    Agent._apply_reflex_drives = wrapped
+    Agent._samla_anspravk = wrapped
 
 
 # ---------------------------------------------------------------------------
-# Styrningens bidrag.
+# Arbitreringen.
 #
-# `turn` bär i dag både riktning och kraft i samma tal, och riktningen väljs
-# genom addition i stället för genom ett val. Nio ställen skriver additivt, på
-# formen `vikt · err/π`, och `_integrate_motion` tolkar summan som ett normerat
-# kursfel. Ett beteende som skriver `0,40 · err/π` påstår därmed inte "jag vill
-# dit med halv kraft" utan "kursfelet är 40 procent av vad det är". Riktningen
-# ljugs ned för att uttrycka svag prioritet.
+# Sedan steg 3 skriver inget beteende i `turn`. Varje sensoriskt intryck lämnar
+# ett anspråk — (namn, nivå, styrka, bäring, thrust_min, explore_mult) — och
+# `_valj_anspravk` väljer ett. Måtten från steg 1 är därmed meningslösa:
+# kanselleringen kan inte inträffa när ingenting summeras, och
+# riktningsavvikelsen är noll per konstruktion eftersom vinnarens bäring *är*
+# kursen. De togs bort i stället för att lämnas kvar och rapportera nollor.
 #
-# Två tal ska falla ut, och de är facit att bygga mot innan arbitreringen
-# byggs:
-#
-#   kansellering — andelen agenttick där `|turn|` är väsentligt mindre än
-#     summan av bidragens belopp. Drar två termer isär tar de ut varandra mot
-#     noll, vilket i `_integrate_motion` betyder rakt fram. Vid en T-korsning
-#     är medelvägen diket.
-#
-#   riktningsavvikelse — andelen agenttick där den vinnande grenens egen
-#     riktning skiljer sig mer än trettio grader från det `turn` som faktiskt
-#     blev efter att kyla och föda lagts på. Trettio grader är ett mjukt mått:
-#     en avvikelse dit kan vara oskyldig. Nittio kan den inte vara — då styr
-#     djuret in i fel halvplan mot vad grenen ville — och andelen över nittio
-#     redovisas därför vid sidan av.
-#
-# **Kanselleringen behöver en nollhypotes.** Fyra bidrag med oberoende tecken
-# tar ut varandra av sig själva; utan att veta vad ofarlig addition ger går
-# talet inte att tolka. Nollfördelningen håller beloppen fasta och randomiserar
-# tecknen — men den *räknas upp exakt* i stället för att dras. Med fyra bidrag
-# finns sexton teckenmönster, åtta upp till en global spegling som inte ändrar
-# `|Σ|`. Åtta additioner per tick är billigare än ett enda dragningsanrop och
-# har ingen Monte Carlo-brusnivå alls, till skillnad från permutationsnivån i
-# `genopheno_analyze.py` där rummet är för stort för uppräkning.
-#
-# Nollfördelningen inkluderar det observerade mönstret som ett av åtta fall.
-# Det är avsiktligt: frågan är inte om additionen kancellerar mer än slumpen i
-# någon strikt mening utan hur mycket av den uppmätta kanselleringen som är en
-# egenskap hos konstruktionen snarare än hos beteendet.
-#
-# Bidragen mäts som differenser runt de tre metoder som var för sig skriver i
-# `turn`, inte genom att grenlogiken replikeras här:
-#
-#   turn_mlp   ut ur `_decode_action_outputs`      tanh(y[0])
-#   Δ_kyla     in till `_apply_reflex_drives`      minus turn_mlp
-#   Δ_gren     ut ur `_apply_reflex_drives`        minus dess indata
-#   Δ_föda     ut ur `_apply_food_steering`        minus dess indata
-#
-# Summan av de fyra är per konstruktion exakt det `turn` som blir, så
-# klampningen i varje `clamp(turn + …)` ligger redan inbakad i differenserna
-# och räknas som förlorad styrvilja. Parningsgrenen skriver `turn = 0,95·bias`
-# i stället för `turn +=`, alltså kastar den MLP:n och kylan; det syns här som
-# kansellering, vilket är rätt i sak — styrviljan går förlorad.
-#
-# Att jämföra magnitud som om den vore riktning är avsiktligt. I dagens
-# semantik *är* magnituden riktning: `d_steer = frac · turn · π`, så en ändrad
-# magnitud är en ändrad riktning djuret svänger mot. Det är hela felet.
-#
-# Kvantilerna tas ur histogram i stället för sparade listor. Vid tjugo djur och
-# 80 000 tick vore en lista per mått 1,6 miljoner tal; facken kostar inget och
-# ger medianen på ett par procent när.
-#
-# Tillståndet ligger i `state`, med individens id som nyckel, inte på agenten.
-# Produktionskoden rörs alltså inte, och instrumenteringen är helt borta utan
-# `--stats`.
-_S: dict = {"agenttick": 0, "kans_n": 0, "kans_traff": 0, "kans_hist": [0] * 20,
-            "null_traff": 0.0, "null_hist": [0.0] * 20,
-            "gren_n": 0, "gren_traff": 0, "gren_traff90": 0, "avv_hist": [0] * 18,
-            "kalla": {}, "gren": {}, "state": {}, "drift": {},
-            # 20 fack per styrka, 0–1.
-            "styrka": {},
-            # Fönstret är **skilt** från totalerna ovan och nollställs vid
-            # avläsning, som `gestation_window()`. Totalerna nollställs per
-            # körning, som `_C`. Att blanda de två mönstren i samma räknare är
-            # den fälla som gör ett block tyst tomt: läser man av en räknare
-            # som bara nollställs per körning växer den obegränsat, och
-            # nollställer man en total vid avläsning är den alltid noll i
-            # sammanfattningen.
-            #
-            # [kans_n, kans_traff, null_traff, gren_n, gren_traff, gren_traff90]
-            "w": [0, 0, 0.0, 0, 0, 0]}
+# Det som mäts nu är valet: vem vinner, hur ofta byts vinnare, hur många
+# anspråk konkurrerar, och hur styrkorna fördelar sig. Allt läses ur listan som
+# produktionskoden redan bygger — ingen grenlogik replikeras här, och till
+# skillnad från 0136–0148 behöver instrumenteringen inte räkna ut någonting
+# själv.
+_S: dict = {"tick": 0, "byten": 0, "n_anskrav": 0,
+            "vinnare": {}, "styrka": {}, "forra": {}}
 
 
-def steering_window() -> tuple[float, float, float, float] | None:
-    """
-    Kansellering, överskott mot nollhypotesen och riktningsavvikelse sedan
-    förra avläsningen, i procent. Nollställer fönstret.
+# Fönstret är **skilt** från totalerna och nollställs vid avläsning, som
+# `gestation_window()`. Totalerna nollställs per körning, som `_C`.
+_S_W = [0, 0]
 
-    Över 80 000 tick är en enda total ett medelvärde över tre olika regimer:
-    tjugo grundare i en flora som självgallrar, ett växande bestånd, och vad
-    jämvikten nu blir. Frågan om kanselleringen beror på täthet — flockgrenen
-    kan bara vinna när någon syns — går inte att ställa till ett sådant tal.
-    """
-    w = _S["w"]
-    if w[0] <= 0 and w[3] <= 0:
+
+def styr_fonster():
+    """Andel tick med byte av vinnande anspråk sedan förra avläsningen."""
+    if _S_W[0] <= 0:
         return None
-    kn = max(1, w[0])
-    gn = max(1, w[3])
-    out = (100.0 * w[1] / kn, 100.0 * (w[1] - w[2]) / kn,
-           100.0 * w[4] / gn, 100.0 * w[5] / gn)
-    _S["w"] = [0, 0, 0.0, 0, 0, 0]
-    return out
-
-# De åtta teckenmönstren, första tecknet fixerat till +. `|Σ|` är oförändrat
-# under global spegling, så de resterande åtta är dubletter.
-_S_TECKEN = ((1, 1, 1), (1, 1, -1), (1, -1, 1), (1, -1, -1),
-             (-1, 1, 1), (-1, 1, -1), (-1, -1, 1), (-1, -1, -1))
-
-# Grenarnas nominella vikter, speglade ur `_apply_reflex_drives` och
-# `_apply_food_steering`. De används bara för att räkna ut styrningens
-# tidskonstant nedan. Att de står på två ställen är avsiktligt tillfälligt:
-# steg 3 och 4 flyttar vikterna till arbitreringen respektive styrkraften, och
-# då har raden inga hårdkodade tal kvar att spegla.
-_S_VIKTER = (("flykt", 0.95), ("jakt", 0.90), ("parning", 0.95),
-             ("flock", 0.60), ("föda", 0.36))
-
-# Reflexkedjans grenar i elif-ordning. Skild från viktlistan ovan, som också
-# bär födan — den är inte en gren utan ett påslag efter kedjan.
-_S_GRENAR = ("flykt", "jakt", "parning", "flock")
-
-# Styrkefördelningar. Steg 2 gav flykten och jakten var sin dokumenterade
-# avbildning till 0–1, men mättnadsvärdena är ännu antaganden: flyktens 0,30
-# kommer från den högsta `attack_score` som observerats i en *annan* värld, och
-# jaktens 1,0 är formell och besöks aldrig. Ett tyst kalibreringsfel gömmer sig
-# just där, så fördelningarna ska mätas innan styrkorna får driva amplitud i
-# steg 3.
-#
-# De två bärs sedan 0143 ut ur reflexkedjan som `flee_state` och `hunt_state`,
-# så de kan läsas utan att grenlogiken skrivs av här. De sju övriga har ingen
-# sådan väg ut och mäts när arbitreringen ger dem en.
-_S_STYRKOR = ("flykt", "jakt")
-
-# Råa storheter och styrkor som ännu inte har någon väg ut ur styrkedjan.
-#
-# Två skäl. Flyktens styrka mättar vid `flee_score_sat`, så histogrammet över
-# den kan inte visa hur långt svansen når — och 4,3 % av hoten låg i det
-# översta facket i p144. Mättnaden går alltså inte att välja ur den mätningen.
-# Råpoängen mäts därför oklippt.
-#
-# Och λ ska väga flock mot föda mot kyla. Utan deras fördelningar är valet av
-# λ en gissning, och trappan gör då bara det skalskillnaden redan gjorde.
-#
-# Allt utom födan och kylan räknas ur argument som redan skickas in i
-# `_apply_reflex_drives`. Formlerna hämtas ur `styrning` — samma definition som
-# styrpassen använder, inte en andra kopia. Det enda som upprepas här är valet
-# mellan sett och ihågkommet grannavstånd, som är en selektion mellan två
-# befintliga värden och inte en formel.
-#
-# namn -> [n, min, max, summa, hist, lo, hi]
-_S_RA: dict = {}
-_S_RA_SPANN = {
-    "hotpoäng rå": (0.0, 0.6),
-    "jaktanlag rå": (0.0, 1.0),
-    "separation": (0.0, 1.0),
-    "kohesion": (0.0, 1.0),
-    "alignment": (0.0, 1.0),
-    # Födan får dubbelt spann. `sig` ur sektoraggregatet är **inte** normerad,
-    # så styrkan går över ett — uppmätt 1,059 redan i en liten värld. Det är
-    # precis den sortens skalfel λ inte överlever, och det syns bara om
-    # histogrammet räcker förbi ett.
-    "föda": (0.0, 2.0),
-    "kyla": (0.0, 1.0),
-    "svält": (0.0, 1.0),
-    "nedkylning": (0.0, 1.0),
-    "massunderskott": (0.0, 1.0),
-    "parningsdrift": (0.0, 1.0),
-    "parning": (0.0, 1.0),
-}
+    ut = 100.0 * _S_W[1] / _S_W[0]
+    _S_W[0] = 0
+    _S_W[1] = 0
+    return ut
 
 
-def _ra(namn: str, v: float) -> None:
-    lo, hi = _S_RA_SPANN[namn]
-    e = _S_RA.get(namn)
+def _s_hist(d: dict, namn: str, v: float) -> None:
+    e = d.get(namn)
     if e is None:
-        e = [0, float("inf"), float("-inf"), 0.0, [0] * 20]
-        _S_RA[namn] = e
+        e = [0, 0.0, [0] * 20]
+        d[namn] = e
     e[0] += 1
-    if v < e[1]:
-        e[1] = v
-    if v > e[2]:
-        e[2] = v
-    e[3] += v
-    e[4][min(19, max(0, int((v - lo) / (hi - lo) * 20.0)))] += 1
+    e[1] += v
+    e[2][min(19, max(0, int(v * 20.0)))] += 1
+
 
 _INSTRUMENTED_STEERING = False
 
 
-def _hist_median(h: list, lo: float, hi: float) -> float:
+def _hist_median(h, lo: float, hi: float) -> float:
     """Median ur jämnbreda fack, linjärt interpolerad inom det träffade."""
     n = sum(h)
     if n <= 0:
@@ -320,11 +185,8 @@ def _hist_median(h: list, lo: float, hi: float) -> float:
 
 def instrument_steering() -> None:
     """
-    Bokför varje additivt bidrag till `turn`, per agenttick.
-
-    Lindar de tre metoder som skriver i `turn`. Ingen av dem ändras, och
-    grenvalet läses ur returvärdet — `flee_state` och `hunt_state` — i stället
-    för att elif-kedjans villkor skrivs av en gång till.
+    Bokför arbitreringen. Lindar de två metoder som bygger och väljer
+    anspråk; ingen av dem ändras.
     """
     global _INSTRUMENTED_STEERING
     if _INSTRUMENTED_STEERING:
@@ -332,236 +194,34 @@ def instrument_steering() -> None:
     _INSTRUMENTED_STEERING = True
 
     from agent import Agent
-    import styrning as _st_mod
 
-    st = _S["state"]
-    orig_decode = Agent._decode_action_outputs
-    orig_reflex = Agent._apply_reflex_drives
-    orig_food = Agent._apply_food_steering
+    orig_samla = Agent._samla_anspravk
+    orig_valj = Agent._valj_anspravk
 
-    def turn_in(ar, kw, pos):
-        if "turn" in kw:
-            return float(kw["turn"])
-        return float(ar[pos]) if len(ar) > pos else 0.0
+    def wrapped_samla(self, *ar, **kw):
+        A = orig_samla(self, *ar, **kw)
+        _S["tick"] += 1
+        _S_W[0] += 1
+        _S["n_anskrav"] += len(A)
+        for a in A:
+            _s_hist(_S["styrka"], a[0], float(a[2]))
+        return A
 
-    def wrapped_decode(self, *ar, **kw):
-        out = orig_decode(self, *ar, **kw)
-        # [turn_mlp, Δ_kyla, Δ_gren, gren, turn_ut_ur_reflex]
-        st[int(getattr(self, "id", 0))] = [float(out[0]), 0.0, 0.0, "", 0.0]
+    def wrapped_valj(self, anskrav, *ar, **kw):
+        out = orig_valj(self, anskrav, *ar, **kw)
+        namn = out[3]
+        if namn:
+            e = _S["vinnare"].get(namn, 0)
+            _S["vinnare"][namn] = e + 1
+        aid = int(getattr(self, "id", 0))
+        if _S["forra"].get(aid, "") != namn:
+            _S["byten"] += 1
+            _S_W[1] += 1
+        _S["forra"][aid] = namn
         return out
 
-    def wrapped_reflex(self, *ar, **kw):
-        t_in = turn_in(ar, kw, 0)
-        out = orig_reflex(self, *ar, **kw)
-        rec = st.get(int(getattr(self, "id", 0)))
-        if rec is None:
-            return out
-        rec[1] = t_in - rec[0]
-        rec[2] = float(out[0]) - t_in
-        rec[4] = float(out[0])
-
-        import styrning as _st
-        bts = kw.get("best_threat_score")
-        if bts is not None and float(bts) > float(self.AP.flee_score_min):
-            _ra("hotpoäng rå", float(bts))
-        he = kw.get("hunt_eff")
-        if he is not None and float(he) >= float(self.AP.predator_trait_min):
-            _ra("jaktanlag rå", float(he))
-
-        bm = kw.get("best_mate")
-        if bm is not None and kw.get("in_mating_mode"):
-            d = _S["drift"].get(int(getattr(self, "id", 0)))
-            if d is not None:
-                _ra("parning", d * _st.narhet(
-                    float(bm[3]),
-                    float(self.AP.attack_range),
-                    float(self.AP.mate_search_radius)))
-
-        _N = float(kw.get("N", 0.0))
-        _mem = kw.get("neighbour_memory")
-        if _N > 0.5 or _mem is not None:
-            nd = float(kw.get("Nd", 1.0)) if _N > 0.5 else float(_mem[1])
-            sb = 2.0 * float(kw.get("soc", 0.5)) - 1.0
-            if nd < _st.REP_ZONE:
-                _ra("separation", _st.styrka_separation(nd, _st.REP_ZONE))
-            else:
-                _ra("kohesion", _st.styrka_kohesion(sb, nd))
-                _ra("alignment", _st.styrka_alignment(sb, nd))
-        for namn, v in (("flykt", float(out[3])), ("jakt", float(out[4]))):
-            if v > 0.0:
-                h = _S["styrka"].setdefault(namn, [0] * 20)
-                h[min(19, int(v * 20.0))] += 1
-        if float(out[3]) > 0.0:
-            rec[3] = "flykt"
-        elif float(out[4]) > 0.0:
-            rec[3] = "jakt"
-        elif bool(kw.get("in_mating_mode", False)) and kw.get("best_mate") is not None:
-            rec[3] = "parning"
-        elif abs(rec[2]) > 1e-12:
-            # Flockgrenen kan avfyra utan att röra `turn` — då har den ingen
-            # riktning att avvika från och räknas inte som vinnare.
-            rec[3] = "flock"
-        return out
-
-    def wrapped_food(self, *ar, **kw):
-        t_in = turn_in(ar, kw, 1)
-
-        # Födans styrka mäts **före** anropet och oberoende av flyktgrinden.
-        # I dag släcks födotermen under flykt, men under arbitrering är föda en
-        # kandidat även då — den förlorar, den försvinner inte. Det är den
-        # fördelningen λ ska vägas mot.
-        import styrning as _st
-        _sens = getattr(self, "sensors", None)
-        _aB = getattr(_sens, "_acc_dir_B", None) if _sens is not None else None
-        _aC = getattr(_sens, "_acc_dir_C", None) if _sens is not None else None
-        _h = float(self.body.hunger())
-        if _aB is not None and _aC is not None and len(_aB) > 0:
-            _sig, _ = _st.foda_signal(_aB, _aC, float(getattr(self.pheno, "diet", 0.5)))
-            if _sig > 0.05:
-                _ra("föda", _st.styrka_foda(_h, _sig))
-
-        out = orig_food(self, *ar, **kw)
-        rec = st.pop(int(getattr(self, "id", 0)), None)
-        if rec is None:
-            return out
-
-        t_fin = float(out[0])
-        b = (abs(rec[0]), abs(rec[1]), abs(rec[2]), abs(t_fin - t_in))
-        tot = b[0] + b[1] + b[2] + b[3]
-        # Läses om per anrop: `steering_window()` binder om listan vid
-        # avläsning, så en bindning vid installationen hade lämnat wrappern på
-        # det första fönstret för alltid.
-        w = _S["w"]
-
-        _S["agenttick"] += 1
-        for namn, v in zip(("mlp", "kyla", "gren", "föda"), b):
-            if v > 1e-12:
-                e = _S["kalla"].setdefault(namn, [0, 0.0])
-                e[0] += 1
-                e[1] += v
-
-        # Brusgolvet håller borta tick där ingen vill någonstans: en summa på
-        # några tusendelar kan ta ut sig själv fullständigt utan att det
-        # betyder något.
-        if tot > 0.02:
-            _S["kans_n"] += 1
-            w[0] += 1
-            f = 1.0 - abs(t_fin) / tot
-            _S["kans_hist"][min(19, max(0, int(f * 20.0)))] += 1
-            if abs(t_fin) < 0.5 * tot:
-                _S["kans_traff"] += 1
-                w[1] += 1
-
-            # Nollfördelningen: samma belopp, alla teckenmönster, en åttondel
-            # vikt vardera.
-            b0, b1, b2, b3 = b
-            nh = _S["null_hist"]
-            for s1, s2, s3 in _S_TECKEN:
-                sn = abs(b0 + s1 * b1 + s2 * b2 + s3 * b3)
-                fn = 1.0 - sn / tot
-                nh[min(19, max(0, int(fn * 20.0)))] += 0.125
-                if sn < 0.5 * tot:
-                    _S["null_traff"] += 0.125
-                    w[2] += 0.125
-
-        gren = rec[3]
-        if gren:
-            _S["gren_n"] += 1
-            w[3] += 1
-            # Referensen är grenens *egen* riktning, och den är inte samma
-            # storhet för de två grentyperna.
-            #
-            # Åtta grenar adderar: `turn = clamp(turn + w · bias)`. Deras egen
-            # riktning är differensen `Δ_gren`, eftersom det är precis vad de
-            # begärde utöver vad som redan låg där.
-            #
-            # Parningsgrenen tilldelar: `turn = clamp(0,95 · biasN)`. Dess egen
-            # riktning är hela det tilldelade värdet, alltså `turn` ut ur
-            # reflexkedjan — inte differensen mot det den kastade. Mäts den mot
-            # differensen läggs MLP:ns och kylans belopp till avvikelsen, trots
-            # att grenen medvetet gjorde sig av med dem. Det var precis vad
-            # 0136 gjorde, och det gav parningsgrenen 22,6 % i p140 mot
-            # flockens 18,1 — en siffra som mätte grenens val i stället för
-            # vad som stördes efteråt. För den grenen är den enda verkliga
-            # störningen födotermen.
-            ref = rec[4] if gren == "parning" else rec[2]
-            d = (t_fin - ref) * math.pi
-            d = abs((d + math.pi) % (2.0 * math.pi) - math.pi)
-            grader = d * 180.0 / math.pi
-            _S["avv_hist"][min(17, int(grader / 10.0))] += 1
-            e = _S["gren"].setdefault(gren, [0, 0, 0])
-            e[0] += 1
-            if grader > 30.0:
-                _S["gren_traff"] += 1
-                e[1] += 1
-                w[4] += 1
-            if grader > 90.0:
-                _S["gren_traff90"] += 1
-                e[2] += 1
-                w[5] += 1
-        return out
-
-    orig_plan = Agent.plan_actions
-
-    def wrapped_plan(self, world, *ar, **kw):
-        import styrning as _st
-
-        # Nödlägena: samma storheter som driver dD_starve och dD_cold.
-        # `_M_expected` är förra tickens cache ur `Body.step()` — en tick
-        # gammal, vilket inte spelar roll för en fördelning och sparar en
-        # omräkning av tillväxtkurvan.
-        _b = self.body
-        _me = float(getattr(_b, "_M_expected", 0.0))
-        if _me > 0.0:
-            # Massunderskottet mäts kvar vid sidan av — det driver fortfarande
-            # `dD_starve`, och jämförelsen är hela poängen med bytet.
-            _ra("massunderskott", _st.massunderskott(
-                float(_b.M) / _me,
-                float(getattr(self.AP, "starve_mass_ok_frac", 0.85)),
-                float(getattr(self.AP, "starve_mass_crit_frac", 0.55))))
-        _ra("svält", float(getattr(_b, "_svalt_andel", 0.0)))
-        _ra("nedkylning", _st.styrka_nedkylning(
-            float(_b.Tb), float(self.AP.Tb_min)))
-
-        _ca = float(getattr(self.pheno, "cold_aversion", 0.0))
-        if _ca > 1e-6 and hasattr(world, "temperature_at"):
-            _stress = _st.kold_stress(float(self.AP.Tb_set),
-                                      float(world.temperature_at(self.x, self.y)))
-            if _stress > 1e-6:
-                _ra("kyla", _ca * _stress)
-        return orig_plan(self, world, *ar, **kw)
-
-    Agent.plan_actions = wrapped_plan
-
-    # Parningsdriften kräver `repro_cd` ur store, som agenten inte når.
-    # `_mating_mode_slot` anropas exakt en gång per levande agent och tick och
-    # har både store och agent — rätt och enda hake. Driften läggs i `_S` med
-    # individens id som nyckel, så att reflexwrappern kan väga den mot
-    # partnerns närhet.
-    from population import Population
-    orig_mm = Population._mating_mode_slot
-
-    def wrapped_mm(self, slot):
-        ut = orig_mm(self, slot)
-        if ut:
-            ag = self._agent_for_slot(int(slot))
-            if ag is not None:
-                cd = float(self.store.repro_cd[int(slot)])
-                mreq = max(float(ag.AP.M_min), float(ag.pheno.M_repro_min))
-                d = _st_mod.parningsdrift(
-                    -cd,
-                    float(ag.AP.repro_cooldown_s),
-                    (float(ag.body.M) - mreq) / max(mreq, 1e-9),
-                    float(ag.body.reserve_frac()),
-                )
-                _ra("parningsdrift", d)
-                _S["drift"][int(ag.id)] = d
-        return ut
-
-    Population._mating_mode_slot = wrapped_mm
-    Agent._decode_action_outputs = wrapped_decode
-    Agent._apply_reflex_drives = wrapped_reflex
-    Agent._apply_food_steering = wrapped_food
+    Agent._samla_anspravk = wrapped_samla
+    Agent._valj_anspravk = wrapped_valj
 
 
 _INSTRUMENTED = False
@@ -1036,15 +696,12 @@ def format_stats(pop: Population, d: dict, tick: int, elapsed: float) -> str:
     # total över hela körningen; det här ger dem över tid, så att en
     # täthetsberoende drift syns. Vid --report-every 600 är ett fönster exakt
     # ett år.
-    sw = steering_window()
-    # Utan breddspecificerare. Med `4.1f` får ett värde under tio ett inledande
-    # blanksteg, och fältet blir då fyra tokens i stället för ett — varje
-    # radparsare som delar på blanksteg tappar tyst just de fönster där
-    # avvikelsen är låg, alltså systematiskt de välmatade. Det hände i
-    # analysen av p140 och gjorde korrelationen mot massa per djur −0,65 i
-    # stället för −0,82.
-    styr = (f"  styr={sw[0]:.1f}/{sw[1]:+.1f}/{sw[2]:.1f}/{sw[3]:.1f}"
-            if sw is not None else "")
+    # Styrfältet per fönster mätte kansellering och riktningsavvikelse. Båda
+    # är meningslösa under arbitrering — ingenting summeras, och vinnarens
+    # bäring *är* kursen — så fältet mäter nu bytesfrekvensen i stället: hur
+    # ofta djuren byter vinnande anspråk. Det är det tal hysteresen påverkar.
+    sbyten = styr_fonster()
+    styr = f"  byten={sbyten:.1f}%" if sbyten is not None else ""
     # Varje fält bär sitt eget prefix i stället för att ligga under en
     # gruppetikett. `n_` är antal, `M_` massa i kilo torrsubstans, `N_` näring i
     # kilo. Skillnaden mot grupper är att fältet blir självbeskrivande: `grep
@@ -1128,78 +785,25 @@ def print_summary(pop: Population, d0: dict, nb0: dict, unika: int, worst_drift:
               f"     såg partner men parade inte {_R['sag_men_parade_ej']:5d}")
         print(f"    täthet {d['fauna_n'] / max(1, n_cells) * 1000.0:.2f} agenter per 1000 celler")
 
-    if _S["agenttick"]:
-        n = _S["agenttick"]
-        print(f"\n  styrning     {n} agenttick genom hela styrkedjan")
-        if _S["kans_n"]:
-            n_k = _S["kans_n"]
-            med = _hist_median(_S["kans_hist"], 0.0, 1.0)
-            med0 = _hist_median(_S["null_hist"], 0.0, 1.0)
-            print(f"    kansellering  {100 * _S['kans_traff'] / n_k:5.1f} % av "
-                  f"tickarna tappar över hälften av styrviljan, median "
-                  f"{100 * med:.0f} % av bidragens belopp")
-            print(f"      nollhypotes {100 * _S['null_traff'] / n_k:5.1f} % och "
-                  f"{100 * med0:.0f} % vid slumpmässiga tecken och samma belopp "
-                  f"— överskott {100 * (_S['kans_traff'] - _S['null_traff']) / n_k:+.1f} "
-                  f"respektive {100 * (med - med0):+.0f} enheter")
-        if _S["gren_n"]:
-            n_g = _S["gren_n"]
-            medg = _hist_median(_S["avv_hist"], 0.0, 180.0)
-            print(f"    riktning      {100 * _S['gren_traff'] / n_g:5.1f} % av "
-                  f"tickarna styr mer än 30° från vinnande grenens egen "
-                  f"riktning, median {medg:.0f}°")
-            print(f"      över 90°, alltså in i fel halvplan: "
-                  f"{100 * _S['gren_traff90'] / n_g:5.1f} %")
-            for k in _S_GRENAR:
-                e = _S["gren"].get(k)
-                if e and e[0]:
-                    print(f"      {k:<8} vann {e[0]:8d} tick, "
-                          f"{100 * e[1] / e[0]:5.1f} % över 30°, "
-                          f"{100 * e[2] / e[0]:5.1f} % över 90°")
-        for k in _S_STYRKOR:
-            h = _S["styrka"].get(k)
-            if h and sum(h):
-                n_h = sum(h)
-                lo = next(i for i, c in enumerate(h) if c) / 20.0
-                hi = (max(i for i, c in enumerate(h) if c) + 1) / 20.0
-                print(f"    styrkan {k:<6} n {n_h:8d}  median "
-                      f"{_hist_median(h, 0.0, 1.0):.2f}  spann {lo:.2f}–{hi:.2f}"
-                      f"  mättad {100 * h[19] / n_h:.1f} %")
-        for k in _S_RA_SPANN:
-            e = _S_RA.get(k)
+    if _S["tick"]:
+        n = _S["tick"]
+        print(f"\n  arbitrering  {n} agenttick, {_S['n_anskrav'] / n:.2f} anspråk per tick")
+        print(f"    byte av vinnare  {100 * _S['byten'] / n:5.2f} % av tickarna")
+        rader = sorted(_S["vinnare"].items(), key=lambda kv: -kv[1])
+        for k, v in rader:
+            e = _S["styrka"].get(k)
+            andel = f"{100 * v / n:5.1f} %"
             if e and e[0]:
-                lo, hi = _S_RA_SPANN[k]
-                # Andelen i det nedersta facket är måttet på om ett anspråk
-                # duger som nödläge: ett som sällan är noll kan inte ligga
-                # högt i trappan.
-                print(f"    {k:<13} n {e[0]:8d}  median {_hist_median(e[4], lo, hi):.3f}"
-                      f"  medel {e[3] / e[0]:.3f}  spann {e[1]:.3f}–{e[2]:.3f}"
-                      f"  under {lo + (hi - lo) / 20:.2f}: {100 * e[4][0] / e[0]:.1f} %")
-        for k in ("mlp", "kyla", "gren", "föda"):
-            e = _S["kalla"].get(k)
-            if e and e[0]:
-                print(f"      {k:<8} skrev {100 * e[0] / n:5.1f} % av tickarna, "
-                      f"medelbelopp {e[1] / e[0]:.3f}")
-
-        # Loopbandbredden är i dag en bieffekt av prioritetsvikten: ett
-        # beteende som skriver `w · err/π` rätar ut kursfelet med
-        # tidskonstanten `1/(frac · w)` tick. Kvoten mot mediankontakten är
-        # måttet steg 4 ska kalibrera styrkraften mot — en flock kan inte
-        # bildas om djuret svänger långsammare än mötet varar.
-        AP = pop.agents[0].AP if pop.agents else None
-        if AP is not None:
-            dt_w = float(pop.WP.dt)
-            frac = 1.0 - math.exp(-float(AP.turn_gain) * dt_w)
-            rader = ", ".join(f"{k} {1.0 / (frac * w):.0f}" for k, w in _S_VIKTER)
-            print(f"    bandbredd    frac {frac:.3f} per tick "
-                  f"(turn_gain {float(AP.turn_gain):.1f}, dt {dt_w:.3f})")
-            print(f"      tidskonstant vid full vikt: {rader} tick")
-            L2 = np.asarray(_C["langder"], dtype=np.float64)
-            if L2.size:
-                kont = float(np.median(L2))
-                tau_flock = 1.0 / (frac * 0.60)
-                print(f"      mot mediankontakt {kont:.0f} tick — kvot "
-                      f"{tau_flock / max(1e-9, kont):.1f} för flocken")
+                print(f"      {k:<15} vann {andel}  av {100 * e[0] / n:5.1f} % närvaro"
+                      f"   styrka median {_hist_median(e[2], 0.0, 1.0):.3f}"
+                      f"  medel {e[1] / e[0]:.3f}")
+            else:
+                print(f"      {k:<15} vann {andel}")
+        for k, e in sorted(_S["styrka"].items(), key=lambda kv: -kv[1][0]):
+            if k not in _S["vinnare"] and e[0]:
+                print(f"      {k:<15} vann   0.0 %  av {100 * e[0] / n:5.1f} % närvaro"
+                      f"   styrka median {_hist_median(e[2], 0.0, 1.0):.3f}"
+                      f"  medel {e[1] / e[0]:.3f}")
 
     print(f"\n  näring (kg)  fri {nb['free']:.2f}  flora {nb['in_flora']:.2f}  "
           f"fauna {nb['in_fauna']:.2f}  förna {nb.get('in_litter', nb['in_detritus']):.2f}  "
@@ -1281,26 +885,17 @@ def run(a: argparse.Namespace, seed: int | None = None) -> int:
     # Per körning, som `_C` — inte vid avläsning, som `gestation_window()`.
     # Hamnar en räknare i det andra mönstret är den alltid noll när blocket
     # ska skrivas ut, och blocket hoppas tyst över.
-    _S["agenttick"] = 0
-    _S["kans_n"] = 0
-    _S["kans_traff"] = 0
-    _S["kans_hist"] = [0] * 20
-    _S["null_traff"] = 0.0
-    _S["null_hist"] = [0.0] * 20
-    _S["gren_n"] = 0
-    _S["gren_traff"] = 0
-    _S["gren_traff90"] = 0
-    _S["avv_hist"] = [0] * 18
-    _S["kalla"] = {}
-    _S["gren"] = {}
-    _S["w"] = [0, 0, 0.0, 0, 0, 0]
-    # In-place: wrappern band `st = _S["state"]` vid installationen, så en
-    # ombindning här hade lämnat den kvar på den gamla dicten och burit över
-    # tillstånd mellan seeds i `--seeds`.
-    _S["state"].clear()
+    # Per körning, som `_C` — inte vid avläsning, som `gestation_window()`.
+    _S["tick"] = 0
+    _S["byten"] = 0
+    _S["n_anskrav"] = 0
+    _S["vinnare"] = {}
     _S["styrka"] = {}
-    _S_RA.clear()
-    _S["drift"].clear()
+    # In-place: wrappern läser dicten per anrop, men `forra` bär tillstånd
+    # mellan världar vid `--seeds` om den ombinds.
+    _S["forra"].clear()
+    _S_W[0] = 0
+    _S_W[1] = 0
 
     # Samma loggar som run_population.py skriver, men utan pygame. Det gör
     # live_pop_plot.py och live_world_plot.py användbara mot en

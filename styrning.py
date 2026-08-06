@@ -62,6 +62,8 @@ trappan bara det skalskillnaden redan gjorde.
 
 from __future__ import annotations
 
+import math
+
 
 # --- Behovstrappans nivåer ------------------------------------------------
 #
@@ -71,13 +73,29 @@ from __future__ import annotations
 # trappan ska vara komplett.
 NIVA_FLYKT = 1
 NIVA_SVALT = 2
-NIVA_TERMISK = 3
+NIVA_NEDKYLNING = 3
 NIVA_JAKT = 4
 NIVA_PARNING = 5
-NIVA_FLOCK = 6
-NIVA_UTFORSKNING = 7
+NIVA_VARDAG = 6
 
-N_NIVAER = 7
+N_NIVAER = 6
+
+# Trappans skärpa. `score = λ^(N − nivå) · styrka`, så λ = 1 räknar bara
+# styrkan och λ → ∞ är en strikt elif-kedja. Vid λ = 2 slår ett maximalt
+# socialt önskemål en svag hunger men aldrig en verklig flykt — det uttalade
+# kravet — och p153 visade att λ = 2 uppfyller det mot verkliga fördelningar:
+# i drift ligger allt mellan 0,23 och 1,78, akut skjuter varje nivå till 4–128.
+#
+# Valt ur avsikten, inte kalibrerat mot p153; de fördelningarna är en överbetad
+# världs. Se `TODO.md`.
+LAMBDA = 2.0
+
+# Påslag på den sittande vinnaren. Två nästan lika förslag byter annars vinnare
+# varje tick och djuret vibrerar i stället för att välja väg. 1,25 betyder att
+# utmanaren måste vara tjugofem procent bättre — mindre än ett halvt trappsteg,
+# så hysteresen kan aldrig hålla kvar en vinnare mot ett anspråk från en högre
+# nivå.
+HYSTERES = 1.25
 
 
 # Repulsionszonens gräns i normerat grannavstånd. Flockens tre regler delar på
@@ -454,3 +472,79 @@ def foda_signal(accB, accC, diet: float):
     combo = accB * herb_eff + accC * scav_eff
     i_best = int(combo.argmax())
     return float(combo[i_best]), i_best
+
+
+# --- Arbitreringen -------------------------------------------------------
+#
+# Fuzzy i ordningen, hårt i valet. Poängen är kontinuerlig, så vinnaren byts
+# vid en väldefinierad korsning i stället för vid en boolesk tröskel — men det
+# är alltid *en* riktning som väljs. Inget viktat medelvärde av bäringar.
+#
+# Nivåerna skiljer nödlägen från vardag, inte vardag från vardag. Föda, flock,
+# termoreglering och utforskning ligger alla på `NIVA_VARDAG` och avgörs på
+# styrka allena. Det är därför de kan dela på tiden: hungern faller när djuret
+# betar och kohesionen växer med avståndet till grannarna, så de två är
+# motriktade återkopplingar på olika variabler. Ingen kan vinna permanent.
+#
+# Betande flockdjur väljer inte mellan att äta och att hålla ihop. Låg födan en
+# nivå över flocken förlorade ett *maximalt* flockanspråk mot ett *typiskt*
+# födoanspråk — 1,63 mot 1,78 i p153 — och flockningen hade upphört att finnas.
+
+
+def score(niva: int, styrka: float, lam: float = LAMBDA) -> float:
+    """Anspråkets poäng. Låg nivå = mer angeläget = större potens."""
+    return (lam ** (N_NIVAER - niva)) * styrka
+
+
+def blanda(bidrag) -> tuple:
+    """
+    Slå ihop flera bidrag inom *samma* beteende till en bäring och en styrka.
+
+    `bidrag` är `[(vikt, bäring), …]` där bäringen är ett normerat kursfel i
+    [−1, 1]. Summan tas som vektorer; resultatets riktning blir bäringen och
+    dess belopp styrkan.
+
+    Att blanda här är legitimt och inte samma sak som det förbjudna
+    medelvärdet: Reynolds tre regler är **ett** beteende med tre termer, precis
+    som i den ursprungliga boids-formuleringen. Förbudet gäller mellan nivåer,
+    där två anspråk vill åt olika håll av olika skäl och medelvägen är diket.
+
+    Beloppet faller dessutom av sig självt när reglerna motsäger varandra —
+    står djuret på sitt önskade avstånd tar separation och kohesion ut varandra
+    och det finns inget att begära. Det är rätt: ett anspråk med styrkan noll
+    ska inte vinna.
+    """
+    ex = 0.0
+    ey = 0.0
+    for w, b in bidrag:
+        if w <= 0.0:
+            continue
+        a = float(b) * math.pi
+        ex += w * math.cos(a)
+        ey += w * math.sin(a)
+    r = math.hypot(ex, ey)
+    if r <= 1e-12:
+        return 0.0, 0.0
+    return _clamp(math.atan2(ey, ex) / math.pi, -1.0, 1.0), _clamp(r, 0.0, 1.0)
+
+
+def valj(anskrav, sittande: str = "", hysteres: float = HYSTERES):
+    """
+    Välj vinnande anspråk. `anskrav` är `[(namn, nivå, styrka, …), …]`.
+
+    Returnerar `(index, poäng)`, eller `(-1, 0.0)` om ingen har styrka. Den
+    sittande vinnaren får `hysteres` som påslag.
+    """
+    bast = -1
+    bast_p = 0.0
+    for i, a in enumerate(anskrav):
+        st = float(a[2])
+        if st <= 0.0:
+            continue
+        p = score(int(a[1]), st)
+        if a[0] == sittande:
+            p *= hysteres
+        if p > bast_p:
+            bast_p = p
+            bast = i
+    return bast, bast_p

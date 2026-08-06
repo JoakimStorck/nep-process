@@ -2213,6 +2213,10 @@ class Agent:
     _flock_align: object = field(init=False, default=None, repr=False, compare=False)
     # Temperatur per riktningssektor i kroppsram, satt av sensingpasset.
     _temp_sectors: object = field(init=False, default=None, repr=False, compare=False)
+    # Sittande vinnare i arbitreringen, för hysteresen.
+    _sittande: str = field(init=False, default="", repr=False, compare=False)
+    # Läskopia av `store.repro_cd`, satt av sensingpasset. Store äger fältet.
+    _repro_cd_s: float = field(init=False, default=0.0, repr=False, compare=False)
     _cached_B0: float = field(init=False, default=0.0)
     _cached_C0: float = field(init=False, default=0.0)
     _cached_x_in: np.ndarray = field(init=False)         # cachat obs-vektor
@@ -2667,11 +2671,11 @@ class Agent:
         return best_prey, best_prey_score, best_threat, best_threat_score, best_mate
     
     
-    def _apply_reflex_drives(
+    def _samla_anspravk(
         self,
-        turn: float,
-        thrust: float,
-        explore_drive: float,
+        world,
+        turn_mlp: float,          # oanvänd sedan utforskningsanspråket togs
+        explore_drive: float,     # bärs igenom för vinnarens explore_mult
         soc: float,
         hunt_eff: float,
         in_mating_mode: bool,
@@ -2685,269 +2689,273 @@ class Agent:
         best_mate,
         neighbour_heading: float | None = None,
         neighbour_memory=None,
-    ) -> tuple[float, float, float, float, float]:
-        hunt_state = 0.0
-        flee_state = 0.0
+    ) -> list:
+        """
+        Bygg samtliga anspråk på rörelseriktningen.
+
+        Varje sensoriskt intryck med påverkan på kursen lämnar ett förslag —
+        **(bäring, nivå, styrka)** — och ingen av dem skriver i `turn`. Alla
+        utvärderas varje tick; `elif`-kedjan finns inte kvar. Det var den som
+        gjorde att ett anspråk kunde försvinna helt bara för att ett annat
+        råkade avfyra, och att det som låg efter kedjan lades ovanpå vem som än
+        vann.
+
+        Anspråket är `(namn, nivå, styrka, bäring, thrust_min, explore_mult)`.
+        Vinnaren bestämmer vart; `thrust_min` och `explore_mult` är dess
+        sidoeffekter och tillämpas bara om det vinner.
+        """
+        A: list = []
         self._mate_search = False
-    
+
+        # --- nivå 1: flykt ------------------------------------------------
         if (
             best_threat is not None
             and hunt_eff < float(self.AP.threat_predation_min)
             and best_threat_score > float(self.AP.flee_score_min)
         ):
             other, dx, dy, dist = best_threat
-            a_th = math.atan2(dy, dx)
-            err = self._signed_angle(a_th - self.heading)
-            bias = clamp(err / math.pi, -1.0, 1.0)
-    
-            turn = clamp(turn - 0.95 * bias, -1.0, 1.0)
-            thrust = clamp(max(thrust, 0.95), 0.0, 1.0)
-            explore_drive *= 0.10
-
-            # `flee_state` bär numera hotets styrka i stället för en etta.
-            # Amplituden ovan är oförändrad — styrkan driver ingenting i steg
-            # 2 — men den behöver bäras ut för att kunna mätas, och flaggan är
-            # den enda vägen ut ur kedjan som redan finns.
-            #
-            # Golvet finns bara för att `_apply_food_steering` använder samma
-            # flagga som grind. Ett hot precis på tröskeln ger styrkan noll,
-            # och utan golvet skulle födostyrningen då slå på mitt i en flykt.
-            # Grinden försvinner i steg 3, och golvet med den.
-            flee_state = max(1e-9, styrning.styrka_angrepp(
+            err = self._signed_angle(math.atan2(dy, dx) - self.heading)
+            st = styrning.styrka_angrepp(
                 other.attack_score(self, float(self.AP.attack_range)),
                 dist,
                 float(self.AP.flee_score_min),
                 float(self.AP.attack_score_min),
                 float(self.AP.attack_range),
                 float(self.AP.prey_search_radius),
-            ))
-    
-        elif (
+            )
+            # Bäringen är *bort* från hotet.
+            A.append(("flykt", styrning.NIVA_FLYKT, st,
+                      -clamp(err / math.pi, -1.0, 1.0), 0.95, 0.10))
+
+        # --- födans bäring: delas av svält och födosök ---------------------
+        bias_food = None
+        sensors = getattr(self, "sensors", None)
+        if sensors is not None:
+            accB = getattr(sensors, "_acc_dir_B", None)
+            accC = getattr(sensors, "_acc_dir_C", None)
+            ang = getattr(sensors, "_acc_dir_ang", None)
+            if accB is not None and accC is not None and ang is not None and len(accB) > 0:
+                sig, i_best = styrning.foda_signal(
+                    accB, accC, float(getattr(self.pheno, "diet", 0.5)))
+                if sig > 0.05:
+                    bias_food = clamp(
+                        self._signed_angle(float(ang[i_best])) / math.pi, -1.0, 1.0)
+
+        # --- nivå 2: svält -------------------------------------------------
+        #
+        # Svälten har ingen egen riktning. Den pekar dit födan finns, alltså
+        # samma bäring som födosöket — den är samma anspråk vid ett annat
+        # angelägenhetsläge. Vinner den i stället för födosöket ändras därför
+        # bara kraften, inte kursen, vilket är precis vad ett nödläge ska göra.
+        if bias_food is not None:
+            st = float(getattr(self.body, "_svalt_andel", 0.0))
+            if st > 0.0:
+                A.append(("svält", styrning.NIVA_SVALT, st, bias_food, 0.90, 0.10))
+
+        # --- värmens bäring: delas av nedkylning och termoreglering --------
+        #
+        # Riktningen är en viktad vektorsumma över sektorernas avvikelse från
+        # sitt eget medelvärde, alltså den lokala gradienten.
+        bias_varme = None
+        _stress = 0.0
+        _ts = getattr(self, "_temp_sectors", None)
+        if _ts is not None and len(_ts):
+            _Tloc = float(world.temperature_at(self.x, self.y)) \
+                if hasattr(world, "temperature_at") else float(np.mean(_ts))
+            _stress = styrning.kold_stress(float(self.AP.Tb_set), _Tloc)
+            _S = len(_ts)
+            _dev = np.asarray(_ts, dtype=np.float64) - float(np.mean(_ts))
+            _angT = (np.arange(_S) + 0.5) * (2.0 * math.pi / _S)
+            _gx = float(np.sum(_dev * np.cos(_angT)))
+            _gy = float(np.sum(_dev * np.sin(_angT)))
+            if abs(_gx) + abs(_gy) > 1e-9:
+                bias_varme = clamp(
+                    self._signed_angle(math.atan2(_gy, _gx)) / math.pi, -1.0, 1.0)
+
+        # --- nivå 3: nedkylning --------------------------------------------
+        if bias_varme is not None:
+            st = styrning.styrka_nedkylning(float(self.body.Tb), float(self.AP.Tb_min))
+            if st > 0.0:
+                A.append(("nedkylning", styrning.NIVA_NEDKYLNING, st,
+                          bias_varme, 0.60, 0.30))
+
+        # --- nivå 4: jakt ---------------------------------------------------
+        if (
             best_prey is not None
             and hunt_eff >= float(self.AP.predator_trait_min)
             and best_prey_score > float(self.AP.hunt_score_min)
         ):
-            other, dx, dy, dist = best_prey
-            a_hit = math.atan2(dy, dx)
-            errN = self._signed_angle(a_hit - self.heading)
-            biasN = clamp(errN / math.pi, -1.0, 1.0)
-            hs = styrning.styrka_jakt(hunt_eff)
-    
-            turn = clamp(turn + 0.90 * hs * biasN, -1.0, 1.0)
-            thrust = clamp(max(thrust, 0.85), 0.0, 1.0)
-            explore_drive *= 0.25
-
-            # Amplituden bär fortfarande anlaget `hs`; det byts i steg 3
-            # tillsammans med resten av uttrycket. Flaggan bär den nya
-            # styrkan — samma `attack_score` som flykten läser, fast från
-            # jägarens håll. `hunt_state` har ingen läsare i produktionskoden,
-            # så bytet är rent additivt.
-            # Golvet av samma skäl som `flee_state`: flaggan läses som "grenen
-            # avfyrade", och den nya styrkan blir exakt noll för ett byte
-            # utanför `prey_search_radius`. Utan golvet försvinner de tickarna
-            # ur grenstatistiken. Golvet går, som flyktens, i steg 3.
-            _prey, _pdx, _pdy, _pdist = best_prey
-            hunt_state = max(1e-9, styrning.styrka_angrepp(
-                self.attack_score(_prey, float(self.AP.attack_range)),
-                _pdist,
+            prey, dx, dy, dist = best_prey
+            err = self._signed_angle(math.atan2(dy, dx) - self.heading)
+            st = styrning.styrka_angrepp(
+                self.attack_score(prey, float(self.AP.attack_range)),
+                dist,
                 float(self.AP.hunt_score_min),
                 float(self.AP.attack_score_min),
                 float(self.AP.attack_range),
                 float(self.AP.prey_search_radius),
-            ))
-    
-        elif in_mating_mode and best_mate is not None:
-            other, dx, dy, dist = best_mate
-            a_hit = math.atan2(dy, dx)
-            errN = self._signed_angle(a_hit - self.heading)
-            biasN = clamp(errN / math.pi, -1.0, 1.0)
-    
-            turn = clamp(0.95 * biasN, -1.0, 1.0)
-            thrust = max(thrust, 0.95)
-            explore_drive = 0.0
-    
-        elif N > 0.5 or neighbour_memory is not None:
-            if N > 0.5:
-                a_hit = self.heading + (2.0 * math.pi * float(Nu))
-                Nd_mem = float(Nd)
-                head_mem = neighbour_heading
-                trust = 1.0
-            else:
-                # Minnet styr bara. Det ger aldrig ett mål för parning eller
-                # predation — de kräver en verkligt detekterad motpart.
-                a_hit, Nd_mem, head_mem, trust = neighbour_memory
-            _ = a_hit
-            errN = self._signed_angle(a_hit - self.heading)
-            biasN = clamp(errN / math.pi, -1.0, 1.0) * trust
-            Nd_f = Nd_mem
-            neighbour_heading = head_mem
-    
-            # Reynolds tre regler, med var sin räckvidd. Separation nära,
-            # alignment på mellanavstånd, kohesion långt bort.
-            #
-            # Tidigare fanns bara två av dem, och kohesionen var dessutom
-            # viktad tvärtom: `wdist = 1 - Nd` är störst på nära håll, alltså
-            # starkast precis där separationen borde ta över och svagast där
-            # gruppen behöver dras ihop. Två djur svängde mot varandra, möttes,
-            # stöttes isär i repulsionszonen och divergerade omedelbart —
-            # eftersom ingenting sa åt dem att fortsätta åt samma håll. Det
-            # ger möten, inte flockar, och kohesionskvoten mot Poisson mättes
-            # till 1,0 oavsett `sociability`: ingen aggregering alls.
-            #
-            # Alignment är regeln som omvandlar ett möte till ett sällskap.
-            # Riktningen ett djur rör sig i är observerbar — den läses ur
-            # motpartens kurs, inte ur dess arvsmassa.
-            REP_ZONE = styrning.REP_ZONE
-            soc_bias = 2.0 * soc - 1.0
-            if Nd_f < REP_ZONE:
-                rs = styrning.styrka_separation(Nd_f, REP_ZONE)
-                turn = clamp(turn - 0.70 * rs * biasN, -1.0, 1.0)
-                explore_drive = explore_drive * (1.0 - 0.3 * rs)
-            elif abs(soc_bias) > 1e-6:
-                # Kohesion mot **grannskapets tyngdpunkt**, inte mot den
-                # närmaste. En enskild granne ger bara riktningen mot den
-                # grannen, och djur som svänger mot närmaste artfrände roterar
-                # runt varandra i stället för att konvergera. 0099 gjorde
-                # målvalet stabilt utan att kohesionskvoten rörde sig från 1,0.
-                #
-                # Reynolds tre regler får dela på **samma** totala vikt som den
-                # enda kohesionstermen hade. Flockningen ska vara en drift
-                # bland flera — föda, värme, flykt och parning verkar
-                # oförändrat — inte ta över styrningen.
-                wcoh = styrning.avstandsvikt(Nd_f, REP_ZONE)
-                _soc = getattr(self, "_soc_sectors", None)
-                did_group = False
-                if _soc is not None and soc_bias > 0.0:
-                    _F, _HX, _HY = _soc
-                    _S = len(_F)
-                    if _S:
-                        _ang = (np.arange(_S) + 0.5) * (2.0 * math.pi / _S)
-                        _w = np.asarray(_F, dtype=np.float64)
-                        _cx = float(np.sum(_w * np.cos(_ang)))
-                        _cy = float(np.sum(_w * np.sin(_ang)))
-                        if abs(_cx) + abs(_cy) > 1e-9:
-                            _e = self._signed_angle(math.atan2(_cy, _cx))
-                            turn = clamp(turn + 0.40 * soc_bias * wcoh
-                                         * clamp(_e / math.pi, -1.0, 1.0), -1.0, 1.0)
-                            did_group = True
-                        # Alignment mot **flockens** medelkurs, viktad med
-                        # affinitet. Man dras mot främlingar men följer bara
-                        # sina egna. Faller tillbaka på det oviktade
-                        # sektoraggregatet om medlemskap saknas.
-                        _fa = getattr(self, "_flock_align", None)
-                        if _fa is not None and (abs(_fa[0]) + abs(_fa[1])) > 1e-9:
-                            _hx, _hy = float(_fa[0]), float(_fa[1])
-                        else:
-                            _hx = float(np.sum(_HX)); _hy = float(np.sum(_HY))
-                        if abs(_hx) + abs(_hy) > 1e-9:
-                            _ea = self._signed_angle(math.atan2(_hy, _hx))
-                            turn = clamp(turn + 0.20 * soc_bias
-                                         * clamp(_ea / math.pi, -1.0, 1.0), -1.0, 1.0)
-                if not did_group:
-                    # Ingen granne i aggregatet — falla tillbaka på den
-                    # detekterade individen.
-                    turn = clamp(turn + 0.40 * soc_bias * wcoh * biasN, -1.0, 1.0)
+            )
+            A.append(("jakt", styrning.NIVA_JAKT, st,
+                      clamp(err / math.pi, -1.0, 1.0), 0.85, 0.25))
 
-                # Alignment: starkast på mellanavstånd, där grannen är nära nog
-                # att vara värd att följa men inte så nära att man måste väja.
-                if (not did_group) and neighbour_heading is not None and soc_bias > 0.0:
-                    w = styrning.avstandsvikt(Nd_f, REP_ZONE)
-                    walign = styrning.alignment_vikt(w)
-                    errA = self._signed_angle(float(neighbour_heading) - self.heading)
-                    turn = clamp(turn + 0.20 * soc_bias * walign
-                                 * clamp(errA / math.pi, -1.0, 1.0), -1.0, 1.0)
-
-                # Utforskningen dämpas bara av att *söka sällskap*. Tidigare
-                # användes abs(soc_bias), så även ett djur som undviker
-                # artfränder slutade söka föda.
-                if soc_bias > 0.0:
-                    explore_drive = explore_drive * (1.0 - 0.60 * soc_bias * wcoh)
-    
+        # --- nivå 5: parning -------------------------------------------------
+        if in_mating_mode and best_mate is not None:
+            mate, dx, dy, dist = best_mate
+            err = self._signed_angle(math.atan2(dy, dx) - self.heading)
+            mreq = max(float(self.AP.M_min),
+                       float(getattr(self.pheno, "M_repro_min", 0.0)))
+            drift = styrning.parningsdrift(
+                -float(getattr(self, "_repro_cd_s", 0.0)),
+                float(self.AP.repro_cooldown_s),
+                (float(self.body.M) - mreq) / max(mreq, 1e-9),
+                float(self.body.reserve_frac()),
+            )
+            st = drift * styrning.narhet(dist, float(self.AP.attack_range),
+                                         float(self.AP.mate_search_radius))
+            A.append(("parning", styrning.NIVA_PARNING, st,
+                      clamp(err / math.pi, -1.0, 1.0), 0.95, 0.0))
         elif in_mating_mode:
-            # Redo att para sig och ser ingen alls. Det fallet fanns inte i
-            # kedjan: det föll igenom till födostyrningen, som *sänker*
-            # utforskningen när organismen står på föda den vill ha. Ett mättat
-            # djur ensamt på en full betesmark fick alltså minimal utforskning,
-            # kortaste persistenstid och en bana som slingrar på fläcken.
-            #
-            # Uppmätt i p125 frö 2: från tick 20 000 dog inget djur av svält på
-            # 8 000 tick, floran låg på 92 000 plantor, och de tio som fanns
-            # kvar fick fyra ungar innan de dog av ålder — med medianavstånd 16
-            # cellbredder till närmaste artfrände mot en synradie på 7. De
-            # svalt inte. De hittade aldrig varandra.
-            #
-            # Grenen ligger **sist** i kedjan, efter flockningen. Låg den
-            # före fångade den även fallet "ser någon som inte är en giltig
-            # partner" — och eftersom `best_mate` kräver att motparten också
-            # är parningsberedd är det det vanliga fallet. Ett parningsberett
-            # djur sprang då rakt förbi en artfrände i stället för att slå
-            # följe. Uppmätt i p132: de tjugo grundarna korsade världen i
-            # raka banor, hittade varandra, och fortsatte förbi.
-            #
-            # Reflexen säger *när* det är läge att färdas. **Hur** rakt avgörs
-            # av `pheno_dir_tau()` ur `_T_MOB`, som redan bär avvägningen: hög
-            # persistens ger effektiv förflyttning men dålig lokal genomsökning.
-            # Ingen ny parameter, och magnituden är evolverbar.
+            # Redo att para sig och ser ingen alls. Inget anspråk på kursen —
+            # men utforskningen ska upp, annars slingrar det mättade djuret på
+            # fläcken och hittar aldrig någon. Se p125 och p132.
             self._mate_search = True
-            explore_drive = 1.0
 
-        return turn, thrust, explore_drive, flee_state, hunt_state
-    
-    
-    def _apply_food_steering(
-        self,
-        ctx: "StepCtx",
-        turn: float,
-        thrust: float,
-        explore_drive: float,
-        flee_state: float,
-        B0: float,
-        C0: float,
-    ) -> tuple[float, float, float]:
-        hunger_now = float(self.body.hunger())
-    
-        # Ingen aptitgrind. Dödzonen på 0,4 gjorde födosöket till en reflex
-        # som slog på först när reserven var fyrtio procent tömd; nu är
-        # anspråket graderat hela vägen och svagt när djuret är mätt.
-        # `sig > 0,05` nedan står kvar — den handlar om ifall mat syns, inte
-        # om ifall djuret vill ha den.
-        if flee_state <= 0.0:
-            sensors = getattr(self, "sensors", None)
-            if sensors is not None:
-                accB = getattr(sensors, "_acc_dir_B", None)
-                accC = getattr(sensors, "_acc_dir_C", None)
-                ang = getattr(sensors, "_acc_dir_ang", None)
-    
-                if accB is not None and accC is not None and ang is not None and len(accB) > 0:
-                    _diet = float(getattr(self.pheno, "diet", 0.5))
-                    sig, i_best = styrning.foda_signal(accB, accC, _diet)
-    
-                    if sig > 0.05:
-                        food_angle = float(ang[i_best]) + float(self.heading)
-                        err_food = self._signed_angle(food_angle - self.heading)
-                        bias_food = clamp(err_food / math.pi, -1.0, 1.0)
-                        fd = styrning.styrka_foda(hunger_now, sig)
-    
-                        turn = clamp(turn + 0.36 * fd * bias_food, -1.0, 1.0)
-                        thrust = clamp(thrust + 0.18 * fd, 0.0, 1.0)
-    
-        _diet_local = float(getattr(self.pheno, "diet", 0.5))
-        _herb_local = (1.0 - _diet_local) ** 0.7
-        _scav_local = _diet_local ** 0.7
-        food_local = clamp(float(B0) * _herb_local + float(C0) * _scav_local, 0.0, 1.0)
-    
-        explore_drive *= 1.0 - hunger_now * food_local
+        # --- nivå 6: vardagen -------------------------------------------------
+        # Föda, flock, termoreglering och utforskning avgörs på styrka allena.
+        # Nivåer skiljer nödlägen från vardag, inte vardag från vardag.
+        if bias_food is not None:
+            # `sig` valde bäringen, den bär inte styrkans belopp: avstånd till
+            # mat minskar inte hungern, det säger bara var maten troligen finns.
+            st = clamp(float(self.body.hunger()), 0.0, 1.0)
+            if st > 0.0:
+                A.append(("födosök", styrning.NIVA_VARDAG, st, bias_food, 0.0, 1.0))
 
-        # Söker partner och ser ingen: dämpningen ovan skulle annars nolla
-        # utforskningen just för det mätta djur som har råd att leta. Hungern
-        # får fortfarande företräde — `1 - hunger_now` går mot noll när djuret
-        # svälter, och då är föda rätt prioritet.
-        if getattr(self, "_mate_search", False):
-            explore_drive = max(explore_drive, 1.0 - hunger_now)
+        if bias_varme is not None:
+            st = float(getattr(self.pheno, "cold_aversion", 0.0)) * _stress
+            if st > 0.0:
+                A.append(("termoreglering", styrning.NIVA_VARDAG, st,
+                          bias_varme, 0.0, 1.0))
 
-        return turn, thrust, explore_drive
-    
-    
+        if N > 0.5 or neighbour_memory is not None:
+            f = self._flock_anspravk(soc, N, Nu, Nd, neighbour_heading,
+                                     neighbour_memory)
+            if f is not None:
+                A.append(f)
+
+        # **Ingen utforskning som anspråk.** Den var ett anspråk utan bäring,
+        # och att ge den MLP:ns `y[0]` såg ut som en lösning men var det inte:
+        # med `explore_drive` medianen 0,50 mot hungerns 0,21 vann den 58
+        # procent av tickarna, och det var ingen som hade valt.
+        #
+        # Skälet är att utforskning inte är en riktningsfråga. Flockanspråket
+        # finns bara när någon syns, så flock och utforskning konkurrerar
+        # aldrig om samma situation — utforskning *är* vad som händer när inget
+        # anspråk finns. Och det som då ska hända är inte "gå rakt fram" utan
+        # ett av tre lägen som skiljs av fart och persistens, inte av kurs:
+        #
+        #   vila         inget behövs — stanna, återhämta trötthet. Utdelningen
+        #                finns redan: `dD_eff` är en tredjedel av all skada.
+        #   genomsök     något behövs men syns inte — kort persistens, sväng
+        #                ofta, täck ytan.
+        #   förflytta    området är tomt — lång persistens, gå rakt.
+        #
+        # `pheno_dir_tau()` ur `_T_MOB` bär redan just den avvägningen. Lägena
+        # hör därför till steg 4, styrkraften, tillsammans med `frac = 1 −
+        # exp(−turn_gain · effort · dt)` och energikostnaden — inte hit.
+        #
+        # Vinner inget anspråk blir kursändringen noll, och farten avgör.
+
+        return A
+
+    def _flock_anspravk(self, soc, N, Nu, Nd, neighbour_heading, neighbour_memory):
+        """
+        Reynolds tre regler som **ett** anspråk.
+
+        Separation, kohesion och alignment är samma beteende och blandas därför
+        till en bäring — det är boids ursprungliga formulering. Förbudet mot
+        medelvärde gäller mellan nivåer, inte inom ett beteende.
+
+        `soc_bias = 2·sociability − 1` är tecknad, och negativ betyder
+        undvikande. Under arbitrering finns ingen negativ styrka: beloppet hör
+        till styrkan och tecknet vänder bäringen.
+        """
+        if N > 0.5:
+            a_hit = self.heading + (2.0 * math.pi * float(Nu))
+            Nd_f = float(Nd)
+            head_mem = neighbour_heading
+            trust = 1.0
+        else:
+            a_hit, Nd_f, head_mem, trust = neighbour_memory
+
+        err = self._signed_angle(a_hit - self.heading)
+        b_granne = clamp(err / math.pi, -1.0, 1.0) * trust
+        REP = styrning.REP_ZONE
+        soc_bias = 2.0 * float(soc) - 1.0
+        tecken = -1.0 if soc_bias < 0.0 else 1.0
+        bidrag = []
+
+        if Nd_f < REP:
+            # Separation: bort från grannen. Gäller oavsett sällskaplighet —
+            # ingen vill bli trampad på.
+            bidrag.append((styrning.styrka_separation(Nd_f, REP), -b_granne))
+        else:
+            wcoh = styrning.avstandsvikt(Nd_f, REP)
+            b_koh = b_granne
+            _soc = getattr(self, "_soc_sectors", None)
+            if _soc is not None and soc_bias > 0.0:
+                _F, _HX, _HY = _soc
+                _S = len(_F)
+                if _S:
+                    _angS = (np.arange(_S) + 0.5) * (2.0 * math.pi / _S)
+                    _w = np.asarray(_F, dtype=np.float64)
+                    _cx = float(np.sum(_w * np.cos(_angS)))
+                    _cy = float(np.sum(_w * np.sin(_angS)))
+                    if abs(_cx) + abs(_cy) > 1e-9:
+                        # Kohesion mot grannskapets tyngdpunkt, inte mot den
+                        # närmaste: djur som svänger mot närmaste artfrände
+                        # roterar runt varandra i stället för att konvergera.
+                        b_koh = clamp(self._signed_angle(math.atan2(_cy, _cx))
+                                      / math.pi, -1.0, 1.0)
+                    _fa = getattr(self, "_flock_align", None)
+                    if _fa is not None and (abs(_fa[0]) + abs(_fa[1])) > 1e-9:
+                        _hx, _hy = float(_fa[0]), float(_fa[1])
+                    else:
+                        _hx = float(np.sum(_HX))
+                        _hy = float(np.sum(_HY))
+                    if abs(_hx) + abs(_hy) > 1e-9:
+                        b_ali = clamp(self._signed_angle(math.atan2(_hy, _hx))
+                                      / math.pi, -1.0, 1.0)
+                        bidrag.append((abs(soc_bias) * styrning.alignment_vikt(wcoh),
+                                       tecken * b_ali))
+            elif head_mem is not None and soc_bias > 0.0:
+                errA = self._signed_angle(float(head_mem) - self.heading)
+                bidrag.append((abs(soc_bias) * styrning.alignment_vikt(wcoh),
+                               tecken * clamp(errA / math.pi, -1.0, 1.0)))
+            bidrag.append((abs(soc_bias) * wcoh, tecken * b_koh))
+
+        bias, st = styrning.blanda(bidrag)
+        if st <= 0.0:
+            return None
+        return ("flock", styrning.NIVA_VARDAG, st, bias, 0.0, 1.0)
+
+    def _valj_anspravk(self, anskrav, thrust: float, explore_drive: float):
+        """
+        Hårt val: en vinnare, en riktning. Hysteres på den sittande.
+
+        Returnerar `(turn, thrust, explore_drive, namn)`.
+        """
+        i, _p = styrning.valj(anskrav, getattr(self, "_sittande", ""))
+        if i < 0:
+            self._sittande = ""
+            return 0.0, thrust, explore_drive, ""
+        namn, _niva, _st, bias, thrust_min, expl_mult = anskrav[i]
+        self._sittande = namn
+        if thrust_min > 0.0:
+            thrust = clamp(max(thrust, thrust_min), 0.0, 1.0)
+        explore_drive = float(explore_drive) * float(expl_mult)
+        return clamp(float(bias), -1.0, 1.0), thrust, explore_drive, namn
+
+
     def _integrate_motion(
         self,
         ctx: "StepCtx",
@@ -3248,23 +3256,6 @@ class Agent:
         # sitt eget medelvärde, alltså den lokala gradienten. Styrkan skalas av
         # köldaversionen och av hur mycket djuret faktiskt fryser — ett djur i
         # trettio grader har ingen anledning att söka värme.
-        _ts = getattr(self, "_temp_sectors", None)
-        if _ts is not None and len(_ts):
-            _ca = float(getattr(self.pheno, "cold_aversion", 0.0))
-            _Tloc = float(world.temperature_at(self.x, self.y)) if hasattr(world, "temperature_at") \
-                else float(np.mean(_ts))
-            _stress = styrning.kold_stress(float(self.AP.Tb_set), _Tloc)
-            if _ca > 1e-6 and _stress > 1e-6:
-                _S = len(_ts)
-                _dev = np.asarray(_ts, dtype=np.float64) - float(np.mean(_ts))
-                _ang = (np.arange(_S) + 0.5) * (2.0 * math.pi / _S)
-                _gx = float(np.sum(_dev * np.cos(_ang)))
-                _gy = float(np.sum(_dev * np.sin(_ang)))
-                if abs(_gx) + abs(_gy) > 1e-9:
-                    _errT = self._signed_angle(math.atan2(_gy, _gx))
-                    turn = clamp(turn + 0.70 * _ca * _stress
-                                 * clamp(_errT / math.pi, -1.0, 1.0), -1.0, 1.0)
-
         # Minnet av senast sedda artfrände. Uppdateras när någon syns och
         # dödräknas annars framåt längs dess senast sedda kurs. Det överbryggar
         # både sensingintervallet och den sida där synfältet är kortast.
@@ -3297,9 +3288,9 @@ class Agent:
                 nb_mem = (math.atan2(dym, dxm), dm / max(rf, 1e-9), mh,
                           max(0.0, 1.0 - mage / max(1.0, float(mem_lim))))
 
-        turn, thrust, explore_drive, flee_state, hunt_state = self._apply_reflex_drives(
-            turn=turn,
-            thrust=thrust,
+        anskrav = self._samla_anspravk(
+            world=world,
+            turn_mlp=turn,
             explore_drive=explore_drive,
             soc=soc,
             hunt_eff=hunt_eff,
@@ -3315,17 +3306,19 @@ class Agent:
             neighbour_heading=(float(detected.heading) if detected is not None else None),
             neighbour_memory=nb_mem,
         )
-    
-        turn, thrust, explore_drive = self._apply_food_steering(
-            ctx=ctx,
-            turn=turn,
-            thrust=thrust,
-            explore_drive=explore_drive,
-            flee_state=flee_state,
-            B0=B0,
-            C0=C0,
-        )
-    
+        turn, thrust, explore_drive, _vinnare = self._valj_anspravk(
+            anskrav, thrust, explore_drive)
+
+        # Utforskningens dämpning av att stå på föda man vill ha. Den rör inte
+        # kursen, bara persistensen, och hör därför inte till anspråken.
+        _hunger = float(self.body.hunger())
+        _diet_local = float(getattr(self.pheno, "diet", 0.5))
+        _food_local = clamp(float(B0) * ((1.0 - _diet_local) ** 0.7)
+                            + float(C0) * (_diet_local ** 0.7), 0.0, 1.0)
+        explore_drive *= 1.0 - _hunger * _food_local
+        if getattr(self, "_mate_search", False):
+            explore_drive = max(explore_drive, 1.0 - _hunger)
+
         return ActionPlan(
             turn=float(turn),
             thrust=float(thrust),

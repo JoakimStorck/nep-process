@@ -3469,6 +3469,7 @@ class Population:
         
         for a in alive:
             a._mating_mode = self._mating_mode_slot(a.store_slot)
+            a._repro_cd_s = float(self.store.repro_cd[int(a.store_slot)])
         
         if not alive:
             return SenseBatch(
