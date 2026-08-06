@@ -3922,8 +3922,17 @@ class Population:
             return
 
         store.age[fa] = (store.age[fa].astype(np.float64, copy=False) + dt).astype(np.float32)
-        store.repro_cd[fa] = np.maximum(
-            0.0, store.repro_cd[fa].astype(np.float64, copy=False) - dt
+        # Klockan stannar inte vid noll. Positivt värde är tid kvar till
+        # beredskap; negativt är tid *sedan* beredskapen inföll, och det är
+        # parningsdriftens tidsfaktor. En storhet, en klocka — i stället för
+        # ett andra ackumulerande fält som ska hållas i synk med det här.
+        #
+        # Samtliga läsare testar `> 0.0` och är därmed oberörda; se
+        # `_ready_to_reproduce_slot`, `_mating_mode_slot` och `logstats`.
+        # Fältet nollställs vid födsel och sätts om till `repro_cooldown_s`
+        # vid varje reproduktion, så det driver inte iväg.
+        store.repro_cd[fa] = (
+            store.repro_cd[fa].astype(np.float64, copy=False) - dt
         ).astype(np.float32)
             
             

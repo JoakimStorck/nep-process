@@ -2599,10 +2599,13 @@ class Agent:
             # flagga som grind. Ett hot precis på tröskeln ger styrkan noll,
             # och utan golvet skulle födostyrningen då slå på mitt i en flykt.
             # Grinden försvinner i steg 3, och golvet med den.
-            flee_state = max(1e-9, styrning.styrka_flykt(
-                best_threat_score,
+            flee_state = max(1e-9, styrning.styrka_angrepp(
+                other.attack_score(self, float(self.AP.attack_range)),
+                dist,
                 float(self.AP.flee_score_min),
                 float(self.AP.attack_score_min),
+                float(self.AP.attack_range),
+                float(self.AP.prey_search_radius),
             ))
     
         elif (
@@ -2619,10 +2622,25 @@ class Agent:
             turn = clamp(turn + 0.90 * hs * biasN, -1.0, 1.0)
             thrust = clamp(max(thrust, 0.85), 0.0, 1.0)
             explore_drive *= 0.25
-            # Som `flee_state`: flaggan bär styrkan i stället för en etta.
-            # `hunt_state` har ingen läsare i produktionskoden, så bytet är
-            # rent additivt.
-            hunt_state = hs
+
+            # Amplituden bär fortfarande anlaget `hs`; det byts i steg 3
+            # tillsammans med resten av uttrycket. Flaggan bär den nya
+            # styrkan — samma `attack_score` som flykten läser, fast från
+            # jägarens håll. `hunt_state` har ingen läsare i produktionskoden,
+            # så bytet är rent additivt.
+            # Golvet av samma skäl som `flee_state`: flaggan läses som "grenen
+            # avfyrade", och den nya styrkan blir exakt noll för ett byte
+            # utanför `prey_search_radius`. Utan golvet försvinner de tickarna
+            # ur grenstatistiken. Golvet går, som flyktens, i steg 3.
+            _prey, _pdx, _pdy, _pdist = best_prey
+            hunt_state = max(1e-9, styrning.styrka_angrepp(
+                self.attack_score(_prey, float(self.AP.attack_range)),
+                _pdist,
+                float(self.AP.hunt_score_min),
+                float(self.AP.attack_score_min),
+                float(self.AP.attack_range),
+                float(self.AP.prey_search_radius),
+            ))
     
         elif in_mating_mode and best_mate is not None:
             other, dx, dy, dist = best_mate

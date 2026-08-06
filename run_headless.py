@@ -184,7 +184,7 @@ def instrument_contacts() -> None:
 _S: dict = {"agenttick": 0, "kans_n": 0, "kans_traff": 0, "kans_hist": [0] * 20,
             "null_traff": 0.0, "null_hist": [0.0] * 20,
             "gren_n": 0, "gren_traff": 0, "gren_traff90": 0, "avv_hist": [0] * 18,
-            "kalla": {}, "gren": {}, "state": {},
+            "kalla": {}, "gren": {}, "state": {}, "drift": {},
             # 20 fack per styrka, 0–1.
             "styrka": {},
             # Fönstret är **skilt** från totalerna ovan och nollställs vid
@@ -280,6 +280,8 @@ _S_RA_SPANN = {
     "kyla": (0.0, 1.0),
     "svält": (0.0, 1.0),
     "nedkylning": (0.0, 1.0),
+    "parningsdrift": (0.0, 1.0),
+    "parning": (0.0, 1.0),
 }
 
 
@@ -329,6 +331,7 @@ def instrument_steering() -> None:
     _INSTRUMENTED_STEERING = True
 
     from agent import Agent
+    import styrning as _st_mod
 
     st = _S["state"]
     orig_decode = Agent._decode_action_outputs
@@ -363,6 +366,15 @@ def instrument_steering() -> None:
         he = kw.get("hunt_eff")
         if he is not None and float(he) >= float(self.AP.predator_trait_min):
             _ra("jaktanlag rå", float(he))
+
+        bm = kw.get("best_mate")
+        if bm is not None and kw.get("in_mating_mode"):
+            d = _S["drift"].get(int(getattr(self, "id", 0)))
+            if d is not None:
+                _ra("parning", d * _st.narhet(
+                    float(bm[3]),
+                    float(self.AP.attack_range),
+                    float(self.AP.mate_search_radius)))
 
         _N = float(kw.get("N", 0.0))
         _mem = kw.get("neighbour_memory")
@@ -516,6 +528,33 @@ def instrument_steering() -> None:
         return orig_plan(self, world, *ar, **kw)
 
     Agent.plan_actions = wrapped_plan
+
+    # Parningsdriften kräver `repro_cd` ur store, som agenten inte når.
+    # `_mating_mode_slot` anropas exakt en gång per levande agent och tick och
+    # har både store och agent — rätt och enda hake. Driften läggs i `_S` med
+    # individens id som nyckel, så att reflexwrappern kan väga den mot
+    # partnerns närhet.
+    from population import Population
+    orig_mm = Population._mating_mode_slot
+
+    def wrapped_mm(self, slot):
+        ut = orig_mm(self, slot)
+        if ut:
+            ag = self._agent_for_slot(int(slot))
+            if ag is not None:
+                cd = float(self.store.repro_cd[int(slot)])
+                mreq = max(float(ag.AP.M_min), float(ag.pheno.M_repro_min))
+                d = _st_mod.parningsdrift(
+                    -cd,
+                    float(ag.AP.repro_cooldown_s),
+                    (float(ag.body.M) - mreq) / max(mreq, 1e-9),
+                    float(ag.body.reserve_frac()),
+                )
+                _ra("parningsdrift", d)
+                _S["drift"][int(ag.id)] = d
+        return ut
+
+    Population._mating_mode_slot = wrapped_mm
     Agent._decode_action_outputs = wrapped_decode
     Agent._apply_reflex_drives = wrapped_reflex
     Agent._apply_food_steering = wrapped_food
@@ -1257,6 +1296,7 @@ def run(a: argparse.Namespace, seed: int | None = None) -> int:
     _S["state"].clear()
     _S["styrka"] = {}
     _S_RA.clear()
+    _S["drift"].clear()
 
     # Samma loggar som run_population.py skriver, men utan pygame. Det gör
     # live_pop_plot.py och live_world_plot.py användbara mot en

@@ -110,6 +110,86 @@ def _clamp(x: float, lo: float, hi: float) -> float:
 
 # --- Nivå 1: flykt --------------------------------------------------------
 
+def narhet(dist: float, d_akut: float, d_noll: float) -> float:
+    """
+    Yttre faktor, 0–1: hur nära det objekt anspråket gäller.
+
+    Ett på `d_akut` och närmare, noll på `d_noll` och längre bort, linjärt
+    emellan.
+
+    Den hör till styrkan bara när den ändrar hur **brådskande** saken är, inte
+    när den bara ändrar hur säker riktningen är. Avstånd till ett hot minskar
+    faran; avstånd till en födosignal minskar inte hungern. Därför bär flykt,
+    jakt och parning en närhetsfaktor medan födosöket inte gör det.
+    """
+    if dist <= d_akut:
+        return 1.0
+    if dist >= d_noll:
+        return 0.0
+    return (d_noll - dist) / max(d_noll - d_akut, 1e-9)
+
+
+def styrka_angrepp(poang_vid_kontakt: float, dist: float,
+                   sc_min: float, sc_sat: float,
+                   d_akut: float, d_noll: float) -> float:
+    """
+    Angreppets styrka, 0–1 — samma tal läst från båda hållen.
+
+    Flykt och jakt är inte två storheter utan en: `attack_score` mellan samma
+    två djur. Bytet fruktar exakt det jägaren värderar. Enda skillnaden är
+    golvet — `flee_score_min` respektive `hunt_score_min` — alltså var
+    respektive part börjar bry sig.
+
+        styrka = kapacitet · närhet
+
+    **Kapaciteten utvärderas vid kontakt.** `attack_value` bär `0,55 · d_norm`
+    och `attack_risk` `0,05 · d_norm`, båda mot `prey_search_radius` — avstånd
+    är alltså redan över halva poängen. Läggs en närhetsfaktor på den råa
+    poängen dubbelräknas avståndet, och skalan mäts dessutom mot sensorradien
+    i stället för mot angreppsradien, som är den enda distans där något
+    faktiskt händer. Anropas poängen med `dist = attack_range` blir den ren:
+    *skulle den anfalla om den stod här?*
+
+    Tre lägen faller ut utan att kodas var för sig. En oförmögen motståndare
+    ger nära noll på varje avstånd. En förmögen på håll ger en låg styrka som
+    stiger medan den närmar sig. En förmögen inom `attack_range` ger ett — och
+    det är samma tillstånd som "anfaller faktiskt", eftersom den som skadar mig
+    per definition är förmögen och inom räckhåll. Det fjärde läget behöver
+    alltså ingen egen term.
+    """
+    return (_clamp((poang_vid_kontakt - sc_min) / max(sc_sat - sc_min, 1e-9), 0.0, 1.0)
+            * narhet(dist, d_akut, d_noll))
+
+
+def parningsdrift(t_sedan_beredskap: float, tau: float,
+                  massoverskott: float, reservandel: float) -> float:
+    """
+    Inre drivkraft för parning, 0–1: från beredd till starkt motiverad.
+
+    `_mating_mode` är i dag en boolean — inte dräktig, avsvalningen ute,
+    könsmogen — och ger därför ingen gradering alls. Driften graderar den på
+    tre storheter:
+
+      **tidsfaktor** `t/(t+τ)`, där `t` är tiden sedan beredskapen inföll och
+      `τ` är en avsvalningstid. Den byggs upp medan djuret går oparat och
+      nollställs vid parning. Det är den term som faktiskt beter sig som
+      stigande motivation, och den mättar mjukt i stället för att slå i tak.
+
+      **kapaciteten** som den bindande av massöverskottet över `M_repro_min`
+      och reservandelen. `min` och inte produkt: djuret begränsas av det som
+      är knappast, och ska inte straffas två gånger för att ha gott om det ena.
+
+    Termen är neutral med avsikt. `parningsberedskap` är tillståndet,
+    `parningsdrift` graden — motsvarigheten i litteraturen är *sexual
+    motivation*. "Brunst" sparas till en säsongsterm om projektet någon gång
+    får dagslängd att härleda den ur.
+    """
+    t = max(0.0, t_sedan_beredskap)
+    tidsfaktor = t / (t + max(tau, 1e-9))
+    return tidsfaktor * min(_clamp(massoverskott, 0.0, 1.0),
+                            _clamp(reservandel, 0.0, 1.0))
+
+
 def styrka_flykt(threat_score: float, sc_min: float, sc_sat: float) -> float:
     """
     Hotets närhet och styrka, 0–1.
