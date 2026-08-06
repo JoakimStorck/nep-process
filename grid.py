@@ -59,6 +59,9 @@ class Grid:
     neighbor_mask: np.ndarray = field(init=False, repr=False, compare=False)
     cell_lat: np.ndarray = field(init=False, repr=False, compare=False)
     band_lat: np.ndarray = field(init=False, repr=False, compare=False)
+    neighbor_dx: np.ndarray = field(init=False, repr=False, compare=False)
+    neighbor_dy: np.ndarray = field(init=False, repr=False, compare=False)
+    neighbor_dist: np.ndarray = field(init=False, repr=False, compare=False)
     cell_center_x: np.ndarray = field(init=False, repr=False, compare=False)
     cell_center_y: np.ndarray = field(init=False, repr=False, compare=False)
     _within_cache: dict = field(init=False, repr=False, compare=False)
@@ -136,6 +139,18 @@ class Grid:
         _u = np.arange(h, dtype=np.float64) / float(h)
         band_lat = ((1.0 + np.cos(2.0 * np.pi * _u)) * 0.5).astype(np.float32)
         lat = band_lat[row]
+
+        # Grannarnas riktningar som enhetsvektorer, i grannmatrisens ordning.
+        # Geometrin äger dem: att en granne ligger i en viss riktning är ett
+        # geometriskt faktum, och en anropare som räknade ut det själv skulle
+        # göra ett antagande om cellformen. Med dem går en gradient över ett
+        # cellfält att ta utan att veta vad en rad är.
+        _dx = np.array([-1.0, 1.0, -0.5, 0.5, -0.5, 0.5]) * self.COL_SPACING
+        _dy = np.array([0.0, 0.0, -1.0, -1.0, 1.0, 1.0]) * self.ROW_SPACING
+        _dlen = np.hypot(_dx, _dy)
+        object.__setattr__(self, "neighbor_dx", (_dx / _dlen).astype(np.float32))
+        object.__setattr__(self, "neighbor_dy", (_dy / _dlen).astype(np.float32))
+        object.__setattr__(self, "neighbor_dist", _dlen.astype(np.float32))
 
         cx = ((col.astype(np.float64) + 0.5 + 0.5 * odd) * self.COL_SPACING).astype(np.float32)
         cy = ((row.astype(np.float64) + 0.5) * self.ROW_SPACING).astype(np.float32)

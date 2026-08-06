@@ -654,6 +654,7 @@ class World:
         self._sed_in_str = np.zeros(nc, dtype=np.float64)
         self._sed_changed = np.zeros(nc, dtype=bool)
         self._weathering = self._build_weathering()
+        self._grad_x, self._grad_y = self._build_elevation_gradient()
 
         # time
         self.t = 0.0
@@ -1109,6 +1110,53 @@ class World:
             return float(np.sum(self.water, dtype=np.float64))
         return (float(np.sum(self.soil_water, dtype=np.float64))
                 + float(np.sum(self.lake_storage, dtype=np.float64)))
+
+    def _build_elevation_gradient(self):
+        """
+        Höjdens gradient per cell, som två statiska fält.
+
+        Terrängen ändras inte, så gradienten gör det inte heller: den byggs en
+        gång och kostar noll per tick. Det är samma kadensresonemang som
+        `elevation` självt — ett fält som inte ändras ska inte räknas om.
+
+        Riktningarna kommer från `Grid.neighbor_dx/dy`. Ingen kod här vet vad
+        en rad eller kolumn är; gradienten är en viktad summa över
+        grannringen, och den är därmed giltig för vilken cellform som helst.
+        """
+        if self.WP.terrain is None:
+            return 0.0, 0.0
+        z = np.asarray(self.elevation, dtype=np.float64)
+        idx = np.asarray(self.grid.neighbor_idx, dtype=np.int64)
+        dx = np.asarray(self.grid.neighbor_dx, dtype=np.float64)
+        dy = np.asarray(self.grid.neighbor_dy, dtype=np.float64)
+        dist = np.asarray(self.grid.neighbor_dist, dtype=np.float64)
+        k = idx.shape[1]
+
+        gx = np.zeros(z.shape[0], dtype=np.float64)
+        gy = np.zeros(z.shape[0], dtype=np.float64)
+        for j in range(k):
+            dz = (z[idx[:, j]] - z) / dist[j]
+            gx += dz * dx[j]
+            gy += dz * dy[j]
+        # Minsta-kvadratlösningen för en plan yta över en isotrop grannring är
+        # summan gånger 2/k; faktorn gör gradienten till en verklig lutning och
+        # inte bara en riktningsindikator.
+        gx *= 2.0 / float(k)
+        gy *= 2.0 / float(k)
+        return (gx.astype(np.float32, copy=False), gy.astype(np.float32, copy=False))
+
+    def slope_along(self, cell: int, heading: float) -> float:
+        """
+        Lutningen i en given riktning: positiv uppför, negativ nedför.
+
+        Bekvämlighetsomslag kring de statiska gradientfälten. Kostar två
+        uppslag och en skalärprodukt.
+        """
+        gx = self._grad_x
+        if not isinstance(gx, np.ndarray):
+            return 0.0
+        c = int(cell)
+        return float(gx[c] * math.cos(heading) + self._grad_y[c] * math.sin(heading))
 
     def _build_weathering(self) -> np.ndarray | None:
         """

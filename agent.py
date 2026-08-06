@@ -291,6 +291,24 @@ class AgentParams:
     # är farligt för en jämnvarm organism — inte drunkning. Multiplikator på
     # värmeförlusten, skalad på samma sätt som draget.
     water_heatloss_gain: float = 3.0
+
+    # --- Lutningen som framkomlighet ----------------------------------------
+    #
+    # Uppför kostar, nedför är billigt men inte gratis. Draget multipliceras
+    # med `1 + climb_gain · lutning` uppför och `1 − descend_gain · |lutning|`
+    # nedför, båda mättade mot `slope_ref`.
+    #
+    # Att de två inte är lika stora är fysiologi och inte en avvägning:
+    # koncentriskt muskelarbete uppför kostar ungefär tre gånger så mycket som
+    # excentriskt arbete nedför. Kvoten mellan de två talen bär den
+    # asymmetrin.
+    #
+    # Uppmätt lutning på land vid 64x128: p10 0,018, median 0,041, p90 0,079,
+    # max 0,43. `slope_ref` är satt vid p90, så medianterrängen ligger halvvägs
+    # in i skalan och de brantaste sluttningarna mättar.
+    climb_gain: float = 1.5
+    descend_gain: float = 0.5
+    slope_ref: float = 0.08
     locomotion_eff: float = 0.25
 
     # ------------------------
@@ -2998,6 +3016,19 @@ class Agent:
             depth = 1.0
         return depth * (1.0 - float(getattr(self.pheno, "buoyancy", 0.0)))
 
+    def _slope_along_heading(self) -> float:
+        """
+        Terrängens lutning i färdriktningen. Positiv uppför, negativ nedför.
+
+        Gradienten är statisk och förberäknad av världen, så kostnaden är två
+        uppslag och en skalärprodukt. Noll i en platt värld.
+        """
+        world = getattr(self, "world", None)
+        if world is None or getattr(world, "drainage", None) is None:
+            return 0.0
+        c = world.grid.cell_of(float(self.x), float(self.y))
+        return float(world.slope_along(c, float(self.heading)))
+
     def _integrate_motion(
         self,
         ctx: "StepCtx",
@@ -3069,6 +3100,30 @@ class Agent:
             mult = 1.0 + float(self.AP.water_drag_gain) * w_fac
             c1 *= mult
             c2 *= mult
+
+        # Lutningen i färdriktningen. Uppför kostar, nedför är billigt men inte
+        # gratis — och asymmetrin mellan de två är fysiologi: koncentriskt
+        # muskelarbete uppför kostar ungefär tre gånger excentriskt nedför.
+        #
+        # Terrängen får därmed en riktning för faunan, inte bara för vattnet.
+        # Ett djur som följer en dalgång rör sig billigare än ett som korsar
+        # den, utan att någon korridor kodas.
+        s_along = self._slope_along_heading()
+        if s_along != 0.0:
+            sref = max(1e-9, float(self.AP.slope_ref))
+            r = s_along / sref
+            if r > 1.0:
+                r = 1.0
+            elif r < -1.0:
+                r = -1.0
+            if r > 0.0:
+                smult = 1.0 + float(self.AP.climb_gain) * r
+            else:
+                smult = 1.0 + float(self.AP.descend_gain) * r
+            if smult < 0.1:
+                smult = 0.1
+            c1 *= smult
+            c2 *= smult
 
         if F_prop <= 0.0:
             speed = 0.0

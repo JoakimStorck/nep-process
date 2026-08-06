@@ -2519,6 +2519,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~7007~~ | vittring ur lutning, urlakning nedströms, havet som sänka | näringen | **klart**, 3,6x gradient |
 | ~~7008~~ | partikulär transport av förna nedströms; sjöar som fällor | faunans asätande | **klart** |
 | ~~7009~~ | täthet härledd ur strukturandel; `buoyancy` får skrivare och läsare; drag i vatten | faunans rörelse | **klart, men läsaren fyrar aldrig — se nedan** |
+| ~~7009b~~ | lutningen som framkomlighet: uppför kostar, nedför är billigt | faunans rörelse | **klart**, fart 55 nedför mot 20 uppför |
 | 7010 | vattendjupet som fjärde världskanal och fri MLP-ingång | selektionen | öppen |
 | ~~7010~~ | ~~vattenaxeln som nisch~~ | | **slås ihop med 7009** |
 | ~~7011~~ | ~~glesning av hydro~~ | | **utgår**, se nedan |
@@ -2544,6 +2545,26 @@ Tätheten härleds ur strukturandelen, `buoyancy` får sin första skrivare och 
 **Men noll av fyra djur befinner sig i vatten efter 4 000 tick.** Vattnet är 22 procent av världen, men merparten är polarhav där klimatet ändå är obeboeligt; sjöar och fåror är omkring tre procent. Läsaren finns alltså men fyrar aldrig, och mekanismen går inte att döma.
 
 **Och faunan bär inte terrängvärlden.** Uppmätt i `f5-terrang` vid 64x128: 20 grundare blir 1 till 4 individer efter 4 000 tick, mot 28 i den platta `f4-start20` vid tick 1 200. Det är en större sak än vattenaxeln och bör redas ut först — vattnet kan inte differentiera en population som inte finns.
+
+### Terrängen fick en riktning för faunan
+
+Höjdens gradient är statisk och förberäknas en gång, så den kostar två uppslag och en skalärprodukt per djur och tick. `Grid` exponerar grannarnas riktningar som enhetsvektorer — ett geometriskt faktum som hör hemma där — och gradienten tas som en viktad summa över grannringen, giltig för vilken cellform som helst.
+
+Uppmätt medelfart mot lutning i färdriktningen:
+
+```
+lutning        n      fart
+< -0,035     1 721    55,2
+-0,035..-0,009  3 440    46,7
+-0,009..+0,011  3 441    39,2
++0,011..+0,028  3 441    32,4
++0,028..+0,053  3 440    26,8
+> +0,053     1 721    19,7
+```
+
+Korrelation −0,573. Asymmetrin mellan `climb_gain` 1,5 och `descend_gain` 0,5 är fysiologi och inte en avvägning: koncentriskt muskelarbete uppför kostar ungefär tre gånger excentriskt nedför.
+
+**En mätfälla värd att veta om.** Ett första försök mätte andelen tick som djuren pekade nedför och fick 40,5 procent *med* kostnaden mot 51,6 utan — alltså till synes tvärtemot. Det är ett samplingsartefakt: ett långsamt djur bidrar med fler mätpunkter medan det pekar uppför. Tidsviktade och sträckviktade mått på rörelse går isär så snart farten beror på riktningen, och det gäller varje framtida mått på var djuren befinner sig.
 
 ### Öppna frågor efter Steg 7
 
