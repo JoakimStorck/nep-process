@@ -81,6 +81,12 @@ och `--screen-frac` styr hur stor del av skärmen den får ta. `--window 400x900
 sätter måtten explicit i stället. Fönstret går att ändra storlek på under
 körning.
 
+`TERRANG` visar höjden med backljus, `VATTEN` markfukten som andel av
+fältkapacitet. Båda kräver ett scenario med terräng; i en platt värld är de tomma
+och bildrutan bär inte fälten alls. Hav, sjöar och vattendrag ritas ovanpå
+*varje* läge, eftersom en karta i FLORA-läge annars ser ut som om havet vore torr
+mark utan växtlighet.
+
 Kör samma commit i båda ändar. Klient och server jämför protokollversion vid
 anslutning och säger ifrån om de skiljer sig.
 
@@ -88,7 +94,8 @@ anslutning och säger ifrån om de skiljer sig.
 
 | Tangent | Verkan |
 |---|---|
-| `1`–`6` | läge: CB, B, C, FLORA, TEMP, CLAIM |
+| `1`–`8` | läge: CB, B, C, FLORA, TEMP, CLAIM, TERRANG, VATTEN |
+| `W` | vatten av och på (hav, sjöar och vattendrag ovanpå alla lägen) |
 | `F` | ytfördelning: vinkelkilar eller stippling |
 | `T` | florans färgaxel |
 | `A` / `H` | djur av och på, HUD av och på |

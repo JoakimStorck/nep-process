@@ -38,18 +38,33 @@ def main() -> int:
     ap.add_argument("--max_pop", type=int, default=256)
     ap.add_argument("--scale", type=int, default=4, help="pixlar per cellbredd")
     ap.add_argument("--mode", type=str, default="BC")
+    ap.add_argument("--scenario", type=str, default=None,
+                    help="YAML-fil med körningens utgångsläge; se scenario.py")
     ap.add_argument("--out", type=str, default="frame.png")
     a = ap.parse_args()
+
+    sc = None
+    if a.scenario:
+        from scenario import Scenario
+        sc = Scenario.load(a.scenario)
+        a.width, a.height = int(sc.varld.bredd), int(sc.varld.hojd)
 
     if int(a.size) > 0:
         WP = WorldParams(size=int(a.size), width=0, height=0, dt=float(a.dt))
     else:
         WP = WorldParams(width=int(a.width), height=int(a.height), dt=float(a.dt))
+    if sc is not None:
+        WP.nutrient_input = sc.nutrient_input
+        WP.nutrient_init = sc.nutrient_init
+        WP.detritus_init = sc.detritus_init
+        if sc.terrain is not None:
+            WP.terrain = sc.terrain
 
     pop = Population(
         WP=WP,
         AP=AgentParams(dt=WP.dt),
-        PP=PopParams(init_pop=int(a.init_pop), max_pop=int(a.max_pop)),
+        PP=PopParams(init_pop=int(a.init_pop), max_pop=int(a.max_pop),
+                     flora_init_target_kg=(sc.flora_seed_kg if sc is not None else None)),
         seed=int(a.seed),
         hub=None,
     )

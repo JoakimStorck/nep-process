@@ -40,7 +40,19 @@ import numpy as np
 # radarrayerna kunde alltid vara tomma — men förvalet är nu *inga* rader tills
 # en klient bett om dem, så en klient från version 3 skulle tappa floran tyst.
 # Handskakningen avvisar den i stället.
-PROTOCOL_VERSION = 4
+# 5: bildrutan bär terrängen och vattnet. `elevation01` är normerad över
+# världens eget höjdspann med spannet som skalärer, och `wet_kind` klassar varje
+# cell som land, fåra, sjö eller hav. Klassningen görs i världen och inte i
+# viewern: trösklarna mellan de fyra hör till modellen, och en mottagare som
+# räknade om dem ur djupet skulle rita en annan värld än den som simuleras.
+PROTOCOL_VERSION = 5
+
+# Vattnets topologi per cell. Ordningen är bindande — den är värdet i
+# `ViewFrame.wet_kind`.
+WET_LAND = 0
+WET_CHANNEL = 1
+WET_LAKE = 2
+WET_SEA = 3
 
 # Traitaxlarna floran kan färgkodas på. Ordningen är bindande: den är
 # kolumnordningen i `claim_trait` och den ordning tangenten T stegar i.
@@ -95,6 +107,27 @@ class ViewFrame:
     temperature: np.ndarray = field(default_factory=lambda: np.zeros(0, np.float32))
     claimed: np.ndarray = field(default_factory=lambda: np.zeros(0, np.float32))
 
+    # --- terräng och vatten ---
+    #
+    # `elevation01` är normerad över världens eget höjdspann, som följer med som
+    # `elev_min` och `elev_max` så att HUD:en kan visa råa tal och viewern kan
+    # placera havsnivån. Att normera här och inte i viewern följer samma regel
+    # som B_K och C_K: en mottagare ska inte behöva WorldParams för att rita
+    # rätt.
+    #
+    # `wet_kind` är klassificeringen, inte djupet. Gränsen mellan fåra och
+    # sluttning är en modellutsaga — se hydro.derive_water — och den ska inte
+    # räknas om av en mottagare som gissar en tröskel. Ett byte per cell.
+    #
+    # `soil01` är markfukten som andel av fältkapacitet, alltså det tal florans
+    # tillväxt faktiskt läser.
+    elevation01: np.ndarray = field(default_factory=lambda: np.zeros(0, np.float32))
+    wet_kind: np.ndarray = field(default_factory=lambda: np.zeros(0, np.uint8))
+    soil01: np.ndarray = field(default_factory=lambda: np.zeros(0, np.float32))
+    has_terrain: bool = False
+    elev_min: float = 0.0
+    elev_max: float = 0.0
+
     # --- ytfördelningen, CSR över celler ---
     #
     # `claim_starts` har längd n_cells + 1 och pekar in i radarrayerna, som
@@ -138,6 +171,40 @@ class ViewFrame:
     @property
     def fauna_n(self) -> int:
         return int(self.fauna_x.shape[0])
+
+
+def _terrain_fields(world, n_cells: int):
+    """
+    Höjd, vattentopologi och markfukt, färdiga att ritas.
+
+    En platt värld har ingen av delarna, och då skickas tomma arrayer i stället
+    för nollfyllda: `has_terrain` säger åt viewern att inte erbjuda lägena, och
+    bildrutan växer inte för en värld som inte har terräng.
+    """
+    dr = getattr(world, "drainage", None)
+    if dr is None:
+        z = np.zeros(0, np.float32)
+        return z, np.zeros(0, np.uint8), z, 0.0, 0.0, False
+
+    elev = np.asarray(world.elevation, dtype=np.float64)
+    lo = float(elev.min())
+    hi = float(elev.max())
+    elev01 = ((elev - lo) / max(hi - lo, 1e-12)).astype(np.float32, copy=False)
+
+    # Ordningen är bindande: hav slår sjö slår fåra. En sjöcell vid kusten är
+    # sjö, inte hav, och en fåra som mynnar i en sjö är sjö där den gör det.
+    wet = np.full(n_cells, WET_LAND, dtype=np.uint8)
+    water = np.asarray(world.water, dtype=np.float64)
+    thr = float(getattr(world.WP, "submerged_threshold", 1e-6))
+    wet[(water > thr)] = WET_CHANNEL
+    wet[(np.asarray(dr.lake_id) >= 0) & (water > thr)] = WET_LAKE
+    wet[np.asarray(dr.sea)] = WET_SEA
+
+    cap = max(1e-12, float(getattr(world.WP, "soil_capacity", 1.0)))
+    soil01 = np.clip(np.asarray(world.soil_water, dtype=np.float64) / cap,
+                     0.0, 1.0).astype(np.float32, copy=False)
+
+    return elev01, wet, soil01, lo, hi, True
 
 
 def _flora_slots(store) -> np.ndarray:
@@ -346,6 +413,8 @@ def frame_from_pop(pop, births_total: int = 0, deaths_total: int = 0,
     else:
         temp = np.zeros(n_cells, dtype=np.float32)
 
+    elev01, wet, soil01, e_lo, e_hi, has_terr = _terrain_fields(world, n_cells)
+
     return ViewFrame(
         grid_width=int(grid.width),
         grid_height=int(grid.height),
@@ -357,6 +426,12 @@ def frame_from_pop(pop, births_total: int = 0, deaths_total: int = 0,
         flora_shoot01=_norm(store.flora_cell_mass, 0.0, BK).astype(np.float32),
         temperature=temp.copy(),
         claimed=np.asarray(store.flora_cell_claimed, dtype=np.float32).copy(),
+        elevation01=elev01,
+        wet_kind=wet,
+        soil01=soil01,
+        has_terrain=has_terr,
+        elev_min=e_lo,
+        elev_max=e_hi,
         claim_starts=starts,
         claim_share=share,
         claim_fill=fill,
@@ -415,6 +490,8 @@ _WIRE_U8: dict[str, tuple[float, float]] = {
     # för sex grannriktningar.
     "claim_dir": (-1.0, 1.0),
     "temperature": TEMP_RANGE,
+    "elevation01": (0.0, 1.0),
+    "soil01": (0.0, 1.0),
 }
 
 # Fält som byter till en smalare heltalstyp utan att tappa något.

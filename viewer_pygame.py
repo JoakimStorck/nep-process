@@ -6,7 +6,8 @@ from typing import Tuple
 
 import numpy as np
 
-from viewframe import FLORA_TRAITS, TEMP_RANGE
+from viewframe import (FLORA_TRAITS, TEMP_RANGE,
+                       WET_CHANNEL, WET_LAKE, WET_LAND, WET_SEA)
 
 # Bakgrund där fönstret sträcker sig utanför världen. Mörk men inte svart:
 # den ska gå att skilja från en cell utan liv i den.
@@ -68,7 +69,14 @@ class ViewerConfig:
     #   TEMP  : grayscale temperature
     #   FLORA : ytfördelningen ovanpå neutral bakgrund
     #   CLAIM : anspråket per cell, bar mark mot översökt mark
+    #   TERRANG : höjden med backljus, hav och sjöar efter djup
+    #   VATTEN  : markfukten, med vattendrag och sjöar ovanpå
     mode: str = "FLORA"
+
+    # Vattnet ritas över bakgrunden i alla lägen. Utan det ser en karta i
+    # FLORA-läge ut som om havet vore torr mark utan växtlighet, vilket är
+    # precis vad det inte är.
+    show_water: bool = True
     gamma: float = 1.0
 
     # Hur flora färgkodas i FLORA-läget:
@@ -102,6 +110,11 @@ class WorldViewer:
         # ingen lokal simulering att pausa, och en tangent som ser ut att
         # göra något men inte gör det är värre än ingen tangent.
         self.on_command = None
+
+        # Backljuset beror bara på höjden, som är statisk. Cachen sparar ett
+        # svep över grannmatrisen per bildruta i terränglägena.
+        self._shade_key = None
+        self._shade_cache = np.ones(0, dtype=np.float32)
 
         # Utsnitt. Av som förval: fönstret är då hela världen gånger `scale`,
         # vilket ögonblicksbilderna förlitar sig på.
@@ -177,6 +190,12 @@ class WorldViewer:
                     self.cfg.mode = "TEMP"
                 if ev.key == pygame.K_6:
                     self.cfg.mode = "CLAIM"
+                if ev.key == pygame.K_7:
+                    self.cfg.mode = "TERRANG"
+                if ev.key == pygame.K_8:
+                    self.cfg.mode = "VATTEN"
+                if ev.key == pygame.K_w:
+                    self.cfg.show_water = not self.cfg.show_water
                     
                 if ev.key == pygame.K_a:
                     self.cfg.draw_agents = not self.cfg.draw_agents
@@ -443,7 +462,81 @@ class WorldViewer:
             return np.zeros_like(like, dtype=np.float32)
         return np.asarray(world.temperature_field(), dtype=np.float32)
 
-    def _make_rgb(self, frame) -> np.ndarray:
+    def _hillshade(self, frame, grid) -> np.ndarray:
+        """
+        Backljus per cell ur grannmatrisen, cachat på bildrutans höjdfält.
+
+        Geometriagnostiskt: lutningen tas som skillnaden mot grannarnas medel,
+        viktad så att ena halvan av grannringen lyser upp och andra skuggar.
+        Ingen kod här vet vad en rad eller en kolumn är — bara att `Grid` har
+        sex grannar i en bestämd ordning.
+
+        Höjden detrendas mot latitudbandet innan skuggan räknas. Utan det
+        dominerar den kontinentala lutningen bilden fullständigt och reliefen
+        syns inte alls: lutningen är tre höjdenheter mot den lokala reliefens
+        knappa halva.
+        """
+        z = np.asarray(frame.elevation01, dtype=np.float32)
+        if z.size == 0:
+            return np.ones(0, dtype=np.float32)
+        key = (int(z.shape[0]), float(z[::max(1, z.size // 97)].sum()))
+        if self._shade_key == key:
+            return self._shade_cache
+
+        idx = np.asarray(grid.neighbor_idx, dtype=np.int64)
+        bands = np.asarray(grid.bands_of_cells(np.arange(z.shape[0])), dtype=np.int64)
+        nb_count = np.bincount(bands, minlength=int(grid.n_bands))
+        bmean = np.bincount(bands, weights=z.astype(np.float64),
+                            minlength=int(grid.n_bands)) / np.maximum(1, nb_count)
+        d = z.astype(np.float64) - bmean[bands]
+
+        # Grannordningen i Grid är väst, öst, NV, NO, SV, SO. Ljuset kommer
+        # från nordväst, alltså lyser den sida som vetter dit.
+        lit = (d[idx[:, 2]] + d[idx[:, 0]]) * 0.5
+        dark = (d[idx[:, 5]] + d[idx[:, 1]]) * 0.5
+        rel = (lit - dark)
+        # Normeringen mot 95:e percentilen gör styrkan oberoende av hur
+        # kuperad världen är, och det klippta intervallet håller den från att
+        # blåsa ut bilden. Första försöket gick till 1,75 och gjorde
+        # terränglaget vitt där det var ljust.
+        scale = float(np.percentile(np.abs(rel), 95)) if rel.size else 0.0
+        if scale < 1e-9:
+            sh = np.ones_like(z)
+        else:
+            sh = np.clip(1.0 + 0.55 * (rel / scale), 0.55, 1.35).astype(np.float32)
+
+        self._shade_key = key
+        self._shade_cache = sh
+        return sh
+
+    def _water_overlay(self, img: np.ndarray, frame) -> np.ndarray:
+        """
+        Måla hav, sjöar och vattendrag ovanpå en färdig bakgrund.
+
+        Klassningen kommer från världen som `wet_kind`; viewern väljer bara
+        färg. Havet mörknar med djupet, sjöar är en enda ton, och vattendrag
+        får den ljusaste — de är smala och behöver sticka ut mot allt annat.
+        """
+        wet = np.asarray(frame.wet_kind)
+        if wet.size != img.shape[0]:
+            return img
+        z = np.asarray(frame.elevation01, dtype=np.float32)
+        out = img.copy()
+
+        sea = wet == WET_SEA
+        if sea.any():
+            zs = z[sea]
+            deep = 1.0 - (zs - zs.min()) / max(1e-9, float(zs.max() - zs.min()))
+            out[sea, 0] = 0.04 + 0.06 * (1.0 - deep)
+            out[sea, 1] = 0.16 + 0.22 * (1.0 - deep)
+            out[sea, 2] = 0.36 + 0.42 * (1.0 - deep)
+        lake = wet == WET_LAKE
+        out[lake] = np.array([0.13, 0.42, 0.78], dtype=np.float32)
+        ch = wet == WET_CHANNEL
+        out[ch] = np.array([0.24, 0.60, 0.92], dtype=np.float32)
+        return out
+
+    def _make_rgb(self, frame, grid=None) -> np.ndarray:
         """Bakgrundsfärg per cell, (n_cells, 3) float32 i [0, 1]."""
         B01 = np.asarray(frame.flora_shoot01, dtype=np.float32)
         C01 = np.asarray(frame.detritus01, dtype=np.float32)
@@ -477,9 +570,41 @@ class WorldViewer:
                 img = np.stack([0.10 * base, 0.18 * base, 0.22 * base], axis=-1)
             img = img.astype(np.float32, copy=False)
 
+        elif mode in ("TERRANG", "TERRÄNG", "VATTEN") and bool(frame.has_terrain):
+            if mode == "VATTEN":
+                # Markfukten som färgaxel: torrt är sandgult, blött är grönt.
+                # Det är det tal florans tillväxt faktiskt läser, så bilden
+                # visar bördigheten och inte en proxy för den.
+                s01 = np.asarray(frame.soil01, dtype=np.float32)
+                img = np.stack([0.72 - 0.42 * s01,
+                                0.60 - 0.06 * s01,
+                                0.34 - 0.10 * s01], axis=-1).astype(np.float32)
+            else:
+                z = np.asarray(frame.elevation01, dtype=np.float32)
+                # Sträck kontrasten över land: havet tar annars halva skalan
+                # och kontinenten blir en enda ton.
+                lo = float(np.quantile(z, 0.20)) if z.size else 0.0
+                t = np.clip((z - lo) / max(1e-9, 1.0 - lo), 0.0, 1.0)
+                img = np.stack([0.26 + 0.46 * t,
+                                0.32 + 0.34 * t ** 1.3,
+                                0.20 + 0.34 * t ** 3], axis=-1).astype(np.float32)
+            if grid is not None:
+                # Backljuset hör till höjdlaget. I VATTEN-läget är fukten
+                # storheten som ska läsas, och en skugga ovanpå den gör den
+                # svårare att jämföra mellan två platser — det är samma skäl
+                # som att en karta inte reliefskuggar sin temperaturskala.
+                sh = self._hillshade(frame, grid)
+                if mode == "VATTEN":
+                    sh = 1.0 + 0.35 * (sh - 1.0)
+                img = img * sh[:, None]
+            img = np.clip(img, 0.0, 1.0).astype(np.float32, copy=False)
+
         else:  # "CB"
             Z = np.zeros_like(B01, dtype=np.float32)
             img = np.stack([C01, B01, Z], axis=-1)
+
+        if self.cfg.show_water and bool(frame.has_terrain):
+            img = self._water_overlay(img, frame)
 
         return self._gamma(img).astype(np.float32, copy=False)
 
@@ -764,6 +889,19 @@ class WorldViewer:
             f"flora_n={frame.flora_n:5d}  flora_mass={frame.flora_mass:.4f} kg  "
             f"mark: bar={bare:4.1f}%  slutna celler={closed:4.1f}%"
         )
+        if bool(getattr(frame, "has_terrain", False)):
+            wet = np.asarray(frame.wet_kind)
+            n = max(1, wet.size)
+            soil = np.asarray(frame.soil01, dtype=np.float64)
+            land = wet == WET_LAND
+            lines.append(
+                f"höjd {frame.elev_min:+.2f}..{frame.elev_max:+.2f}  "
+                f"hav={100.0 * np.mean(wet == WET_SEA):4.1f}%  "
+                f"sjö={100.0 * np.mean(wet == WET_LAKE):4.1f}%  "
+                f"fåra={100.0 * np.mean(wet == WET_CHANNEL):4.2f}%  "
+                f"markfukt={float(np.median(soil[land])) if land.any() else 0.0:.2f}"
+                + ("" if self.cfg.show_water else "  [vatten dolt W]")
+            )
         lines.append(
             f"grön=frisk→röd=döende  ljus=energi  gul ring=parningsredo  "
             f"[yta {self.cfg.flora_fill} F]  [trait {self.cfg.flora_color_by} T]"
@@ -827,7 +965,7 @@ class WorldViewer:
         self._ensure_projection(grid)
         self._ensure_screen()
 
-        base = self._make_rgb(frame)
+        base = self._make_rgb(frame, grid)
         if self.cfg.mode.upper().strip() == "FLORA":
             img = self._compose_flora(frame, base)
         else:
