@@ -1247,6 +1247,14 @@ def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
                     f"urlakat {float(w._nutrient_lost_total):.1f} kg",
                     flush=True,
                 )
+            _wet = _dr.sea | (np.asarray(w.water) > float(w.WP.submerged_threshold))
+            _d = np.asarray(w.detritus)
+            print(
+                f"[förna] per cell: land {_d[~_wet].mean():.2f} kg  "
+                f"vatten {_d[_wet].mean():.2f} kg  "
+                f"andel i vatten {100.0 * _d[_wet].sum() / max(1e-12, _d.sum()):.1f} %",
+                flush=True,
+            )
             print(
                 f"[flora] begränsande resurs: vatten "
                 f"{float(getattr(pop, '_last_flora_water_limited', 0.0)):.3f}  ljus "

@@ -289,6 +289,130 @@ def leach_pass(nutrient, soil, runoff, flow_to, flow_order, lake_id, sea,
 
 
 @_njit(cache=True, fastmath=True)
+def sediment_pass(detritus, structure, slope, flow_to, flow_order,
+                  sea, rate, slope_ref, struct_mobility, eps,
+                  in_lab, in_str, acc):
+    """
+    Partikulär transport: förna följer vattnet nedströms och avsätts där
+    flödet saktar.
+
+    **Skillnaden mot löst näring är att partiklar måste ryckas med.** Löst
+    material följer vattnet ovillkorligt; partiklar rör sig när skjuvningen
+    räcker och sjunker när den avtar — Hjulströms samband. Takten skalas därför
+    med lutningen, normerad mot `slope_ref`. En sjöcell har lutning noll och
+    blir en perfekt fälla utan att det behöver kodas som en regel: bassängen
+    samlar det som spolas dit och släpper det inte vidare.
+
+    **Takten skalar med lutningen ensam, inte också med avrinningens andel.**
+    Första formen multiplicerade två per-tick-storheter och blev därmed
+    proportionell mot `dt²` — modellens beteende hade hängt på tidsstegets
+    storlek, samma klass av fel som `water_extract_frac` var per tick i stället
+    för per månad. Den gav dessutom en takt fem tiopotenser för låg: uppmätt
+    2,5 procent av förnan i vatten både med och utan transport.
+
+    **Fraktionerna rör sig olika fort**, men sorteringen syns inte i utfallet.
+    Avsikten var att fint labilt material skulle transporteras lättare och ge
+    vattnet lägre strukturandel. Uppmätt blir den i stället högre — 0,965 mot
+    landets 0,956 — eftersom det labila bryts ned långt snabbare än det
+    transporteras och material som blir liggande åldras till struktur oavsett
+    var. Vattnet får mer föda, inte bättre. Mekanismen är fysiskt riktig och
+    behålls, men den är i praktiken vilande.
+
+    Ett steg per tick. Materialet samlas i `in_lab` och `in_str` och läggs på
+    efter svepet, så att det som flyttats inte flyttas igen samma tick.
+
+    Havet är sänka: det som når det lämnar modellen och bokförs som förlust.
+
+    acc[0] = massa till havet, acc[1] = strukturmassa till havet,
+    acc[2] = flyttad massa.
+    """
+    n = detritus.shape[0]
+    for i in range(n):
+        in_lab[i] = 0.0
+        in_str[i] = 0.0
+
+    to_sea = 0.0
+    to_sea_str = 0.0
+    moved = 0.0
+    for m in range(flow_order.shape[0]):
+        c = flow_order[m]
+        if sea[c]:
+            continue
+        d = detritus[c]
+        if d <= eps:
+            continue
+        sl = slope[c] / slope_ref
+        if sl > 1.0:
+            sl = 1.0
+        base = rate * sl
+        if base <= 0.0:
+            continue
+
+        st = structure[c]
+        lab = d * (1.0 - st)
+        stru = d * st
+        f_lab = base
+        if f_lab > 1.0:
+            f_lab = 1.0
+        f_str = base * struct_mobility
+        if f_str > 1.0:
+            f_str = 1.0
+        d_lab = lab * f_lab
+        d_str = stru * f_str
+        if d_lab + d_str <= 0.0:
+            continue
+
+        new = (lab - d_lab) + (stru - d_str)
+        detritus[c] = new
+        if new > 0.0:
+            structure[c] = (stru - d_str) / new
+        else:
+            structure[c] = 0.0
+        moved += d_lab + d_str
+
+        t = flow_to[c]
+        if t < 0:
+            # Ändstation utan väg ut: lägg tillbaka hellre än att tappa tyst.
+            detritus[c] = d
+            structure[c] = st
+            moved -= d_lab + d_str
+        elif sea[t]:
+            to_sea += d_lab + d_str
+            to_sea_str += d_str
+        else:
+            in_lab[t] += d_lab
+            in_str[t] += d_str
+
+    acc[0] = to_sea
+    acc[1] = to_sea_str
+    acc[2] = moved
+
+
+@_njit(cache=True, fastmath=True)
+def sediment_deposit(detritus, structure, in_lab, in_str, eps, changed):
+    """
+    Lägg på det transporterade materialet och blanda strukturandelen
+    massviktat. Skilt från svepet så att ett steg per tick verkligen blir ett
+    steg. `changed` markerar celler vars medlemskap kan ha ändrats.
+    """
+    n = detritus.shape[0]
+    for i in range(n):
+        changed[i] = False
+        a = in_lab[i]
+        b = in_str[i]
+        if a <= 0.0 and b <= 0.0:
+            continue
+        d = detritus[i]
+        st = structure[i]
+        lab = d * (1.0 - st) + a
+        stru = d * st + b
+        new = lab + stru
+        detritus[i] = new
+        structure[i] = stru / new if new > 0.0 else 0.0
+        changed[i] = True
+
+
+@_njit(cache=True, fastmath=True)
 def lake_levels(storage, lake_start, lake_cells, lake_vol, elev, level, area):
     """
     Nivå och yta ur magasinet, per sjö. `searchsorted` för hand, eftersom

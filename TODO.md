@@ -2508,23 +2508,55 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 
 **Låsta beslut:** jämviktslösning, inte transient; 64x256 först och 512x512 efter florans GPU-väg; havet som ett sammanhängande bälte kring polerna; säsongsbunden och latitudberoende nederbörd med statisk orografisk modifierare; höjdgradient på temperaturen direkt.
 
-| | innehåll | konsument |
-|---|---|---|
-| ~~7001~~ | ~~dokumentet, kadensklasserna i manifestet, den här planen~~ **Klart** | — |
-| 7002 | terränggenerator via spektralsyntes över `grid.cell_center_*`; `elevation` som statiskt per-cell-fält; polarhavet; scenariofältet `varld.terrang`; viewerläge TERRÄNG | ögat |
-| 7003 | dräneringsnätet: prioritetsflod i Numba, `flow_to`, `flow_order`, `lake_id`, hypsometri, `sea_mask`, `slope`, `upslope_area` | 7004 |
-| 7004 | `hydro_pass()`: forcing, `soil_water`, routing, sjömagasin, härledda fält; vattenbalans som invariant; det explicita schemat som orakel | 7005–7009 |
-| 7005 | temperaturens höjdgradient | klimatet blir 2D |
-| 7006 | markvattnet som tredje term i tillväxtens `min()` | floran |
-| 7007 | vittring ur lutning, urlakning nedströms, medelbevarande jämvikt | näringen |
-| 7008 | dränkning: etablering och mortalitet i översvämmade celler | `submerged` |
-| 7009 | `flood_tolerance` och `buoyancy`: rörelsekostnad, skada, passiv drift | faunan |
-| 7010 | vattenaxeln som nisch: `water_opt` med motverkande ändar | selektionen |
-| 7011 | glesning — **bara om en mätning motiverar den** | prestanda |
+| | innehåll | konsument | utfall |
+|---|---|---|---|
+| ~~7001~~ | dokumentet, kadensklasserna i manifestet, planen | — | **klart** |
+| ~~7002~~ | terränggenerator via spektralsyntes över `grid.cell_center_*`; polarhavet; `varld.terrang` | ögat | **klart** |
+| ~~7003~~ | dräneringsnätet: prioritetsflod, `flow_to`, `flow_order`, sjöhypsometri, `sea_mask` | 7004 | **klart** |
+| ~~7004~~ | `hydro_pass()` som jämviktslösning; vattenbalans som hård invariant | 7005–7008 | **klart**, drift 1e-16 |
+| ~~7005~~ | temperaturens höjdgradient, per cell | klimatet blir 2D | **klart** |
+| ~~7006~~ | markvattnet som tredje term i tillväxtens `min()` | floran | **klart** |
+| ~~7007~~ | vittring ur lutning, urlakning nedströms, havet som sänka | näringen | **klart**, 3,6x gradient |
+| ~~7008~~ | partikulär transport av förna nedströms; sjöar som fällor | faunans asätande | **klart** |
+| 7009 | den akvatiska axeln: en kroppsegenskap med nedsida i sin egen fysik | selektionen | **öppen fråga, se nedan** |
+| ~~7010~~ | ~~vattenaxeln som nisch~~ | | **slås ihop med 7009** |
+| ~~7011~~ | ~~glesning av hydro~~ | | **utgår**, se nedan |
+| ~~1010~~ | viewern visar terräng och vatten; världen klassar, viewern färgar | ögat | **klart** |
+| ~~1011~~ | höjden skickas en gång vid handskakningen | bandbredd | **klart**, protokoll 6 |
 
-De första patcharna kräver varken fauna eller nämnvärd flora. Ett eget scenario med tom fauna hör därför till 7002, så att terrängen och vattnet går att döma utan att ekologin står i vägen.
+### Vad mätningarna ändrade i planen
 
-**Känd risk att avgöra i 7002:** terrängen har stor varians mellan frön. Vid ett av tre prövade frön fick kontinenten en enda avloppslös bassäng som prioritetsfloden fyllde till ett innanhav över halva landet. Det är korrekt beteende för en endorheisk bassäng, men frågan om terrängen ska villkoras — lägre strävhet, tak på största sjön, eller en svag lutning mot polerna — ska besvaras med mätningen framför sig.
+**7008 blev något annat än planen sa.** Dränkning som mekanism visade sig onödig: markvattnet är noll i vatten, så en planta som hamnar där växer inte och svälter — uppmätt 14 individer i havets 3 275 celler av 30 917 totalt. Ingen regel behövdes. Och strandzonen rör sig knappt: 69 celler av 16 384 pendlar mellan blött och torrt över ett år, alltså 0,4 procent av världen. En mortalitetsregel för dem vore kod utan ekologi.
+
+I stället gjordes 7008 till partikulär transport av förna, eftersom mätningen visade att **det inte fanns något att äta i vatten**: 22,6 procent av världen var vatten och innehöll 1,7 procent av växtligheten. Utan föda där får varje akvatisk trait bara en nedsida, och den kollapsar mot den terrestra änden precis som `digestibility` gjorde.
+
+**Vattnet kan inte fragmentera den här världen.** Uppmätt: även med hav, sjöar och samtliga vattendrag oframkomliga är landet ett enda sammanhängande område. Det är en strukturell konsekvens av 7002:s kontinentallutning — vattendelaren ligger vid ekvatorn och alla floder rinner polerna till, så en flod går alltid att gå runt vid källan. Bara en flod som förbinder hav med hav skulle skära av, och lutningen gör det omöjligt per konstruktion. Motivet "floder sänker korskorrelationen mellan latitudband" faller därmed.
+
+**`sediment_rate` är ett reglage mellan land och vatten, inte en fri parameter.** Näringsförlusten motsvarar exakt sedimentexporten: sjöarna behåller sitt, men floderna är ett avlopp till havet. Vid 0,5 kostar det 16 procent av näringsstocken och en tredjedel av floran att göra vattnet rikare per cell än landet.
+
+**Glesning av hydro utgår.** Motivet var att ett tätt grannflöde skulle bli för dyrt. Jämviktslösningen kostar 0,216 ms per tick vid 16 384 celler och 4,1 vid 262 144 — mindre än den täta laplacianen i `transport_pass`. Görs bara om en mätning på en stor värld motiverar den.
+
+### Öppna frågor efter Steg 7
+
+**Vad ska den akvatiska axeln heta och kosta?** `flood_tolerance` är ett symtomnamn — det beskriver ett utfall, inte en kroppsegenskap — och projektets egen erfarenhet säger att det spelar roll: `structure` blev modellens bästa trait därför att den är en materialegenskap med fem konsumenter. Kandidaterna är rörelseform (drag i vatten ned, drag på land upp, som säl och utter), täthet (fett och luft mot förtätat skelett, den enda med ett *inre* optimum), och värmeledning vid nedsänkning (vatten leder värme tjugofem gånger snabbare än luft, vilket är det verkliga skälet att nedsänkning är farligt för en jämnvarm organism). Beslut krävs innan 7009 byggs.
+
+**`nutrient_loss_frac` gör i praktiken ingenting** sedan urlakningen finns — 11 kg mot 1 081 över 20 000 tick. Den representerar gasformig förlust, alltså något fysiskt skilt, så den togs inte bort. Bör antingen motiveras skriftligt eller nollställas i terrängvärldar.
+
+**Inkörningen är nu omkring 15 000 tick** i en terrängvärld: näringsstocken faller från 3 395 till 2 824 kg medan systemet går från jämnt sådd till urlakad jämvikt. Det påverkar hur långa körningar som krävs innan differentieringsmått betyder något.
+
+**Kausaliteten mellan fukt och biomassa är omvänd i mätningen.** Den torraste fuktkvartilen har högst biomassa, 7,68 kg per cell mot 1,88 till 2,90 i de blötare. Tät växtlighet transpirerar marken torr, så markfukten är ett utfall lika mycket som en drivkraft. Varje framtida mått som använder markfukt som förklarande variabel måste ta hänsyn till det.
+
+**Terränggenereringen kostar 24 s vid 262 144 celler**, seriellt. Engångskostnad som parallelliserar, men vill man ner en storleksordning är modsumman separabel i x och y.
+
+### Världen är för smal för orografi
+
+Tre oberoende mätningar pekar åt samma håll.
+
+Kontinentallutningen måste vara ungefär brusamplitud gånger radantal delat med `lambda_max` för att dominera bruset. Vid 64x256 ger det 2,7, vid 64x128 blir det 1,3 och vid 512x512 endast 0,67. Följden är att den lokala reliefen bara är ±0,25 höjdenheter mot lutningens tre — **kontinenten är en ramp med krusningar, inte ett landskap med berg.** Höjdgradienten i 7005 fick därför mätas mot bandets landmedel i stället för mot havsnivån, eftersom rå höjd lät lutningen äta upp latitudgradienten och invertera klimatet.
+
+Samma sak gör att vattnet inte kan fragmentera landet, och samma sak begränsar hur mycket topografisk struktur ekologin kan få.
+
+En bredare värld är alltså inte bara en skalfråga. Vid 512x512 räcker en fjärdedels lutning, och den lokala reliefen blir dominerande i stället för marginell. Det är förutsättningen både för verklig orografi och för att vatten ska bli geografi.
 
 ## Steg 8 — Acceleration
 

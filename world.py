@@ -20,6 +20,8 @@ from terrain import TerrainParams, generate_elevation
 from drainage import build as build_drainage
 from hydro import (
     derive_water as hydro_derive_water,
+    sediment_deposit as hydro_deposit,
+    sediment_pass as hydro_sediment,
     leach_pass as hydro_leach,
     lake_levels as hydro_lake_levels,
     route_reservoirs as hydro_route,
@@ -312,6 +314,42 @@ class WorldParams:
     # svarar mot att en del är bunden till partiklar. Takten i övrigt kommer ur
     # vattenbudgeten och inte ur en parameter — se hydro.leach_pass.
     leach_efficiency: float = 0.6
+
+    # --- Partikulär transport av förna --------------------------------------
+    #
+    # Löst näring följer vattnet ovillkorligt; partiklar måste ryckas med och
+    # sjunker när flödet saktar. Takten skalas därför både med vattnets andel
+    # och med lutningen, normerad mot `sediment_slope_ref`. En sjöcell har
+    # lutning noll och blir en fälla utan att det kodas som regel.
+    # Takten är en avvägning och inte ett fritt val. Uppmätt vid 64x128 över
+    # 5 000 tick:
+    #
+    #     takt   flora kg   näring total   förna land/vatten per cell
+    #      0,0    16 128        1 581        15,19 /  1,50
+    #      0,5    10 922        1 321         8,78 / 10,60
+    #      1,5     8 379        1 135         4,99 / 14,13
+    #      3,0     7 908        1 027         3,27 / 15,32
+    #
+    # Vattnet blir en resurs på landets bekostnad, och näringsförlusten
+    # motsvarar exakt sedimentexporten: allt som når en fåra hamnar till slut i
+    # havet. Sjöarna behåller sitt — lutning noll gör dem till fällor — medan
+    # floderna är ett rent avlopp. Vid 0,5 är vattnet redan rikare per cell än
+    # landet, till en kostnad av 16 procent av näringsstocken.
+    sediment_rate: float = 0.5
+    sediment_slope_ref: float = 0.05
+    # Strukturmaterialets rörlighet relativt det labila.
+    #
+    # Avsikten var sortering: fint labilt material skulle transporteras lättare
+    # och ge vattnet lägre strukturandel och därmed högre betningsutbyte.
+    # **Det sker inte.** Uppmätt strukturandel i vatten 0,965 mot landets
+    # 0,956, alltså högre. Det labila bryts ned långt snabbare än det
+    # transporteras, så material som blir liggande åldras till struktur oavsett
+    # var det ligger. Vattnet får mer föda, inte bättre.
+    #
+    # Parametern behålls eftersom mekanismen är fysiskt riktig och skulle bita
+    # om transporten någon gång blir snabb mot nedbrytningen, men den ska inte
+    # läsas som att sorteringen är verksam.
+    sediment_struct_mobility: float = 0.25
     # Näringsupptag per månad och **areaenhet** vid uptake_capacity = 1.
     #
     # Var ett tak per individ på 2,86e6, alltså sju till åtta tiopotenser för
@@ -611,6 +649,10 @@ class World:
         self._water_lost_total = 0.0
         self._water_stock_init = self.water_stock()
         self._leach_acc = np.zeros(2, dtype=np.float64)
+        self._sed_acc = np.zeros(3, dtype=np.float64)
+        self._sed_in_lab = np.zeros(nc, dtype=np.float64)
+        self._sed_in_str = np.zeros(nc, dtype=np.float64)
+        self._sed_changed = np.zeros(nc, dtype=bool)
         self._weathering = self._build_weathering()
 
         # time
@@ -1109,6 +1151,56 @@ class World:
         self._nutrient_added_total += total
         return total
 
+    def sediment_pass(self) -> tuple[float, float]:
+        """
+        Partikulär transport av förna nedströms. Returnerar (till havet, flyttat).
+
+        Kontraktet för det glesa fältet hålls: celler som får material
+        aktiveras, celler som töms under epsilon nollställs exakt och lämnar
+        mängden. Näringen som når havet bokförs som förlust, eftersom havet är
+        sänka för varje väg dit.
+        """
+        dr = self.drainage
+        if dr is None or float(self.WP.sediment_rate) <= 0.0:
+            return 0.0, 0.0
+        self._detritus_flush()
+
+        hydro_sediment(
+            self.detritus, self.detritus_structure, dr.slope,
+            dr.flow_to, dr.flow_order, dr.sea,
+            float(self.WP.sediment_rate) * float(self.WP.dt),
+            max(1e-9, float(self.WP.sediment_slope_ref)),
+            float(self.WP.sediment_struct_mobility),
+            float(_DETRITUS_EPS),
+            self._sed_in_lab, self._sed_in_str, self._sed_acc,
+        )
+        hydro_deposit(self.detritus, self.detritus_structure,
+                      self._sed_in_lab, self._sed_in_str,
+                      float(_DETRITUS_EPS), self._sed_changed)
+
+        # Medlemskapet: celler som tagit emot material blir aktiva, celler som
+        # tömts lämnar mängden. Utan det bryts kontraktet att en inaktiv cell
+        # är exakt noll, och `check_sparse_fields` fångar det direkt.
+        gained = np.flatnonzero(self._sed_changed & ~self._detritus_member)
+        if gained.size:
+            self._detritus_member[gained] = True
+            self._detritus_pending.extend(int(c) for c in gained)
+            self._detritus_dirty = True
+        empt = self._detritus_active[self.detritus[self._detritus_active] <= _DETRITUS_EPS]
+        if empt.size:
+            self.detritus[empt] = 0.0
+            self.detritus_structure[empt] = 0.0
+            self._detritus_member[empt] = False
+            self._detritus_dirty = True
+
+        to_sea = float(self._sed_acc[0])
+        to_sea_str = float(self._sed_acc[1])
+        if to_sea > 0.0:
+            lab = to_sea - to_sea_str
+            self._nutrient_lost_total += (lab * NUTRIENT_PER_KG_LABILE
+                                          + to_sea_str * NUTRIENT_PER_KG_STRUCT)
+        return to_sea, float(self._sed_acc[2])
+
     def leaching_pass(self) -> tuple[float, float]:
         """
         Urlakning nedströms. Returnerar (nådde havet, flyttad mängd).
@@ -1350,6 +1442,11 @@ class World:
         # ska ligga kvar till nästa i stället för att sköljas ut samma tick den
         # mineraliserades.
         self.leaching_pass()
+        # Partiklarna efter det lösta: båda drivs av samma avrinning, och
+        # ordningen mellan dem spelar ingen roll för bevarandet — men förnan
+        # ska flyttas innan den bryts ned, annars mineraliserar den där den låg
+        # i stället för dit vattnet tog den.
+        self.sediment_pass()
         dM_detritus_decay, dM_nutrient_from_detritus = self.decomposition_pass()
         self.update_flux(
             dM_growth=0.0,
