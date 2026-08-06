@@ -245,15 +245,59 @@ def styrka_flykt(threat_score: float, sc_min: float, sc_sat: float) -> float:
 # i stället för vald, och styrkan är per konstruktion noll i drift.
 
 
-def styrka_svalt(m_rel: float, m_ok: float, m_crit: float) -> float:
+def styrka_svalt(underskott_J: float, underhall_J: float) -> float:
     """
-    Utmärgling, 0–1: massan relativt förväntad massa för åldern.
+    Svält, 0–1: hur stor del av underhållet som betalas med egen vävnad.
 
-    Noll vid `starve_mass_ok_frac` (0,85) och uppåt — djuret följer kurvan.
-    Ett vid `starve_mass_crit_frac` (0,55) och neråt. Linjär emellan.
+    **Svält är inte att vara liten.** Det är ihållande negativ energibalans,
+    där underhållet inte kan betalas ur intaget och organismen får ta av sig
+    själv. Kronisk låg tillgång ger *mindre vuxna*, inte sjuka vuxna —
+    utvecklingsplasticitet är regel snarare än undantag, och ett litet djur i
+    energibalans är friskt. `hunger()` säger redan det rakt ut: katabolism är
+    ett entydigt underskottsbesked.
 
-    Samma uttryck som driver `dD_starve`. Ett djur vars styrka här är skild
-    från noll håller på att ta skada av svält, inte att bli sugen på lunch.
+    Måttet är alltså ett förlopp, inte ett tillstånd — och det uttrycks som en
+    **andel, inte en takt**:
+
+        styrka = underskott / underhåll
+
+    `underhall_J` är `E_out_drain`, alltså steget obligatoriska dräneringar:
+    basal, beräkning, sensing, rörelse, termoreglering, dräktighetsöverhead.
+    `underskott_J` är den del av det som reserven inte räckte till och som
+    därför måste tas ur kroppen.
+
+    Noll för ett djur som betalar ur intaget, hur litet det än är. Ett för ett
+    djur vars hela underhåll kommer ur den egna vävnaden. Däremellan graderat.
+
+    Formen valdes efter att en takt prövats och underkänts. `(dM_kat/dt) /
+    (M − M_min) · horisont` krävde en horisontkonstant, och uppmätt spelade
+    den knappt någon roll: fördelningen bestod av numeriskt damm plus en
+    handfull verkliga händelser, så andelen mättade gick från 0,2 till 0,4
+    procent när horisonten ändrades från en månad till femtio år. En andel
+    behöver ingen konstant alls, och dammet blir en försumbar andel i stället
+    för en tröskelpassage.
+    """
+    if underhall_J <= 1e-30:
+        return 0.0
+    return _clamp(underskott_J / underhall_J, 0.0, 1.0)
+
+
+def massunderskott(m_rel: float, m_ok: float, m_crit: float) -> float:
+    """
+    Massunderskott, 0–1: massan relativt förväntad massa för åldern.
+
+    Noll vid `starve_mass_ok_frac` (0,85) och uppåt, ett vid
+    `starve_mass_crit_frac` (0,55) och neråt, linjärt emellan.
+
+    Driver `dD_starve` och gör det fortfarande. Hette `styrka_svalt` tills
+    p148 visade att den inte mäter svält: hela populationen låg stadigt på 69
+    procent av `expected_mass` med stigande massa per djur och växande
+    bestånd, alltså anpassad och inte döende. Medianstyrkan 0,52 i 61 procent
+    av tickarna är ingen nödlägesprofil.
+
+    **Om skademodellen också bör byta storhet är en egen fråga.** Den ändrar
+    dödligheten och därmed hela ekologin, och den är dessutom sammanflätad med
+    florabristen som håller nere massan. Se `TODO.md`.
     """
     if m_rel >= m_ok:
         return 0.0

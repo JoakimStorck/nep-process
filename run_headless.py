@@ -280,6 +280,7 @@ _S_RA_SPANN = {
     "kyla": (0.0, 1.0),
     "svält": (0.0, 1.0),
     "nedkylning": (0.0, 1.0),
+    "massunderskott": (0.0, 1.0),
     "parningsdrift": (0.0, 1.0),
     "parning": (0.0, 1.0),
 }
@@ -512,10 +513,13 @@ def instrument_steering() -> None:
         _b = self.body
         _me = float(getattr(_b, "_M_expected", 0.0))
         if _me > 0.0:
-            _ra("svält", _st.styrka_svalt(
+            # Massunderskottet mäts kvar vid sidan av — det driver fortfarande
+            # `dD_starve`, och jämförelsen är hela poängen med bytet.
+            _ra("massunderskott", _st.massunderskott(
                 float(_b.M) / _me,
                 float(getattr(self.AP, "starve_mass_ok_frac", 0.85)),
                 float(getattr(self.AP, "starve_mass_crit_frac", 0.55))))
+        _ra("svält", float(getattr(_b, "_svalt_andel", 0.0)))
         _ra("nedkylning", _st.styrka_nedkylning(
             float(_b.Tb), float(self.AP.Tb_min)))
 

@@ -518,6 +518,11 @@ class Body:
 
     # Sant om organismen kataboliserade egen vävnad under senaste steget.
     _catabolized_last_step: bool = False
+
+    # Andelen av steget underhåll som reserven inte räckte till. Flaggan ovan
+    # räcker för aptiten, som bara behöver veta *om*; svältstyrkan behöver veta
+    # *hur mycket*. Rent additivt fält — ingen läsare i den heta loopen.
+    _svalt_andel: float = 0.0
     # Förväntad massa för åldern, cachad i step() så hunger() kan läsa den.
     _M_expected: float = 0.0
     # Reservkapacitet per kilo, cachad från fenotypen så E_cap() kan läsa den.
@@ -1029,6 +1034,7 @@ class Body:
         E_material = 0.0
         E_overflow = 0.0
         self._catabolized_last_step = False
+        self._svalt_andel = 0.0
 
         # ---------------------------------------------------------
         # (1) Intake -> reserv (massa), överskott exkreteras i (5)
@@ -1213,6 +1219,7 @@ class Body:
         paid = float(self.take_energy(E_out_drain))
         deficit = max(0.0, E_out_drain - paid)
         E_paid_drain = paid
+        self._svalt_andel = styrning.styrka_svalt(deficit, E_out_drain)
     
         # ---------------------------------------------------------
         # (3) Catabolism: cover remaining deficit (if any), above M_min
@@ -1329,7 +1336,7 @@ class Body:
         m_rel = float(self.M) / max(M_expected, 1e-9)
         m_ok   = float(getattr(AP, 'starve_mass_ok_frac',   0.85))
         m_crit = float(getattr(AP, 'starve_mass_crit_frac', 0.55))
-        mass_severity = styrning.styrka_svalt(m_rel, m_ok, m_crit)
+        mass_severity = styrning.massunderskott(m_rel, m_ok, m_crit)
         dD_starve = dt * float(getattr(AP, 'starve_damage_gain', 0.025)) * mass_severity
 
         Tb_now = float(self.Tb)

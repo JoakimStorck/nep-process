@@ -2415,6 +2415,35 @@ gör det till en riktig axel enligt husregeln: en bank är dyr att bygga och
 läcker. Den ger också frömassan en andra konsekvens i motsatt riktning — stora
 frön etablerar bättre men lever kortare i banken.
 
+### Katabolismflaggan avfyrar på numeriskt damm
+
+`_catabolized_last_step` sätts av `if dM_cat > 0.0` utan epsilon, och
+`hunger()` returnerar 1,0 så snart den är sann. Uppmätt över 35 703 kroppssteg
+i testvärlden avfyrar den i **4,0 procent** av stegen — med medianen
+`dM_cat = 1,7e-17 kg`. Det är inte katabolism, det är flyttalsdamm i
+underskottet.
+
+Följden är att aptiten går till full styrka i var tjugofemte kroppssteg utan
+biologisk grund, vilket i dag påverkar födotermens amplitud. Åtgärden är en
+epsilon mot en meningsfull massa — men det är en beteendeändring och ska mätas
+för sig, inte smygas in i trappan.
+
+Svältstyrkan är oberörd: den mäts som andel av underhållet, och ett damm på
+1e-17 J blir en försumbar andel i stället för en tröskelpassage.
+
+### Skademodellens svältterm
+
+`dD_starve` drivs fortfarande av `massunderskott()`, alltså massan relativt
+förväntad massa. Styrningens svältstyrka gör det inte längre — den bygger på
+underskottets andel av underhållet, av det biologiska skälet att kronisk låg
+tillgång ger mindre vuxna och inte sjuka vuxna.
+
+Att låta skademodellen följa med är ett rimligt nästa steg men **inte samma
+beslut**. Det ändrar dödligheten och därmed hela ekologin, och det är dessutom
+sammanflätat med florabristen ovan: en del av dagens massunderskott är florans
+fel, inte fysiologins. Rätt ordning är att laga floran, mäta om, och först då
+avgöra om ett stadigt litet djur ska ta svältskada eller inte.
+
 ### Vad florabristen gör med styrningens beslut
 
 Faunan i p148 ligger stadigt på 69 procent av `expected_mass` därför att floran
