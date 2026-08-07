@@ -172,6 +172,112 @@ mätningen framför sig, inte här.
 
 ---
 
+## Efterskrift: landformerna som styrt brus
+
+*Augusti 2026, efter 7016. Avsnittet ovan beskriver terrängen som den byggdes.
+Det här beskriver hur den ska styras.*
+
+Terrängmodulen skiljer sedan de placerade formerna infördes mellan **tektonik
+som ger struktur** och **erosion som ger detalj**. Delningen är riktig, men den
+har en gräns: en form som placeras är kodad uppifrån, och manifestet vill att
+strukturer uppstår underifrån. En sjö man ritar in ligger ovanpå landskapet i
+stället för i det.
+
+### Sjön styrs genom sin tröskel
+
+En sjös yta bestäms inte av hur djup gropen är utan av **var den spiller över**.
+Höjs tröskelcellen stiger vattenytan och sjön breder ut sig längs den
+omgivande terrängens egna nivåkurvor. Att gräva ur en grop är ett ingrepp i
+hundratals celler; att höja en tröskel är ett ingrepp i några få, och
+strandlinjen blir en nivåkurva i det brus som redan fanns.
+
+Mekanismen blir därför **hitta och förstärk**, inte placera:
+
+1. generera bruset
+2. kör dräneringen, som ändå körs
+3. läs ut sänkorna med deras yta vid brädden
+4. välj den som bäst matchar önskemålet
+5. höj dess tröskel mjukt tills ytan stämmer
+
+Vad bruset gör av sig självt, uppmätt i `f5-terrang` med havet som bassäng:
+
+```
+elva sänkor
+i celler:  415  239  111   33   9   8   5   5   4   4   1
+i hektar: 4,15 2,39 1,11 0,33
+```
+
+**Önskemålet uttrycks i hektar**, inte i celler. Hektar är fysiskt och skalfritt
+— samma tal betyder samma sak i varje världsstorlek — medan ett antal celler
+bara betyder något om man vet upplösningen.
+
+```yaml
+former:
+  - typ: sjo
+    yta: 4.0        # hektar
+    tolerans: 0.5
+```
+
+Två saker hör till specifikationen och ska inte upptäckas senare.
+
+**Generatorn ska kunna säga nej.** Ber man om femtio hektar i en värld vars
+största sänka rymmer fyra är svaret inte att gräva en krater utan att rapportera
+att önskemålet inte går att uppfylla i det bandet. En sjö som är stor i
+förhållande till landskapets våglängder är inte en sjö utan ett hav, och det är
+en annan form.
+
+**Fröval är en legitim del av mekanismen.** Att generera ett tiotal frön och
+välja det vars sänkfördelning bäst matchar önskelistan är billigare än att
+förvränga ett dåligt frö. `describe()` förutsåg det redan med "gallring av
+frön".
+
+Ett finare alternativ finns: **villkorad simulering**, där fältet genereras
+betingat på givna höjder i givna punkter så att spektrumet blir rätt överallt
+och villkoren träffas exakt. Den bör inte införas förrän något kräver exakta
+höjder i exakta punkter — en sjö gör inte det, eftersom en sjö är en egenskap
+hos dräneringen och inte en höjd.
+
+### Havet är undantaget, och det är principiellt
+
+Brus ger inte en stor sammanhängande sänka på beställning. Ett hav är inte
+heller en landform utan **världens basnivå**, och `docs/regionen-och-omlandet.md`
+säger att basnivån egentligen hör hemma utanför regionen, som randvillkor från
+omlandet. De två sakerna är samma sak sedd från två håll: *det bruset kan bära
+är landformer, och det som inte är en landform ska inte ligga i bruset.*
+
+Havet förblir därför placerat.
+
+### Kusten genereras, men måste kalibreras
+
+Formerna **adderas** till bruset i stället för att maskera det, så kustlinjen är
+där summan korsar noll och alltså en brusstörd kurva — inte en cirkel. Det är
+riktigt i princip. I praktiken syns det inte:
+
+```
+radie  djup  brus_sd   hav%   korrugering   kantlutning
+   40   4,0     0,17   28,2      1,09         0,150
+   40   1,0     0,17    1,5      1,31         0,037
+   40   4,0     0,60   31,0      1,72         0,150
+   55   1,5     0,60   23,8      2,75         0,041
+   55   1,0     0,60   15,1      2,90         0,027
+```
+
+Korrugeringen är kustlinjens längd delad med omkretsen hos en cirkel med samma
+havsarea. Vid dagens parametrar är den **1,09**, alltså praktiskt taget en
+cirkel, eftersom bassängkantens lutning är 0,150 mot brusets typiska 0,019.
+
+Det ger en styrande kvot i stället för en form att rita: **kustens karaktär är
+brusets lutning delad med bassängkantens.** Under ungefär en femtedel blir
+kusten en cirkel; över ett får man vikar, uddar och öar. Batymetrin bär samma
+brus — uppmätt spridning 8,5 meter under havsytan — så berg som fortsätter ner i
+vattnet följer utan egen mekanism.
+
+För havspatchen betyder det att en **flack och bred bassäng ger bättre kust än
+en djup och smal**, och att talet ska väljas mot korrugeringen och inte bara mot
+havsandelen.
+
+---
+
 ## Hydro-passets kontrakt
 
 ```

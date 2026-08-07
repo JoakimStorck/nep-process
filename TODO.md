@@ -2528,9 +2528,10 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~7014~~ | världens position på en jordlik planet; klimatet härlett ur latitud och kontinentalitet | klimatet, fotoperioden | **klart**, se nedan |
 | ~~7015~~ | lapse rate ur fysik: 6,5 °C/km, referensytan mot havsnivån | höjdklimatet | **klart**, se nedan |
 | ~~7016~~ | `docs/regionen-och-omlandet.md`: den detaljerade världen som en region i ett grovt rutnät | planen | **klart**, se nedan |
-| 7017 | reliefen skalas upp mot tre- till femhundra meter | höjdgradienten får verkan | öppen |
+| ~~7017~~ | landformerna som styrt brus; regionens form som romb i hexgitter | planen | **klart**, se nedan |
 | 7018 | havet placeras efter höjd som bred bassäng; latituden dör helt | dräneringen, `Grid.cell_lat` | öppen |
-| 7019 | fotoperioden med florans ljusbudget som första läsare | floran, fenologin | öppen |
+| 7019 | terrängens amplitud som Hurstexponent i stället för fast tal | höjdgradienten | öppen |
+| 7020 | fotoperioden med florans ljusbudget som första läsare | floran, fenologin | öppen |
 | ~~1010~~ | viewern visar terräng och vatten; världen klassar, viewern färgar | ögat | **klart** |
 | ~~1011~~ | höjden skickas en gång vid handskakningen | bandbredd | **klart**, protokoll 6 |
 
@@ -2747,7 +2748,75 @@ ligger utanför regionen; det ska därför byggas som **en form bland andra** oc
 inte som ett antagande inbakat i dräneringskoden. Skillnaden avgör om flytten
 senare kostar en parameter eller en ombyggnad.
 
-### Fotoperioden som senare steg (7019)
+### Landformerna och regionens form (7017)
+
+Två riktningar fästa i dokumentation innan de hinner glida. Ingen kod.
+
+**Sjöar styrs genom sin tröskel, inte genom sin grop.** En sjös yta bestäms av
+var den spiller över, så att höja tröskelcellen breder ut sjön längs den
+omgivande terrängens egna nivåkurvor. Mekanismen blir *hitta och förstärk*:
+generera bruset, kör dräneringen som ändå körs, läs ut sänkorna, välj den som
+bäst matchar och höj dess tröskel mjukt. Det är styrning av något emergent i
+stället för en form kodad uppifrån, och det är billigt — några celler i stället
+för hundratals.
+
+Önskemålet uttrycks i **hektar**, som är fysiskt och skalfritt. Uppmätt vad
+bruset gör av sig självt i `f5-terrang`: elva sänkor på 4,15, 2,39, 1,11 och
+0,33 hektar plus sju små. Generatorn ska kunna **säga nej** när önskemålet
+överstiger vad bandet kan bära, och fröval är en legitim del av mekanismen.
+
+**Kusten genereras redan men syns inte.** Formerna adderas till bruset i stället
+för att maskera det, så kustlinjen är en brusstörd kurva — men korrugeringen är
+uppmätt till 1,09, alltså praktiskt taget en cirkel, eftersom bassängkantens
+lutning är 0,150 mot brusets 0,019. Kustens karaktär är kvoten mellan de två:
+under en femtedel ger cirkel, över ett ger vikar och öar. **En flack och bred
+bassäng ger bättre kust än en djup och smal**, och talet ska i 7018 väljas mot
+korrugeringen och inte bara mot havsandelen.
+
+**Regionerna sitter i ett hexagonalt gitter men är romber.** En hexagon kaklar
+inte av hexagoner — rot-7-hierarkin vrider drygt nitton grader per nivå. En
+60-graders romb i axialkoordinater kaklar exakt och bildar ett triangulärt
+gitter, som har sex likvärdiga grannar. Formen är en romb, mönstret är
+hexagonalt, och det är mönstret som bär isotropin. Omlandet blir därmed
+bokstavligen ett `Grid` till.
+
+**Bedömt mot Numba och GPU innan beslutet**, eftersom en geometri som bryter
+accelerationen inte är värd sin isotropi. Romben är sannolikt *snabbare*: med
+`id = q + r*m` blir grannarna sex konstanta förskjutningar, radpariteten
+försvinner, och `neighbor_idx` — 24 byte per cell, alltså 6,3 MB vid 262 144
+celler och därmed större än L2 — behöver inte längre läsas i `transport_pass`.
+Florans GPU-väg berörs inte alls. Påståendet ska mätas och inte antas, av samma
+skäl som parallelliseringen av tillväxtkärnan drogs tillbaka.
+
+**Reliefen fick sin fysik rättad på vägen.** Ett tidigare förslag var att låta
+amplituden skala med världens storlek vid fast lutning. Det är fel: verkliga
+landskap är självaffina och inte självsimilära. Skandinaviska halvön är 1 800 km
+lång och 2,5 km hög, alltså 1:700 i medellutning, medan en enskild dalsida är
+1:3. Anpassning mot relief-mot-skala ger **Hurstexponenten H = 0,64** och 37
+meters relief per kilometer.
+
+Modellen ligger i dag på motsatt ytterlighet: den analytiska normeringen tvingar
+fältets standardavvikelse till `noise_sd` oavsett vilka våglängder som ingår,
+alltså **H = 0**. En värld på hundra kilometer får samma tjugo meters relief som
+en på en kilometer.
+
+```
+     värld    λ_max km   H=0 (idag)   H=0,65   H=1 (förkastat)
+    64x128       0,52       10 m        10 m        10 m
+   512x512       4,13       10 m        39 m        80 m
+ 1024x1024       8,25       10 m        61 m       160 m
+ 4096x4096      33,0        10 m       149 m       640 m
+```
+
+Följden är att **skaldokumentets löfte om två till tre graders höjdgradient inte
+kan bäras av bruset** — inte ens 4096² ger mer än 0,97 grader. Det är riktigt:
+femhundra meter på tio kilometer är en tektonisk struktur och inte en eroderad
+yta. Höjdgradienten kommer därför från en placerad form med en höjd i meter, och
+**placerade former skalar inte med världen** — ett berg blir inte högre för att
+kartan blir större. Radien ska av samma skäl inte normeras; positionen är var på
+kartan, radien är hur stor i meter.
+
+### Fotoperioden som senare steg (7020)
 
 Modellen har i dag **ingen säsong i ljuset alls**, bara i temperaturen, medan floran redan har ljuskonkurrens via Beer–Lambert. Vid 55 grader är vinterdagen 6,9 timmar och sommardagen 17,1 — en faktor 2,5 i ljustillgång, helt oberoende av temperaturen. Dagslängd och insolation är exakt astronomi ur latituden och kostar ingen kalibrering.
 

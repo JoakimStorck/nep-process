@@ -145,6 +145,75 @@ fel som lapse rate hade, och det ska fångas av samma regel: en storhet som inte
 går att uttrycka i modellens enheter är en kalibrerad fri parameter och ska
 märkas som en.
 
+## Regionens form
+
+Regionerna ska sitta i ett **hexagonalt gitter** — sex likvärdiga grannar, ingen
+diagonalbias i migration eller flöden. Det är samma isotropiargument som
+motiverade hexceller, en nivå upp.
+
+Men regionerna kan inte *vara* hexagoner. **En hexagon kaklar inte av
+hexagoner.** Det närmaste är rot-7-hierarkin, där sju celler bildar en blomma
+som är nästan hexagonal men roterad drygt nitton grader, och rotationen
+ackumuleras för varje nivå: taggiga kanter och ett vridet koordinatsystem.
+
+Lösningen är att skilja på formen och gittret. En **60-graders romb** i
+axialkoordinater — lika många steg i `q` som i `r` — kaklar planet exakt och
+bildar ett triangulärt gitter, och ett triangulärt gitter har sex likvärdiga
+grannar. Regionen är alltså en romb, men regionerna sitter i ett hexagonalt
+mönster, och det är mönstret som bär isotropin.
+
+Det ger tre saker:
+
+- **Exakt kakling utan rotation.** Ingen ackumulerad vridning, och wrap på torus
+  med samma logik som i dag.
+- **Samma `Grid`-kod en nivå upp.** Omlandet blir bokstavligen ett `Grid` till,
+  med `neighbors`, `distance` och `cells_within` oförändrade — regioner i
+  stället för celler. Geometrin ägs fortfarande på ett ställe; den instansieras
+  bara två gånger.
+- **Storleken blir ett rent tal.** En region är `m x m` celler, och dess area
+  följer ur cellarean utan någon ny konstant — samma val som gav cellen 100 m².
+
+### Förenligheten med Numba och GPU
+
+Bedömd före beslutet, eftersom en geometri som bryter accelerationen inte är
+värd sin isotropi. Slutsatsen är att romben inte bara är förenlig utan
+**sannolikt snabbare**.
+
+Koden är redan cellindexerad. Ingen het loop använder rad eller kolumn:
+florans tillväxtkärna arbetar över slots med rena gathers, `soil_pass` är
+punktvis, `route` följer en förberäknad permutation, och transporten läser
+grannmatrisen. Geometrin syns bara när `neighbor_idx` byggs.
+
+Och där blir romben enklare. Med `id = q + r*m` är de sex grannarna konstanta
+förskjutningar:
+
+```
++1, -1, +m, -m, +1-m, -1+m
+```
+
+Dagens offset-layout kräver i stället en radparitetskorrektion — `grid.py`
+noterar själv att radparitet är det grannrelationerna beror på, och att den
+komplicerar sömmen. Den försvinner.
+
+Följden är konkret: en Numba-kärna kan räkna grannindex i register i stället för
+att slå upp dem. `neighbor_idx` är 24 byte per cell, alltså 6,3 MB vid 262 144
+celler och därmed större än L2 — att slippa läsa den i `transport_pass` är den
+enskilt största vinsten i den kärnan. Lokaliteten är oförändrad: två grannar
+ligger på ±1 och är kontigua, fyra ligger en radlängd bort. Florans GPU-väg
+berörs inte alls, eftersom den arbetar över slots och möter geometrin bara som
+en `cell_idx`-gather.
+
+Två saker att vara vaken på. Regionen blir fysiskt en **parallellogram**, inte
+en rektangel, så viewern måste hantera det och en fysiskt kvadratisk region
+kräver olika antal steg i `q` och `r`. Och påståendet ska **mätas och inte
+antas** — en mikrobänk på `transport_pass` och spatialindexet före och efter, av
+samma skäl som parallelliseringen av tillväxtkärnan drogs tillbaka när
+mätningen sa emot.
+
+Bytet hör till nivå 1 nedan, när regionen faktiskt får grannar. Fram till dess
+gäller redan regeln att ingen ny kod bygger på rad eller kolumn — och det är den
+regeln som gör bytet billigt när det kommer.
+
 ## Ordningen
 
 Nivåerna är oberoende och var och en betalar sig.
