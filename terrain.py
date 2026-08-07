@@ -77,24 +77,53 @@ class TerrainParams:
 
     seed: int = 1
 
-    # Brusets standardavvikelse i **cellängder**.
+    # Brusets standardavvikelse i **cellängder**, vid referensvåglängden
+    # `lambda_ref`.
     #
     # Höjd, vattendjup och vågrätt avstånd delar en enda längdenhet: cellarean
     # är 1, alltså är cellbredden 1,07 och grannavståndet detsamma. Att uttrycka
     # höjden i samma enhet gör lutningen till en verklig dimensionslös gradient
-    # och varje höjdtal läsbart — en bassäng på djup 0,8 är fyra femtedelar av
-    # en cellbredd djup, och det går att resonera om.
+    # och varje höjdtal läsbart.
     #
-    # Tidigare normerades bruset till spannet [0, 1] och skalades med `relief`.
-    # Det gav fast spann men **seedberoende spridning** — uppmätt 0,142 till
-    # 0,197 över fem frön — så amplituden var inte en höjd utan ett spann, och
-    # ett tal som `tilt: 1.2` betydde olika saker i olika världar.
-    #
-    # Normeringen sker nu mot den *analytiska* standardavvikelsen,
+    # Normeringen sker mot den *analytiska* standardavvikelsen,
     # `sqrt(Σ amp² / 2)` för en summa cosinus med slumpfaser. Den är exakt och
-    # seedoberoende, så fältets spridning blir `noise_sd` oavsett frö och
-    # oavsett hur bandet väljs.
+    # seedoberoende, så fältets spridning blir det begärda talet oavsett frö.
+    #
+    # **Men den normeringen gjorde amplituden oberoende av bandet**, alltså av
+    # hur stora landformerna är. Modellen låg därmed på Hurstexponent noll: en
+    # värld på hundra kilometer fick samma tjugo meters relief som en på en
+    # kilometer. Talet nedan är därför inte längre fältets spridning utan dess
+    # spridning **vid `lambda_ref`**; den faktiska följer av `hurst`.
     noise_sd: float = 0.17
+
+    # Hurstexponenten: brusets amplitud går som `(lambda_max / lambda_ref)^H`.
+    #
+    # **Verkliga landskap är självaffina, inte självsimilära.** De blir flackare
+    # ju större bit man tittar på, och det är skillnaden mellan H = 0,64 och
+    # H = 1. Skandinaviska halvön är 1 800 km lång och 2,5 km hög, alltså 1:700
+    # i medellutning, medan en enskild dalsida är 1:3. Med H = 1 — konstant
+    # lutning i alla skalor — skulle halvön ha varit tiotals kilometer hög.
+    #
+    # Anpassning mot relief-mot-skala för verklig topografi:
+    #
+    #        1 km  ->    30 m          H = 0,64
+    #       10 km  ->   200 m          relief(1 km) = 37 m
+    #      100 km  ->   900 m
+    #     1000 km  ->  2500 m
+    #
+    # Vad de tre lägena ger, med bandet skalat mot världen:
+    #
+    #     värld        lambda km    H=0 (förut)   H=0,64   H=1 (förkastat)
+    #     64x128          0,52          10 m        10 m        10 m
+    #     512x512         4,13          10 m        38 m        80 m
+    #     1024x1024       8,25          10 m        59 m       160 m
+    #     4096x4096      33,0           10 m       142 m       640 m
+    #
+    # Följden är att **bruset inte kan bära en höjdgradient på flera grader.**
+    # Inte ens 4096² ger mer än en grad vid 6,5 °C/km. Det är riktigt:
+    # femhundra meter på tio kilometer är en tektonisk struktur och inte en
+    # eroderad yta, och sådana byggs som placerade former med höjd i meter.
+    hurst: float = 0.64
 
     # Kontinentens grundhöjd över havsnivån, i cellängder, före lutning och
     # brus. Egen parameter sedan bruset blev nollcentrerat: tidigare låg det i
@@ -108,12 +137,28 @@ class TerrainParams:
     # gäller som de står.
     relief: float = 1.0
 
-    # Bandets ändar i cellbredder. `lambda_max` bör ligga under världens
-    # kortaste sida, annars får landskapet en världsspännande gradient som
-    # korrelerar med latituden. `lambda_min` sätter finkornigheten; under två
-    # celler finns ingenting att upplösa.
-    lambda_max: float = 48.0
+    # Bandets övre ände som **andel av världens kortaste sida**, alltså hur
+    # stor den största landformen är i förhållande till världen.
+    #
+    # Var 48 cellbredder oavsett värld. Det är 0,75 av sidan vid bredd 64 men
+    # 0,09 vid 512, så en större värld blev *finkornigare* i stället för större:
+    # en slätt med krusningar där varje sänka är sin egen ändstation. Uppmätt
+    # gav det 10,6 till 14,0 procent sjö vid 256x256 mot 1,6 till 2,0 vid
+    # 64x128, med samma parametrar i övrigt.
+    #
+    # Den gamla invändningen mot ett brett band — att den världsspännande vågen
+    # korrelerade med latituden och därmed med klimatet — föll med latituden.
+    #
+    # `lambda_min` sätter finkornigheten och står kvar i celler, eftersom den är
+    # upplösningens gräns och inte världens: under två celler finns ingenting
+    # att upplösa oavsett hur stor världen är.
+    lambda_max_frac: float = 0.75
     lambda_min: float = 3.0
+
+    # Referensvåglängd i cellbredder för `noise_sd`. Förankrad i den värld
+    # amplituden en gång kalibrerades i — 0,75 av 64 celler — så att 64x128 är
+    # bitidentisk med före Hurstskalningen.
+    lambda_ref: float = 48.0
 
     # Spektrallutning: amplituden går som våglängden upphöjt till beta. Låga
     # värden ger ett finkornigt landskap där varje sänka är sin egen
@@ -185,13 +230,48 @@ def _synth(x, y, kx, ky, amp, phase, inv_Lx, inv_Ly, out):
         out[i] = s
 
 
-def _modes(tp: TerrainParams, Lx: float, Ly: float, rng):
+def band_max(tp: TerrainParams, grid) -> float:
+    """
+    Bandets övre ände i cellbredder, ur världens kortaste sida.
+
+    Att uttrycka den som en andel i stället för ett celltal är skillnaden
+    mellan en större värld och en finkornigare: 48 celler är 0,75 av sidan vid
+    bredd 64 men 0,09 vid 512.
+    """
+    kort = min(int(grid.width), int(grid.height))
+    return max(float(tp.lambda_min), float(tp.lambda_max_frac) * float(kort))
+
+
+def amp_scale(tp: TerrainParams, lam_max: float) -> float:
+    """
+    Höjdskalans faktor vid ett band, ur Hurstexponenten.
+
+    Den gäller **hela basnivån** — bruset, grundhöjden och havsdjupet — och
+    inte de placerade formerna. Skälet står i `docs/geologin-och-vattnet.md`:
+    bruset är erosion och skalar fraktalt, medan en placerad form är tektonik
+    med en storlek i meter. Ett berg blir inte högre för att kartan blir
+    större.
+
+    Grundhöjden och havsdjupet hör till basnivån och inte till tektoniken. Att
+    skala bruset men inte dem gav ett hav som dränktes i brus: uppmätt vid
+    512x512 föll den sammanhängande havsmassan till 10,8 procent av begärda 20,
+    medan sjöandelen steg till 21,3 och största sjön till 21 486 celler —
+    kustlinjen fragmenterades och bassängen upphörde att vara en basnivå.
+
+    Vid referensbandet är faktorn exakt ett, så den värld amplituden
+    kalibrerades i är oförändrad.
+    """
+    lam_ref = max(1e-9, float(tp.lambda_ref))
+    return (max(1e-9, lam_max) / lam_ref) ** float(tp.hurst)
+
+
+def _modes(tp: TerrainParams, Lx: float, Ly: float, lam_max: float, rng):
     """
     Halva vågtalsplanet — den andra halvan är komplexkonjugatet och skulle bara
     dubbla amplituden. En mod tas med om dess fysiska våglängd faller i bandet.
     """
     lam_min = max(1e-6, float(tp.lambda_min))
-    lam_max = max(lam_min, float(tp.lambda_max))
+    lam_max = max(lam_min, float(lam_max))
     amax = int(Lx / lam_min) + 1
     bmax = int(Ly / lam_min) + 1
 
@@ -233,7 +313,7 @@ def _modes(tp: TerrainParams, Lx: float, Ly: float, rng):
     return kx, ky, amp, phase
 
 
-def _default_shapes(grid, tp, land: np.ndarray) -> list:
+def _default_shapes(grid, tp, land: np.ndarray, skala: float) -> list:
     """
     Formlistan när scenariot inte anger någon: **havet, och ingenting annat.**
 
@@ -273,8 +353,8 @@ def _default_shapes(grid, tp, land: np.ndarray) -> list:
     d = np.hypot(dx / Lx, dy / Ly)
 
     mal = min(max(float(tp.hav_andel), 0.0), 0.95)
-    djup = float(tp.hav_djup)
-    grund = float(tp.base)
+    djup = float(tp.hav_djup) * float(skala)
+    grund = float(tp.base) * float(skala)
 
     def andel(r: float) -> float:
         z = grund + land - djup * (1.0 - _smoothstep(0.0, 1.0, np.minimum(d / r, 1.0)))
@@ -411,7 +491,8 @@ def generate_elevation(grid, tp: TerrainParams) -> np.ndarray:
     Ly = float(grid.extent_y)
 
     rng = np.random.default_rng(int(tp.seed))
-    kx, ky, amp, phase = _modes(tp, Lx, Ly, rng)
+    lam_max = band_max(tp, grid)
+    kx, ky, amp, phase = _modes(tp, Lx, Ly, lam_max, rng)
 
     out = np.empty(x.shape[0], dtype=np.float64)
     if HAVE_NUMBA:
@@ -429,11 +510,12 @@ def generate_elevation(grid, tp: TerrainParams) -> np.ndarray:
     # skillnad från en normering mot det realiserade min och max.
     sd = math.sqrt(float((amp ** 2).sum()) * 0.5)
     land = (out / sd) if sd > 1e-300 else np.zeros_like(out)
-    land = land * float(tp.noise_sd)
+    skala = amp_scale(tp, lam_max)
+    land = land * (float(tp.noise_sd) * skala)
 
-    struct = _shapes(grid, tp, _default_shapes(grid, tp, land))
+    struct = _shapes(grid, tp, _default_shapes(grid, tp, land, skala))
 
-    z = float(tp.base) + land + struct
+    z = float(tp.base) * skala + land + struct
     return (float(tp.relief) * z).astype(np.float32, copy=False)
 
 

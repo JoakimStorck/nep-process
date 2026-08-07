@@ -19,7 +19,9 @@ varld:
   terrang:
     seed: 1
     noise_sd: 0.17
-    lambda_max: 48.0
+    # Bandets övre ände som andel av världens kortaste sida. 0,75 av 64 är
+    # de 48 cellbredder som gällde när talet var absolut.
+    lambda_max_frac: 0.75
     lambda_min: 3.0
     beta: 2.4
     base: 1.5

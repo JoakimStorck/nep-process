@@ -18,7 +18,9 @@ varld:
     relief: 1.0
     # Bandet i cellbredder. Övre gränsen avgör var bruset slutar och de
     # placerade formerna tar vid.
-    lambda_max: 48.0
+    # Bandets övre ände som andel av världens kortaste sida. 0,75 av 64 är
+    # de 48 cellbredder som gällde när talet var absolut.
+    lambda_max_frac: 0.75
     lambda_min: 3.0
     # Spektrallutning. Låga värden ger finkornigt landskap där varje sänka är
     # sin egen ändstation; höga ger få stora former och inga sjöar.

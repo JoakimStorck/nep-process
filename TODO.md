@@ -2530,7 +2530,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~7016~~ | `docs/regionen-och-omlandet.md`: den detaljerade världen som en region i ett grovt rutnät | planen | **klart**, se nedan |
 | ~~7017~~ | landformerna som styrt brus; regionens form som romb i hexgitter | planen | **klart**, se nedan |
 | ~~7018~~ | havet placeras efter höjd som bred bassäng; latituden ur terrängen | dräneringen | **klart**, se nedan |
-| 7019 | terrängens amplitud som Hurstexponent i stället för fast tal | höjdgradienten | öppen |
+| ~~7019~~ | bandet skalat mot världen; amplituden som Hurstexponent | höjdgradienten, sjöarna | **klart**, se nedan |
 | 7020 | fotoperioden med florans ljusbudget som första läsare | floran, fenologin | öppen |
 | ~~1010~~ | viewern visar terräng och vatten; världen klassar, viewern färgar | ögat | **klart** |
 | ~~1011~~ | höjden skickas en gång vid handskakningen | bandbredd | **klart**, protokoll 6 |
@@ -2867,6 +2867,65 @@ praktiken oförändrad — bytet flyttar havet, det krymper inte världen.
 och `bands_of_cells` har inga läsare i simuleringen längre, men lever kvar i
 viewerns backljus och i `calibrate.py`s gruppering. De rivs när de två flyttats,
 som egen patch — det är en städning och inte en del av den här ändringen.
+
+### Bandet och amplituden skalar med världen (7019)
+
+Två fel med samma rot: terrängen visste inte hur stor världen var.
+
+**Bandets övre ände var 48 cellbredder oavsett värld.** Det är 0,75 av sidan vid
+bredd 64 men 0,09 vid 512, så en större värld blev *finkornigare* i stället för
+större — en slätt med krusningar där varje sänka blir sin egen ändstation.
+`lambda_max_frac` ersätter `lambda_max`; `lambda_min` står kvar i celler,
+eftersom den är upplösningens gräns och inte världens.
+
+**Amplituden var oberoende av bandet.** Den analytiska normeringen tvingade
+fältets standardavvikelse till `noise_sd` oavsett vilka våglängder som ingick,
+alltså Hurstexponent noll: en värld på hundra kilometer fick samma tjugo meters
+relief som en på en kilometer. `hurst = 0,64` är anpassad mot relief-mot-skala
+för verklig topografi, och den siffran är den som gör att Skandinavien är 1 800
+km lång och 2,5 km hög i stället för tiotals kilometer.
+
+**Amplitudskalan gäller hela basnivån**, alltså bruset, grundhöjden och
+havsdjupet — men inte de placerade formerna, som är tektonik med storlek i
+meter. Att skala bara bruset gav ett hav som dränktes i det: vid 512x512 föll
+den sammanhängande havsmassan till 10,8 procent av begärda 20 medan sjöandelen
+steg till 21,3 och största sjön till 21 486 celler. Bassängen upphörde att vara
+en basnivå.
+
+Uppmätt, tre frön per storlek:
+
+```
+   värld     λ_max   skala    relief      hav %        sjö %       största flod
+ 64x128         48    1,00      22 m    20,0–20,0    1,57–2,00     1 059–1 404
+128x128         96    1,56      33 m    20,0–20,0    0,11–0,78     1 577–2 076
+256x256        192    2,43      53 m    20,0–20,0    0,00–2,31     6 087–8 775
+```
+
+Sjöandelen vid 256x256 föll från 7018:s **10,6–14,0 procent till 0,0–2,3**, och
+havsandelen träffas nu i varje storlek. Reliefen växer från 22 till 53 meter
+medan lutningen p95 sjunker från 0,077 till 0,047 — landskapet blir större och
+flackare på samma gång, vilket är precis vad en Hurstexponent under ett betyder.
+
+**Vad som återstår: sjöarna blir för få i breda band.** Noll procent vid 256x256
+och frö 1 är inte ett bättre utfall än fjorton, bara ett annat. Orsaken är att
+bandet blir logaritmiskt bredare när `lambda_min` står stilla, så `beta` flyttar
+mer vikt till de långa vågorna och landskapet blir väldränerat. `beta` är
+sjöreglaget och behöver sänkas när bandet breddas — uppmätt vid 256x256, tre
+frön:
+
+```
+beta 1,8   sjö 2,49 / 7,04 / 5,42 %     368 / 516 / 497 sjöar
+beta 2,0   sjö 0,57 / 4,30 / 2,29 %      74 / 265 / 194
+beta 2,2   sjö 0,07 / 2,82 / 0,90 %      13 /  95 /  37
+beta 2,4   sjö 0,00 / 2,31 / 0,38 %       2 /  24 /   6
+```
+
+Det talet sätts när en stor värld faktiskt ska köras, inte nu — det vore
+kalibrering mot en världsstorlek som väntar på florans GPU-väg.
+
+`f5-terrang` är bitidentisk: 0,75 av 64 celler är just de 48 som gällde förut,
+och amplitudskalan är då exakt ett. Verifierat med `md5` på renderad PNG före
+och efter.
 
 ### Fotoperioden som senare steg (7020)
 
