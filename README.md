@@ -2,6 +2,8 @@
 
 *Version 1.0 — April 2026*
 
+Senast uppdaterad 2026-08-07
+
 ---
 
 ## Köra
