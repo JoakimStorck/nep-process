@@ -2536,6 +2536,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | 7022 | fotoperioden med florans ljusbudget som första läsare | floran, fenologin | öppen |
 | ~~1010~~ | viewern visar terräng och vatten; världen klassar, viewern färgar | ögat | **klart** |
 | ~~1011~~ | höjden skickas en gång vid handskakningen | bandbredd | **klart**, protokoll 6 |
+| ~~1012~~ | höjdkurvor i viewern, ovanpå vattnet | ögat | **klart**, se nedan |
 
 ### Vad mätningarna ändrade i planen
 
@@ -3026,6 +3027,51 @@ lutningar kring ±0,05, och korrelationen −0,573 mättes där.
 "median omkring tio". Det gamla sattes när sjöar var en artefakt av att
 dräneringen inte samlade sig, inte när de var en nisch — och Sverige har omkring
 nio procent sjöyta.
+
+### Höjdkurvor i viewern (1012)
+
+`K` lägger bruna höjdkurvor ovanpå kartan, med jämn ekvidistans och var femte
+som tjockare huvudkurva.
+
+**De ritas ovanpå vattnet och inte under.** Det är avsiktligt och hela poängen:
+en kurva som löper ut i en sjö visar vilken nivå sjöytan står på. Över vatten
+dämpas linjen till knappt halva styrkan så att vattnet fortfarande läses som
+vatten.
+
+Kurvorna är **linjesegment i världskoordinater**, inte färgade celler. Ett
+första försök målade celler som låg på en nivågräns, med motiveringen att cellen
+är kartans upplösning. Det var fel: höjden är ett *sampel* vid cellcentrum och
+inte ett styckvis konstant fält, och med den tolkningen är en kurva mellan
+celler både meningsfull och tunnare än en cell.
+
+**Hexgittrets dual är ett triangelnät**, vilket gör interpolationen entydig: tre
+inbördes grannar spänner en triangel, inom vilken fältet är linjärt, och
+nivåkurvan blir ett rakt segment. Marching squares tvetydiga fall uppstår inte.
+Två trianglar per cell täcker planet — (i, öst, sydost) och (i, sydost,
+sydväst). Trianglar som wrappar över sömmen hoppas över; ett segment ritat rakt
+över världen skulle se ut som ett fel.
+
+Segmenten räknas ur `Grid`s grannmatris och cellcentra, alltså utan att någon
+kod vet vad en rad är, och cachas med terrängen. Vid 256x256 blir de 14 036
+stycken vid 2,5 meters ekvidistans.
+
+Ekvidistansen väljs ur världens relief så att kartan får ungefär tolv kurvor,
+och avrundas till ett tal som får stå på en karta — 0,5, 1, 2, 2,5, 5, 10, 20,
+25, 50, 100 eller 200 meter. En kurva var 3,7 meter är ingenting en människa
+läser av. Den står i HUD:en, eftersom kurvor utan ekvidistans inte går att läsa,
+och `render_frame.py --kurvsteg` sätter den explicit.
+
+**Färgen fick mätas mot underlaget och inte mot papper.** Ett första försök
+använde orienteringskartans tryckfärg, 0,55 / 0,33 / 0,13. Den syntes utmärkt i
+havet och försvann fullständigt på land — terränglagret är redan brungrönt, och
+11,3 procent av landcellerna låg på en kurva utan att en enda av dem gick att
+se. Mörk sepia i stället.
+
+**Ekvidistansen bör väljas grövre i det strävare landskapet efter 7021.**
+Automatvalet siktar på tolv kurvor, vilket ger 2,5 meter vid 256x256 — och då
+blir kurvorna korta virriga fragment som ögat inte läser som linjer. Vid 5 meter
+framträder de som kurvor. Talet relief genom tolv sattes före 7021 och bör
+sannolikt bli relief genom sex eller åtta.
 
 ### Fotoperioden som senare steg (7022)
 

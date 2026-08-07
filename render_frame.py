@@ -40,6 +40,10 @@ def main() -> int:
     ap.add_argument("--mode", type=str, default="BC")
     ap.add_argument("--scenario", type=str, default=None,
                     help="YAML-fil med körningens utgångsläge; se scenario.py")
+    ap.add_argument("--kurvor", action="store_true",
+                    help="rita höjdkurvor ovanpå, som på en orienteringskarta")
+    ap.add_argument("--kurvsteg", type=float, default=0.0,
+                    help="ekvidistans i meter; 0 väljer ur världens relief")
     ap.add_argument("--out", type=str, default="frame.png")
     a = ap.parse_args()
 
@@ -76,7 +80,9 @@ def main() -> int:
     from viewframe import frame_from_pop
 
     pygame.init()
-    cfg = ViewerConfig(scale=int(a.scale), mode=str(a.mode))
+    cfg = ViewerConfig(scale=int(a.scale), mode=str(a.mode),
+                       show_contours=bool(a.kurvor),
+                       contour_step_m=float(a.kurvsteg))
     viewer = WorldViewer(cfg)
     # render_every kan hoppa över bildrutor; anropa tills en faktiskt ritas
     for _ in range(max(1, int(cfg.render_every)) + 1):

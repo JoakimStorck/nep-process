@@ -84,7 +84,14 @@ sätter måtten explicit i stället. Fönstret går att ändra storlek på under
 körning.
 
 `TERRANG` visar höjden med backljus, `VATTEN` markfukten som andel av
-fältkapacitet. Båda kräver ett scenario med terräng; i en platt värld är de tomma
+fältkapacitet. `K` lägger höjdkurvor ovanpå, med jämn ekvidistans och var femte
+som tjockare huvudkurva. De ritas **ovanpå vattnet** och inte under: en kurva
+som löper ut i en sjö visar vilken nivå sjöytan står på, och det är hela
+poängen. Kurvorna är riktiga linjer och inte färgade celler: höjden tolkas som ett sampel
+vid cellcentrum, och hexgittrets dual — ett triangelnät — gör interpolationen
+entydig. Ekvidistansen väljs ur världens egen relief och står i HUD:en;
+`render_frame.py --kurvor --kurvsteg 5` sätter den explicit, vilket ofta är
+läsbarare i kuperad terräng. Båda kräver ett scenario med terräng; i en platt värld är de tomma
 och bildrutan bär inte fälten alls. Hav, sjöar och vattendrag ritas ovanpå
 *varje* läge, eftersom en karta i FLORA-läge annars ser ut som om havet vore torr
 mark utan växtlighet.
@@ -98,6 +105,7 @@ anslutning och säger ifrån om de skiljer sig.
 |---|---|
 | `1`–`8` | läge: CB, B, C, FLORA, TEMP, CLAIM, TERRANG, VATTEN |
 | `W` | vatten av och på (hav, sjöar och vattendrag ovanpå alla lägen) |
+| `K` | höjdkurvor av och på; ekvidistansen visas i HUD:en |
 | `F` | ytfördelning: vinkelkilar eller stippling |
 | `T` | florans färgaxel |
 | `A` / `H` | djur av och på, HUD av och på |

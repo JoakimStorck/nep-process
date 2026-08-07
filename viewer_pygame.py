@@ -77,6 +77,16 @@ class ViewerConfig:
     # FLORA-läge ut som om havet vore torr mark utan växtlighet, vilket är
     # precis vad det inte är.
     show_water: bool = True
+
+    # Höjdkurvor som på en orienteringskarta: bruna linjer med jämn
+    # ekvidistans, var femte som tjockare huvudkurva. De ritas ovanpå vattnet
+    # och inte under, eftersom hela poängen är att kunna läsa av **på vilken
+    # höjd vattnet ligger** — var en sjöyta möter en kurva.
+    show_contours: bool = False
+    # Ekvidistans i meter. 0 betyder att den väljs ur världens egen relief, så
+    # att kartan får ungefär tolv kurvor oavsett hur kuperad den är.
+    contour_step_m: float = 0.0
+
     gamma: float = 1.0
 
     # Hur flora färgkodas i FLORA-läget:
@@ -115,6 +125,8 @@ class WorldViewer:
         # svep över grannmatrisen per bildruta i terränglägena.
         self._shade_key = None
         self._shade_cache = np.ones(0, dtype=np.float32)
+        self._contour_key = None
+        self._contour_cache = None
 
         # Utsnitt. Av som förval: fönstret är då hela världen gånger `scale`,
         # vilket ögonblicksbilderna förlitar sig på.
@@ -196,6 +208,8 @@ class WorldViewer:
                     self.cfg.mode = "VATTEN"
                 if ev.key == pygame.K_w:
                     self.cfg.show_water = not self.cfg.show_water
+                if ev.key == pygame.K_k:
+                    self.cfg.show_contours = not self.cfg.show_contours
                     
                 if ev.key == pygame.K_a:
                     self.cfg.draw_agents = not self.cfg.draw_agents
@@ -508,6 +522,153 @@ class WorldViewer:
         self._shade_key = key
         self._shade_cache = sh
         return sh
+
+    # Ekvidistanser som får stå på en karta. En kurva var 3,7 meter är
+    # ingenting en människa läser av; talen nedan är de en orienteringskarta
+    # eller en fjällkarta faktiskt använder.
+    CONTOUR_STEPS_M = (0.5, 1.0, 2.0, 2.5, 5.0, 10.0, 20.0, 25.0, 50.0, 100.0, 200.0)
+
+    def _contour_hud(self, frame) -> str:
+        """Ekvidistansen i HUD:en. Utan den går kurvorna inte att läsa av."""
+        if not self.cfg.show_contours:
+            return ""
+        ut = self._contour_cache
+        if ut is None:
+            return "  [kurvor K]"
+        return f"  [kurvor {float(ut[3]):g} m K]"
+
+    def _contours(self, frame, grid):
+        """
+        Höjdkurvor som **linjesegment i världskoordinater**, inte som färgade
+        celler.
+
+        Höjden är ett sampel vid cellcentrum och inte ett styckvis konstant
+        fält — den tolkningen är vad som gör en kurva mellan celler
+        meningsfull, och den gör linjen oberoende av cellstorleken. Och
+        hexgittrets **dual är ett triangelnät**: tre inbördes grannar spänner
+        en triangel, inom vilken linjär interpolation är entydig. Nivåkurvan
+        blir ett rakt segment per triangel, utan marching squares tvetydiga
+        fall.
+
+        Två trianglar per cell täcker planet: (i, öst, sydost) och
+        (i, sydost, sydväst).
+
+        Segmenten är statiska med terrängen och räknas en gång per värld.
+        Returnerar (p0, p1, huvud, step) med punkterna i världskoordinater.
+        """
+        z01 = np.asarray(frame.elevation01, dtype=np.float64)
+        if z01.size == 0 or grid is None:
+            return None
+        lo = float(frame.elev_min)
+        hi = float(frame.elev_max)
+        z_m = (lo + z01 * (hi - lo)) * 10.0
+
+        step = float(self.cfg.contour_step_m)
+        if step <= 0.0:
+            relief = float(z_m.max() - z_m.min())
+            mal = max(1e-6, relief / 12.0)
+            step = min(self.CONTOUR_STEPS_M, key=lambda v: abs(math.log(v / mal)))
+
+        key = (int(z01.size), float(z01[::max(1, z01.size // 97)].sum()), step)
+        if self._contour_key == key:
+            return self._contour_cache
+
+        idx = np.asarray(grid.neighbor_idx, dtype=np.int64)
+        cx = np.asarray(grid.cell_center_x, dtype=np.float64)
+        cy = np.asarray(grid.cell_center_y, dtype=np.float64)
+        Lx = float(grid.extent_x)
+        Ly = float(grid.extent_y)
+        n = z_m.size
+        alla = np.arange(n)
+
+        # Grannordningen i Grid är väst, öst, NV, NO, SV, SO.
+        O, SV, SO = idx[:, 1], idx[:, 4], idx[:, 5]
+        trianglar = (np.stack([alla, O, SO], axis=1),
+                     np.stack([alla, SO, SV], axis=1))
+
+        p0s, p1s, huvuds = [], [], []
+        niv_lo = math.floor(float(z_m.min()) / step) + 1
+        niv_hi = math.ceil(float(z_m.max()) / step)
+
+        def punkt(ia, ib, lvl):
+            za, zb = z_m[ia], z_m[ib]
+            d = zb - za
+            t = np.clip((lvl - za) / np.where(np.abs(d) < 1e-12, 1e-12, d), 0.0, 1.0)
+            return np.stack([cx[ia] + t * (cx[ib] - cx[ia]),
+                             cy[ia] + t * (cy[ib] - cy[ia])], axis=1)
+
+        for tri in trianglar:
+            a_, b_, c_ = tri[:, 0], tri[:, 1], tri[:, 2]
+            # Trianglar som wrappar över sömmen hoppas över: ett segment ritat
+            # rakt över världen skulle se ut som ett fel.
+            ok = ((np.abs(cx[b_] - cx[a_]) < 0.5 * Lx) & (np.abs(cy[b_] - cy[a_]) < 0.5 * Ly)
+                  & (np.abs(cx[c_] - cx[a_]) < 0.5 * Lx) & (np.abs(cy[c_] - cy[a_]) < 0.5 * Ly))
+            hj = np.stack([a_[ok], b_[ok], c_[ok]], axis=1)
+            zt = z_m[hj]
+            for k in range(int(niv_lo), int(niv_hi) + 1):
+                lvl = k * step
+                over = zt > lvl
+                antal = over.sum(axis=1)
+                w = np.flatnonzero((antal == 1) | (antal == 2))
+                if w.size == 0:
+                    continue
+                ov = over[w]
+                # Det ensamma hörnet: det som ligger på andra sidan nivån än de
+                # två övriga. Segmentet går mellan de två kanterna ut från det.
+                ensam = np.where(ov.sum(axis=1) == 1, np.argmax(ov, axis=1),
+                                 np.argmin(ov, axis=1))
+                rad = np.arange(w.size)
+                hh = hj[w]
+                i_e = hh[rad, ensam]
+                i_1 = hh[rad, (ensam + 1) % 3]
+                i_2 = hh[rad, (ensam + 2) % 3]
+                p0s.append(punkt(i_e, i_1, lvl))
+                p1s.append(punkt(i_e, i_2, lvl))
+                huvuds.append(np.full(w.size, k % 5 == 0, dtype=bool))
+
+        if not p0s:
+            self._contour_key = key
+            self._contour_cache = None
+            return None
+        ut = (np.concatenate(p0s), np.concatenate(p1s), np.concatenate(huvuds), step)
+        self._contour_key = key
+        self._contour_cache = ut
+        return ut
+
+    def _draw_contours(self, frame) -> None:
+        """
+        Rita kurvorna som linjer, efter att cellbilden blittats.
+
+        De hamnar **ovanpå vattnet**, eftersom en kurva som löper ut i en sjö
+        visar vilken nivå sjöytan står på — hela poängen med att ha dem.
+        """
+        if not self.cfg.show_contours or not bool(frame.has_terrain):
+            return
+        ut = self._contours(frame, getattr(self, "_grid", None))
+        if ut is None or self._screen is None:
+            return
+        p0, p1, huvud, _step = ut
+        pygame = self.pg
+
+        ppu = float(self._ppu)
+        x0 = (p0[:, 0] - self._proj_x0) * ppu
+        y0 = (p0[:, 1] - self._proj_y0) * ppu
+        x1 = (p1[:, 0] - self._proj_x0) * ppu
+        y1 = (p1[:, 1] - self._proj_y0) * ppu
+        vis = ((np.maximum(x0, x1) >= -2) & (np.minimum(x0, x1) <= self._w_px + 2)
+               & (np.maximum(y0, y1) >= -2) & (np.minimum(y0, y1) <= self._h_px + 2))
+        if not vis.any():
+            return
+
+        fin = (74, 42, 14)
+        grov = (52, 28, 8)
+        bredd_grov = max(2, int(round(ppu * 0.3)))
+        for mask, col, bredd in ((vis & ~huvud, fin, 1), (vis & huvud, grov, bredd_grov)):
+            xs0, ys0, xs1, ys1 = x0[mask], y0[mask], x1[mask], y1[mask]
+            for j in range(xs0.size):
+                pygame.draw.line(self._screen, col,
+                                 (int(xs0[j]), int(ys0[j])),
+                                 (int(xs1[j]), int(ys1[j])), bredd)
 
     def _water_overlay(self, img: np.ndarray, frame) -> np.ndarray:
         """
@@ -901,6 +1062,7 @@ class WorldViewer:
                 f"fåra={100.0 * np.mean(wet == WET_CHANNEL):4.2f}%  "
                 f"markfukt={float(np.median(soil[land])) if land.any() else 0.0:.2f}"
                 + ("" if self.cfg.show_water else "  [vatten dolt W]")
+                + self._contour_hud(frame)
             )
         lines.append(
             f"grön=frisk→röd=döende  ljus=energi  gul ring=parningsredo  "
@@ -974,6 +1136,7 @@ class WorldViewer:
             img = np.where(self._pixel_valid[..., None], img, OUTSIDE_RGB)
         self._blit_rgb01(img)
 
+        self._draw_contours(frame)
         self._draw_agents(frame)
         self._draw_hud(frame)
 
