@@ -134,7 +134,10 @@ class Scenario:
         okänt = set(raw) - known
         if okänt:
             raise ValueError(f"okända fält i varld.terrang: {sorted(okänt)}")
-        return TerrainParams(**raw)
+        tp = TerrainParams(**raw)
+        if tp.former is not None and not isinstance(tp.former, list):
+            raise ValueError("varld.terrang.former måste vara en lista av former")
+        return tp
 
     @property
     def flora_seed_kg(self) -> float | None:

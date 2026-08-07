@@ -1,0 +1,42 @@
+# En värld med en placerad sjö.
+#
+# Terrängens strategiska lager är en lista av former; bruset är textur. Utan
+# `former` gäller de två inbyggda — polarhav och kontinentallutning — och
+# fältet blir bitidentiskt med tidigare. Med listan beskriver man i stället
+# vad världen ska ha, och fröet styr bara detaljen.
+#
+# Alla tal är i cellängder, samma enhet som vågrätt avstånd, eftersom
+# cellarean är 1. En bassäng på djup 1,2 är alltså lite mer än en cellbredd
+# djup. Positionerna är andel av utsträckningen, så samma fil ger samma
+# landskap vid 64x128 som vid 512x512.
+namn: geo-d-placerad-sjo
+varld:
+  bredd: 64
+  hojd: 128
+  bordighet: 4.0
+  terrang:
+    seed: 1
+    noise_sd: 0.17
+    lambda_max: 48.0
+    lambda_min: 3.0
+    beta: 2.4
+    base: 0.5
+    former:
+      # Havet där klimatet ändå är obeboeligt.
+      - {typ: polarhav, lat: 0.93, bredd: 0.06, djup: 2.2}
+      # Lutningen som organiserar dräneringen mot båda kusterna.
+      - {typ: lutning, styrka: 1.2}
+      # Insjön: en bred, grund sänka i den varma halvan.
+      # Djupet måste överstiga vad lutningen faller över bassängens egen bredd,
+      # annars dräneras den ut. Här faller lutningen 0,56 över 28 längdenheter.
+      - {typ: bassang, x: 0.45, y: 0.55, radie: 14.0, djup: 3.0}
+      # En bergsrygg tvärs kontinenten. Nederbörden har en orografisk
+      # modifierare, så regnskuggan uppstår av sig själv.
+      - {typ: rygg, fran: [0.05, 0.30], till: [0.95, 0.38], bredd: 5.0, hojd: 1.0}
+flora:
+  sadd: 2000.0
+  plantmassa: 1.32
+fauna:
+  antal: 0
+  insatts_vid: start
+  max_antal: 64

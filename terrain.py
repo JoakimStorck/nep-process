@@ -140,6 +140,14 @@ class TerrainParams:
     coast_width: float = 0.06
     sea_depth: float = 1.0
 
+    # Placerade former. `None` betyder de två inbyggda — polarhav och lutning —
+    # med parametrarna ovan, alltså exakt dagens terräng. Sätts listan tar den
+    # över helt, och `tilt`, `coast_lat`, `coast_width` och `sea_depth` läses
+    # inte längre: det finns då bara ett ställe som beskriver strukturen.
+    #
+    # Se `_shapes` för formtyperna.
+    former: list | None = None
+
 
 @_njit(cache=True, fastmath=True, parallel=True)
 def _synth(x, y, kx, ky, amp, phase, inv_Lx, inv_Ly, out):
@@ -203,6 +211,101 @@ def _modes(tp: TerrainParams, Lx: float, Ly: float, rng):
     return kx, ky, amp, phase
 
 
+def _shapes(grid, tp) -> np.ndarray:
+    """
+    De placerade formerna: terrängens strategiska lager.
+
+    **Bruset är textur, inte plan.** Ett fraktalt fält har ingen avsikt — det
+    ger detalj men kan inte ombes lägga en sjö någonstans. Verkliga landskap är
+    tektonik som ger struktur plus erosion som ger detalj, och den
+    arbetsfördelningen är den här funktionens hela poäng.
+
+    Polarhavet och kontinentallutningen var redan sådana former; de var bara
+    hårdkodade specialfall. Här blir de två poster i en lista bland andra, och
+    utan `former` i scenariot återges exakt de två.
+
+    **Positionerna är normerade världskoordinater**, alltså andel av
+    utsträckningen. En bassäng på (0,40, 0,55) betyder samma sak vid 64x128 som
+    vid 512x512 — nödvändigt eftersom världsstorleken ska bytas. Avstånden tas
+    med `grid.torus_delta_pos`, så former wrappar korrekt över sömmen.
+
+    **Formerna adderas med mjuk avtoning.** Addition bevarar den spektrala
+    tolkningen — bruset är också en summa — och två överlappande former
+    komponerar i stället för att den ena maskera den andra. Avtoningen är en
+    smoothstep, så ingen form har en kant.
+
+    Höjder och djup är i cellängder, samma enhet som allt annat vågrätt.
+    """
+    n = int(grid.n_cells)
+    out = np.zeros(n, dtype=np.float64)
+    forms = getattr(tp, "former", None)
+    if not forms:
+        return out
+
+    x = np.asarray(grid.cell_center_x, dtype=np.float64)
+    y = np.asarray(grid.cell_center_y, dtype=np.float64)
+    Lx = float(grid.extent_x)
+    Ly = float(grid.extent_y)
+    lat = np.abs(np.asarray(grid.cell_lat, dtype=np.float64))
+
+    def _wrapped_delta(px, py):
+        dx = x - px
+        dy = y - py
+        dx -= Lx * np.round(dx / Lx)
+        dy -= Ly * np.round(dy / Ly)
+        return dx, dy
+
+    for f in forms:
+        typ = str(f.get("typ", "")).strip().lower()
+
+        if typ in ("polarhav", "polar_sea"):
+            out -= float(f.get("djup", 1.0)) * _smoothstep(
+                float(f.get("lat", 0.93)) - float(f.get("bredd", 0.06)),
+                float(f.get("lat", 0.93)) + float(f.get("bredd", 0.06)),
+                lat,
+            )
+
+        elif typ in ("lutning", "tilt"):
+            # Stiger från polerna mot ekvatorn. Den form som organiserar
+            # dräneringen; se TerrainParams.tilt.
+            out += float(f.get("styrka", 1.0)) * (1.0 - lat)
+
+        elif typ in ("bassang", "bassäng", "basin", "kon", "cone"):
+            # En rund sänka eller ett massiv. Tecknet på `djup` respektive
+            # `hojd` avgör vilket, så det är en formtyp och inte två.
+            px = float(f.get("x", 0.5)) * Lx
+            py = float(f.get("y", 0.5)) * Ly
+            r = max(1e-9, float(f.get("radie", 10.0)))
+            amp = float(f.get("hojd", -float(f.get("djup", 1.0))))
+            dx, dy = _wrapped_delta(px, py)
+            d = np.hypot(dx, dy) / r
+            out += amp * (1.0 - _smoothstep(0.0, 1.0, np.minimum(d, 1.0)))
+
+        elif typ in ("rygg", "ridge"):
+            # En höjdrygg längs en sträcka. Avståndet tas till segmentet, så
+            # ryggen har ändar i stället för att vara en oändlig vägg.
+            ax, ay = [float(v) for v in f.get("fran", (0.2, 0.5))]
+            bx, by = [float(v) for v in f.get("till", (0.8, 0.5))]
+            ax *= Lx; ay *= Ly; bx *= Lx; by *= Ly
+            vx = bx - ax
+            vy = by - ay
+            vv = vx * vx + vy * vy
+            dxa, dya = _wrapped_delta(ax, ay)
+            t = 0.0 if vv <= 0.0 else np.clip((-dxa * vx - dya * vy) / vv, 0.0, 1.0)
+            dx = dxa + t * vx
+            dy = dya + t * vy
+            r = max(1e-9, float(f.get("bredd", 6.0)))
+            d = np.hypot(dx, dy) / r
+            out += float(f.get("hojd", 1.0)) * (
+                1.0 - _smoothstep(0.0, 1.0, np.minimum(d, 1.0))
+            )
+
+        else:
+            raise ValueError(f"okänd terrängform: {typ!r}")
+
+    return out
+
+
 def _smoothstep(a: float, b: float, x: np.ndarray) -> np.ndarray:
     if b <= a:
         return (x >= b).astype(np.float64)
@@ -242,14 +345,21 @@ def generate_elevation(grid, tp: TerrainParams) -> np.ndarray:
     land = (out / sd) if sd > 1e-300 else np.zeros_like(out)
     land = land * float(tp.noise_sd)
 
-    lat = np.abs(np.asarray(grid.cell_lat, dtype=np.float64))
-    sea = _smoothstep(
-        float(tp.coast_lat) - float(tp.coast_width),
-        float(tp.coast_lat) + float(tp.coast_width),
-        lat,
-    )
-    tilt = float(tp.tilt) * (1.0 - lat)
-    z = float(tp.base) + land + tilt - float(tp.sea_depth) * (1.0 + float(tp.tilt)) * sea
+    if tp.former is None:
+        # De två inbyggda formerna, uttryckta som en lista. Samma fält som
+        # förut, bara via samma väg som allt annat.
+        lat = np.abs(np.asarray(grid.cell_lat, dtype=np.float64))
+        sea = _smoothstep(
+            float(tp.coast_lat) - float(tp.coast_width),
+            float(tp.coast_lat) + float(tp.coast_width),
+            lat,
+        )
+        struct = (float(tp.tilt) * (1.0 - lat)
+                  - float(tp.sea_depth) * (1.0 + float(tp.tilt)) * sea)
+    else:
+        struct = _shapes(grid, tp)
+
+    z = float(tp.base) + land + struct
     return (float(tp.relief) * z).astype(np.float32, copy=False)
 
 

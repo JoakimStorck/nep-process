@@ -97,6 +97,56 @@ class Drainage:
         return int(self.lake_start.shape[0]) - 1
 
 
+def _ocean_mask(below: np.ndarray, neighbor_idx: np.ndarray) -> np.ndarray:
+    """
+    Havet är den största sammanhängande mängden under havsnivån, inte varje
+    cell under den.
+
+    Utan sammanhangstestet blir varje inlandssänka som råkar nå under noll ett
+    fantomhav: dränerad på näring som lämnar modellen, utan markvatten och
+    därmed obeboelig. Kaspiska havet och Döda havet ligger båda under
+    havsnivån och är sjöar; det är sammanhanget med oceanen som avgör, inte
+    höjden.
+
+    Felet fanns latent så länge havet bara skapades av polarsänkan, som är
+    sammanhängande av konstruktion. Det blev synligt först när terrängen fick
+    placerade former: en bassäng på djup 2,0 gav *mindre* sjöyta än en på 1,2,
+    eftersom botten föll under noll och omklassades till hav.
+
+    Det som ligger under noll men inte i oceanen lämnas åt prioritetsfloden,
+    som fyller det till sin tröskel — alltså till en sjö.
+    """
+    n = int(below.shape[0])
+    k = int(neighbor_idx.shape[1])
+    lab = np.full(n, -1, dtype=np.int32)
+    best = -1
+    best_size = 0
+    nlab = 0
+    for s0 in np.flatnonzero(below):
+        s0 = int(s0)
+        if lab[s0] >= 0:
+            continue
+        stack = [s0]
+        lab[s0] = nlab
+        size = 0
+        while stack:
+            c = stack.pop()
+            size += 1
+            row = neighbor_idx[c]
+            for j in range(k):
+                nb = int(row[j])
+                if below[nb] and lab[nb] < 0:
+                    lab[nb] = nlab
+                    stack.append(nb)
+        if size > best_size:
+            best_size = size
+            best = nlab
+        nlab += 1
+    if best < 0:
+        return np.zeros(n, dtype=bool)
+    return lab == best
+
+
 def _priority_flood(elev: np.ndarray, neighbor_idx: np.ndarray,
                     sea: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """
@@ -291,7 +341,7 @@ def build(grid, elevation: np.ndarray, sea_level: float = 0.0) -> Drainage:
         raise ValueError(f"elevation har längd {n}, förväntat {int(grid.n_cells)}")
     idx = np.ascontiguousarray(grid.neighbor_idx, dtype=np.int32)
 
-    sea = elev < float(sea_level)
+    sea = _ocean_mask(elev < float(sea_level), idx)
     filled, parent = _priority_flood(elev, idx, sea)
     to, slope = _flow_dirs(filled, idx, sea, parent,
                            float(np.asarray(grid.neighbor_dist)[0]))
