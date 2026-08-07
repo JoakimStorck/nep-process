@@ -1,0 +1,51 @@
+# Terrängvärlden i full storlek: 256x256 celler, alltså 2,8 x 2,4 kilometer och
+# 6,6 km². Åttio grundare i tre fläckar.
+#
+# Vad som skiljer mot `f5-terrang`, utöver storleken:
+#
+#   - reliefen är 53 meter i stället för 22, eftersom bandet skalar med världen
+#     sedan 7019 och amplituden följer Hurstexponenten
+#   - kurvorna i viewern hamnar på 5 meters ekvidistans i stället för 2,5
+#   - inkörningen är längre: floran sås till omkring en miljon plantor och
+#     självgallrar under de första tusentals ticken
+#
+# **Åttio grundare, inte tjugo.** Vid 64x128 var tjugo grundare i tre fläckar
+# rimligt; här är världen sexton gånger större till ytan, och tjugo djur skulle
+# ge en täthet på tre per kvadratkilometer. Åttio ger tolv, vilket ligger i
+# underkanten av vad en tvåkilos herbivor har i verkligheten (tio till hundra)
+# men är den täthet den tidigare kalibreringen faktiskt mätts vid.
+#
+# Fläckarna är fortfarande tre och radien fortfarande tjugo celler. Att sprida
+# åttio djur över hela världen vore att göra grundarproblemet värre, inte
+# bättre: den effektiva populationsstorleken har mätts till fem, och ett djur
+# som inte hittar en partner bidrar med ingenting.
+#
+# **Vänta med slutsatser till efter tick 15 000.** Inkörningen i en terrängvärld
+# är så lång, och näringsstocken faller mot sin urlakade jämvikt under den.
+namn: f6-256
+varld:
+  bredd: 256
+  hojd: 256
+  bordighet: 4.0
+  latitud: 48.0
+  kontinentalitet: 0.55
+  terrang:
+    seed: 1
+    lambda_max_frac: 0.75
+    lambda_min: 3.0
+    beta: 2.4
+    hav_andel: 0.20
+    hav_lutning: 1.0
+flora:
+  sadd: bordighet
+  plantmassa: 1.32
+fauna:
+  antal: 80
+  insatts_vid: start
+  flackar: 3
+  flackradie: 20.0
+  max_antal: 8192
+fysiologi:
+  fartskala: 0.5
+  sociability: 0.8
+  sociability_sd: 0.5
