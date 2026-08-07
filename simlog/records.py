@@ -236,12 +236,12 @@ def world_record(t: float, world: World, with_percentiles: bool = True) -> Dict[
         "C": stats(C) if with_percentiles else {"mean": float(C.mean()), "sum": float(C.sum())},
     }
 
-    # Temperaturfältet är legitim world-data; per cell sedan geometrin blev
-    # abstrakt. Bandprofilen räcker som sammanfattning — höjdmodifieraren är
-    # statisk och skulle bara flytta fördelningens vänstra svans.
-    T = getattr(world, "T_band", None)
+    # Temperaturen är luftens skalär sedan latituden föll. Den rumsliga
+    # spridningen ligger helt i den statiska höjdmodifieraren, som inte ändras
+    # över tid och därför inte hör hemma i en tidsserie — den loggas en gång
+    # med terrängen. Fördelningsmåtten faller därmed bort; kvar är talet.
+    T = getattr(world, "T_air", None)
     if T is not None:
-        T = np.asarray(T, dtype=np.float32)
-        s["T"] = stats(T) if with_percentiles else {"mean": float(T.mean()), "sum": float(T.sum())}
+        s["T"] = {"mean": float(T)}
 
     return {"event": "world", "summary": s}

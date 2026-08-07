@@ -74,17 +74,38 @@ class WorldParams:
     # -------------------------
     year_len: float = 12.0
 
-    # Mean temperature profile (latitudinal):
-    # T_mean(y) = T_eq - dT_pole * |lat(y)|^lat_p
-    T_eq: float = 30.0
-    dT_pole: float = 30.0
-    lat_p: float = 1.5
-
-    # Seasonal amplitude profile:
-    # A(y) = A_eq + (A_pole - A_eq) * |lat(y)|^amp_q
-    A_eq: float = 3.0
-    A_pole: float = 15.0
-    amp_q: float = 1.5
+    # Klimatet som **tidsprofil**:
+    #
+    #     T(t) = T_mean + T_amp * sin(2π t / year_len - season_phase0)
+    #
+    # Den rumsliga latitudgradienten är borta. Skälet står i
+    # `docs/varldens-skala.md`: en cell har arean 100 m², och även den största
+    # körbara världen — 4096x4096 celler, alltså 44x38 km — spänner 0,11 grader
+    # av jordens meridionella gradient. Modellen hade trettio. En klimatmodell
+    # byggd på latitud förutsätter en planet, och världen är en dalgång.
+    #
+    # Årstiden beror däremot inte alls på skalan: en dal på fyrtio kilometer har
+    # fullständigt normala årstider, samma sol och samma axellutning. Det som
+    # försvinner är att amplituden varierade med latitud, och att säsongstermen
+    # var proportionell mot den — hade profilen bara kollapsat till en konstant
+    # latitud hade årstiden följt med i fallet. Den har därför fått en egen
+    # amplitud, vilket är vad den alltid borde ha haft.
+    #
+    # **Nivån är ett val, inte en kalibrering.** Med en enda klimatzon är
+    # medeltemperaturen en fri parameter för första gången, och den sätts till
+    # ett tempererat inlandsklimat: årsmedel 11 grader, januari -1, juli 23.
+    # Det är en dalgång i södra Sverige eller norra Mellaneuropa.
+    #
+    # Alternativet var att bevara den gamla världens landmedel på 20,1 grader
+    # och därmed dess produktivitet. Det valdes bort. En subtropisk värld där
+    # tillväxten aldrig stannar har ingen vinter att överleva, och årstiden blir
+    # en modulering i stället för en ekologisk kraft. Priset är verkligt och
+    # mätt: termokostnaden går som (Tb_set - T_env) och stiger därmed 53 procent
+    # i medel, floran möter fyra månader då tillväxten är nära noll, och
+    # frånvaron av fröbank gör den vintern farligare än den vore i en färdig
+    # modell. De problemen ska lösas, inte undvikas.
+    T_mean: float = 11.0
+    T_amp: float = 12.0
 
     season_phase0: float = 0.0
 
@@ -196,12 +217,27 @@ class WorldParams:
     # Enheten för vatten är densamma som för höjd, eftersom fri yta är summan.
 
     # Nederbörd per månad vid referenstemperaturen, före orografi.
-    rain_base: float = 0.65
-    # Varm luft bär mer fukt — ungefär en fördubbling per tio grader. Eftersom
-    # temperaturen redan är en bandprofil med årstid faller våta tropiker,
-    # torra poler och en sommarregnperiod ut av sig själva, utan att någon av
-    # de tre kodas som regel och utan kostnad utöver n_bands.
-    rain_T_ref: float = 25.0
+    #
+    # Var 0,65 med referensen på 25 grader. Referensen låg då nära den gamla
+    # världens beboeliga mitt, så basen betydde ungefär "nederbörd på en
+    # normalt bördig plats". När klimatet blev en dalgång på 11 grader hade
+    # samma referens halverat nederbörden — inte som ett val utan som en
+    # kvarleva av en världsbild.
+    #
+    # Referensen är därför världens årsmedel, och basen den nederbörd som hör
+    # till det. Talet är satt så att **vattenbudgeten är oförändrad**: uppmätt
+    # landmedel av temperaturfaktorn var 0,897 i den gamla `f5-terrang`, och
+    # tidsmedlet vid amplitud 12 är 1,180 — alltså 0,65 · 0,897 / 1,180.
+    # Temperaturen ändras avsiktligt; vattnet ska inte följa med av misstag,
+    # eftersom hydrologins kalibrering hänger på det: sjöandel, fårlängd och
+    # antalet strandade celler.
+    rain_base: float = 0.320
+    # Varm luft bär mer fukt — ungefär en fördubbling per tio grader. Med
+    # klimatet som tidsprofil ger det en regnperiod på sommaren och en torr
+    # vinter, vilket är den kontinentala nederbördsfördelningen. Den rumsliga
+    # delen — våta tropiker och torra poler — föll med latituden; kvar rumsligt
+    # är bara det orografiska lyftet.
+    rain_T_ref: float = 11.0
     rain_T_doubling: float = 10.0
     # Orografiskt lyft: nederbörden växer med höjden. Ingen regnskugga — den
     # kräver en förhärskande vindriktning och hör till senare arbete.
@@ -622,11 +658,6 @@ class World:
             self.soil_water[:] = float(self.WP.soil_capacity)
             self.soil_water[dr.sea] = 0.0
             self._update_lake_levels()
-            # Bandindex per cell är statiskt. Att slå upp det varje tick vore
-            # ett fullt svep för information som geometrin bestämde en gång.
-            self._cell_bands = np.asarray(
-                self.grid.bands_of_cells(np.arange(nc)), dtype=np.int64
-            )
             self._n_land = int((~dr.sea).sum())
             # Numba-kärnan tar en array, inte en union av skalär och array. I
             # en terrängvärld finns alltid en modifierare; är lapse_rate noll
@@ -672,35 +703,20 @@ class World:
             "E_loss_decay": 0.0,
         }
 
-        # Klimatet är en bandegenskap: latituden varierar bara mellan band, och
-        # celler i samma band har identiskt klimat. Profilerna lagras därför per
-        # band, inte per cell — O(H) i stället för O(H*W) arbete varje tick.
+        # Klimatet är en **skalär i tiden plus en statisk modifierare i
+        # rummet**. Kadensdokumentet beskrev formen som *profil plus eventuella
+        # per-cell-modifierare*; profilen har nu längd ett.
         #
-        # Latitudprofilen är periodisk runt torusen: sydpol -> ekvator ->
-        # nordpol -> ekvator -> sydpol. Den tidigare linjära profilen slöt sig
-        # inte, och eftersom världen wrappar i y hamnade båda polerna kant i
-        # kant med en säsongsdiskontinuitet emellan.
+        # Det som föll är latituden, inte årstiden. Bandmaskineriet var därmed
+        # inte en optimering som togs bort utan en representation vars enda
+        # innehåll visade sig vara påhittat: att lagra `n_bands` tal som alla
+        # är samma tal är dyrare än att lagra ett.
         #
-        # Grid äger bandindelningen och latituden; klimatets tolkning av den
-        # ägs här.
-        lat = np.asarray(self.grid.band_lat, dtype=np.float32)
-        abs_lat = np.abs(lat)
+        # `T_air` är luftens temperatur i världen som helhet. Cellens
+        # temperatur är `T_air + _T_offset[cell]`, där modifieraren i dag bär
+        # höjden och senare kan bära kalluftsdränering.
+        self.T_air = np.float32(0.0)
 
-        self._lat = lat
-        self._abs_lat = abs_lat
-        self._Tmean_band = np.float32(self.WP.T_eq) - np.float32(self.WP.dT_pole) * (
-            abs_lat ** np.float32(self.WP.lat_p)
-        )
-        self._Amp_band = np.float32(self.WP.A_eq) + (np.float32(self.WP.A_pole) - np.float32(self.WP.A_eq)) * (
-            abs_lat ** np.float32(self.WP.amp_q)
-        )
-
-        # Senast beräknade klimatfält, per band
-        n_bands = int(self.grid.n_bands)
-        self.T_band = np.zeros(n_bands, dtype=np.float32)   # degC per band
-        self.g_band = np.ones(n_bands, dtype=np.float32)    # tillväxtgrind per band
-
-        # initialize temperature profiles at t=0
         self._update_temperature()
 
     def _build_T_offset(self):
@@ -737,27 +753,24 @@ class World:
     # Temperature / season
     # -------------------------
     def _update_temperature(self) -> None:
+        """
+        Årstiden. Ett sinusvarv per år kring `T_mean`, med amplituden som egen
+        parameter.
+
+        Tillväxtgrinden räknas inte här längre. Den var en bandvektor som ingen
+        läste — grinden behövs alltid per cell, eftersom höjdmodifieraren gör
+        den olika inom vad som en gång var ett band, och `_gate_from_T()` är
+        den enda vägen dit.
+        """
         WP = self.WP
         year_len = float(WP.year_len) if float(WP.year_len) > 1e-9 else 1.0
 
         phase = 2.0 * math.pi * ((self.t % year_len) / year_len)
         phase -= float(WP.season_phase0)
 
-        s = np.float32(math.sin(phase))
-        S_band = self._lat * s  # (n_bands,)
-
-        T_band = self._Tmean_band + self._Amp_band * S_band
-        self.T_band = T_band.astype(np.float32, copy=False)
-
-        T0 = float(WP.T0)
-        T1 = float(WP.T1)
-        if T1 <= T0 + 1e-9:
-            g_band = (T_band >= np.float32(T0)).astype(np.float32)
-        else:
-            g_band = (T_band - np.float32(T0)) / np.float32(T1 - T0)
-            g_band = np.clip(g_band, 0.0, 1.0).astype(np.float32, copy=False)
-
-        self.g_band = g_band
+        self.T_air = np.float32(
+            float(WP.T_mean) + float(WP.T_amp) * math.sin(phase)
+        )
 
     def _gate_from_T(self, T):
         """
@@ -773,7 +786,7 @@ class World:
 
     def temperature_of_cell(self, cell: int) -> float:
         """Temperatur i en cell. Den form biologin ska använda."""
-        T = float(self.T_band[self.grid.band_of_cell(cell)])
+        T = float(self.T_air)
         off = self._T_offset
         return T + (float(off[int(cell)]) if isinstance(off, np.ndarray) else float(off))
 
@@ -781,16 +794,17 @@ class World:
         """
         Temperatur för en mängd celler, utan att materialisera hela fältet.
 
-        Bandprofilen bär latitud och årstid; den statiska modifieraren bär
-        höjden. Summan är en per-cell-storhet, men den kostar bara två
-        gathers över den efterfrågade delmängden — inget svep över världen.
+        Skalären bär årstiden; den statiska modifieraren bär höjden. Summan är
+        en per-cell-storhet, men den kostar bara en gather över den
+        efterfrågade delmängden — inget svep över världen, och inget
+        bandindexuppslag.
         """
         cells = np.asarray(cells)
-        T = self.T_band[self.grid.bands_of_cells(cells)]
         off = self._T_offset
         if isinstance(off, np.ndarray):
-            return T + off[cells]
-        return T
+            return (np.float32(self.T_air) + off[cells]).astype(np.float32, copy=False)
+        return np.full(cells.shape, np.float32(self.T_air) + np.float32(off),
+                       dtype=np.float32)
 
     def growth_gate_of_cell(self, cell: int) -> float:
         return float(self._gate_from_T(self.temperature_of_cell(cell)))
@@ -832,10 +846,10 @@ class World:
     # -------------------------
     def temperature_pass(self) -> None:
         """
-        Uppdatera klimatprofilerna för aktuell tid.
+        Uppdatera klimatet för aktuell tid.
 
         Returnerar inget fält. Att materialisera temperaturen per cell vore
-        O(n_cells) arbete varje tick för information som ryms i n_bands värden,
+        O(n_cells) arbete varje tick för information som ryms i **ett** tal,
         och ingen anropare behövde det. Läsare använder temperature_of_cell()
         eller temperature_of_cells().
         """
@@ -983,18 +997,19 @@ class World:
             self._lake_level, self._lake_area,
         )
 
-    def _rain_band(self) -> np.ndarray:
+    def _rain_now(self) -> float:
         """
-        Nederbörd per band och tick, före orografi.
+        Nederbörd per månad, före orografi.
 
         Clausius–Clapeyron i förenklad form: mängden fördubblas per
-        `rain_T_doubling` grader. Profilen är därmed en funktion av `T_band`,
-        som redan bär både latitud och årstid — våta tropiker, torra poler och
-        sommarregn utan att någon av dem kodas.
+        `rain_T_doubling` grader. Den är därmed en funktion av `T_air`, som bär
+        årstiden — en regnperiod på sommaren och en torr vinter faller ut utan
+        att någon av dem kodas. Den rumsliga delen föll med latituden; kvar
+        rumsligt är `_oro`.
         """
         WP = self.WP
-        dT = (self.T_band.astype(np.float64) - float(WP.rain_T_ref))
-        return float(WP.rain_base) * np.exp2(dT / max(1e-9, float(WP.rain_T_doubling)))
+        dT = float(self.T_air) - float(WP.rain_T_ref)
+        return float(WP.rain_base) * 2.0 ** (dT / max(1e-9, float(WP.rain_T_doubling)))
 
     def hydro_pass(self) -> tuple[float, float]:
         """
@@ -1017,9 +1032,9 @@ class World:
         T0 = float(WP.T0)
         T_span = max(1e-9, float(WP.T1) - T0)
         hydro_soil_pass(
-            self.soil_water, self._cell_bands,
-            self._rain_band() * dt,
-            self.T_band.astype(np.float64), self._T_offset_arr,
+            self.soil_water,
+            self._rain_now() * dt,
+            float(self.T_air), self._T_offset_arr,
             T0, T_span, self._oro,
             float(WP.et_max) * dt,
             float(WP.soil_capacity),

@@ -454,8 +454,11 @@ def frame_from_pop(pop, births_total: int = 0, deaths_total: int = 0,
         fauna_predation=fa["predation"],
         fauna_gest_frac=fa["gest_frac"],
         fauna_ready=fa["ready"],
-        T_band=np.asarray(getattr(world, "T_band", np.zeros(0)), dtype=np.float32).copy(),
-        band_lat=np.asarray(getattr(grid, "band_lat", np.zeros(0)), dtype=np.float32).copy(),
+        # Klimatet är en skalär sedan latituden föll. Fältet behålls som en
+        # array av längd ett tills viewerns HUD skrivs om — protokollet är
+        # oförändrat, och profilen har bara krympt till sin sanna längd.
+        T_band=np.asarray([getattr(world, "T_air", 0.0)], dtype=np.float32),
+        band_lat=np.zeros(1, dtype=np.float32),
         flora_n=int(fl.size),
         flora_mass=flora_mass,
         flora_summary=summary,

@@ -31,10 +31,11 @@ följer av jämviktsantagandet. In är nederbörd, ut är avdunstning plus det s
 når havet.
 
 **Nederbörden följer temperaturen.** Varm luft bär mer fukt, ungefär en
-fördubbling per tio grader, och temperaturen är redan en bandprofil med
-årstid. Det ger våta tropiker, torra poler och en regnperiod på sommaren utan
-att någon av de tre kodas som en regel — och det kostar ingenting, eftersom
-profilen har längd `n_bands`.
+fördubbling per tio grader, och temperaturen bär årstiden. Det ger en
+regnperiod på sommaren och en torr vinter utan att någon av dem kodas som en
+regel — och det kostar ingenting, eftersom nederbörden är ett tal. Den rumsliga
+fördelningen — våta tropiker, torra poler — föll med latituden; kvar är det
+orografiska lyftet.
 
 **Vad som inte finns här.** Ingen regnskugga: den kräver en förhärskande
 vindriktning, och den orografiska modifieraren är tills vidare bara höjdlyft.
@@ -64,7 +65,7 @@ except Exception:  # pragma: no cover - beror på miljön
 
 
 @_njit(cache=True, fastmath=True, parallel=True)
-def soil_pass(soil, bands, rain_band, T_band, T_off, T0, T_span, oro,
+def soil_pass(soil, rain_dt, T_air, T_off, T0, T_span, oro,
               et_max_dt, capacity, baseflow_k, sea, lake_id, water,
               submerged_thr, runoff, acc):
     """
@@ -74,13 +75,13 @@ def soil_pass(soil, bands, rain_band, T_band, T_off, T0, T_span, oro,
     avdunstningsfälten i numpy först kostade fem täta temporärer per tick och
     stod för sju av åtta millisekunder vid 262 144 celler — samma
     representationsfel som `docs/varldens-kadensmodell.md` hittade i
-    temperaturen. Profilerna har längd `n_bands`; uppslaget är en gather.
+    temperaturen. Nederbörd och lufttemperatur är skalärer sedan latituden
+    föll; det rumsliga bärs av `oro` och `T_off`.
 
-    **Tillväxtgrinden räknas per cell, inte per band.** Temperaturen är
-    bandprofilen plus höjdens statiska modifierare, och grinden är en klippt
-    linjär funktion av den summan — alltså inte konstant inom ett band. Att
-    räkna den här kostar ingenting: svepet går ändå över varje cell, och
-    alternativet vore ett tätt fält som materialiseras och kastas.
+    **Tillväxtgrinden räknas per cell.** Temperaturen är luftens skalär plus
+    höjdens statiska modifierare, och grinden är en klippt linjär funktion av
+    den summan. Att räkna den här kostar ingenting: svepet går ändå över varje
+    cell, och alternativet vore ett tätt fält som materialiseras och kastas.
 
     Ordningen är nederbörd, avdunstning, mättnadsöverskott, basflöde. Att lägga
     avdunstningen före överskottet gör att ett regn som ändå avdunstar aldrig
@@ -105,15 +106,14 @@ def soil_pass(soil, bands, rain_band, T_band, T_off, T0, T_span, oro,
             runoff[i] = soil[i]
             soil[i] = 0.0
             continue
-        b = bands[i]
-        p = rain_band[b] * oro[i]
+        p = rain_dt * oro[i]
         s = soil[i] + p
         p_tot += p
 
         # Avdunstningen avtar med torrhet: full potential vid mättnad, noll vid
         # tom mark. Utan den termen torkar marken ut till exakt noll och
         # markfuktigheten blir en binär grind i stället för en gradient.
-        T = T_band[b] + T_off[i]
+        T = T_air + T_off[i]
         g = (T - T0) / T_span
         if g < 0.0:
             g = 0.0

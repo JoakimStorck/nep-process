@@ -2524,6 +2524,8 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | 7010 | vattendjupet som fjärde världskanal och fri MLP-ingång | selektionen | öppen |
 | ~~7010~~ | ~~vattenaxeln som nisch~~ | | **slås ihop med 7009** |
 | ~~7011~~ | ~~glesning av hydro~~ | | **utgår**, se nedan |
+| ~~7013~~ | klimatet som tidsprofil; latituden faller ur världsmodellen | hela världen | **klart**, se nedan |
+| 7014 | världens position på en jordlik planet; klimatet härlett ur latitud och kontinentalitet | klimatet, fotoperioden | öppen |
 | ~~1010~~ | viewern visar terräng och vatten; världen klassar, viewern färgar | ögat | **klart** |
 | ~~1011~~ | höjden skickas en gång vid handskakningen | bandbredd | **klart**, protokoll 6 |
 
@@ -2610,6 +2612,60 @@ Konsekvenserna, som alla är verkliga:
 **Faunans fart är inte löst.** Att höja den tvåhundra gånger går inte — taket är omkring en cellbredd per tick, alltså femtio gånger, och även det är tio gånger under det realistiska. Antingen kortas tidssteget, eller så accepteras att faunan är långsammare än sin kropp motiverar, eller så byts kroppsstorleken. Det är den viktigaste öppna frågan i modellen.
 
 **Lapse rate kan inte sättas förrän skalorna är ense.** Patch 7010 var påbörjad och lades åt sidan av det skälet: att kalibrera ett tal mot en enhet vi vet är trasig är samma fel som lutningen hade så länge höjden saknade enhet.
+
+### Klimatet blev en tidsprofil (7013)
+
+Latituden är borta ur världsmodellen. `T_band` med längd `n_bands` är en skalär `T_air`, och `T(t) = T_mean + T_amp · sin(2π t / year_len − season_phase0)`. Bandmaskineriet i klimatet, `g_band`, `_cell_bands` och soil-kärnans två arrayargument föll med den.
+
+**Årstiden hade följt med i fallet om formen bara kollapsat.** Säsongstermen var `lat · sin(fas)`, alltså proportionell mot latituden, så en konstant latitud hade tagit årstiden med sig. Amplituden är därför en egen parameter nu, vilket den alltid borde ha varit.
+
+**Grindvektorn per band hade noll läsare.** Den räknades varje tick och skrevs till `g_band`; varje faktisk läsare gick via `_gate_from_T()`, eftersom grinden behövs per cell så snart höjdmodifieraren finns. Samma sorts fynd som `water_heatloss_gain` och `cold_aversion`: en storhet som beräknas och aldrig konsumeras.
+
+**Nivån är ett val, och den valdes till ett tempererat inlandsklimat**: årsmedel 11 grader, januari −1, juli 23. Alternativet var att bevara den gamla världens landmedel på 20,1 och därmed dess produktivitet. En värld där tillväxten aldrig stannar har ingen vinter att överleva, och årstiden blir en modulering i stället för en ekologisk kraft.
+
+Priset är mätt och verkligt:
+
+- **Termokostnaden stiger 53 procent i medel.** `P_need = K · (Tb_set − T_env)` är linjär i skillnaden, som går från 16,9 till 26,0 grader. På vintern är den 124 procent över dagens medel.
+- **Fröbanken saknas fortfarande**, vilket gör en vinter farligare än den vore i en färdig modell. Vid amplitud 12 bottnar tillväxtgrinden på 0,42 och stannar aldrig helt, vilket är den försiktiga vägen tills fröbanken finns.
+
+**Florans respons hänger inte på klimatets nivå.** Den är gaussisk kring individens `temp_opt`, en evolverande trait med spannet −5 till 35 grader, medan `T0/T1`-grinden i praktiken bara styr evapotranspirationen. Uppmätt i `f5-terrang`, seed 2, 3 000 tick: 64 025 plantor i det kalla klimatet mot 53 118 i det gamla. Floran klarar sig alltså **bättre**, tvärtemot vad en kalkyl på tillväxtgrinden skulle förutsagt.
+
+**Nederbördens referens var en kvarleva.** `rain_T_ref = 25` låg nära den gamla världens beboeliga mitt; i en dalgång på 11 grader hade samma referens halverat regnet utan att någon valt det. Referensen är nu världens årsmedel, och `rain_base` satt så att **ariditeten bevaras**, alltså P/PET och inte P: ett kallare klimat har lägre potentiell avdunstning, och att hålla nederbörden konstant medan PET faller vore att smyga in en våtare värld i en klimatpatch. Talet är `0,494 · 0,532/0,821 = 0,320`.
+
+Uppmätt vid 3 000 tick, `f5-terrang`, seed 2:
+
+```
+rain_base    fåror    sjömagasin   markfukt   flora    fauna
+0,65 (före)  0,58 %      3,23        0,81     53 118     2
+0,494        3,06 %      7,09        1,00     66 740     0
+0,400        0,22 %      0,42        0,97     65 978     0
+0,320        0,00 %      3,92        0,84     64 025     0
+```
+
+**Sjömagasinet är icke-monotont i nederbörden** — 0,42 vid 0,400 mot 3,92 vid 0,320 — så en ögonblicksbild av ett tröskelberoende mått skiljer inte kandidaterna. Talet står därför på principen och inte på mätningen, och räknas om när 7014 ger klimatet sin nivå.
+
+**Faunan dog i alla fyra körningarna, referensen inräknad** — den gick från 20 grundare till 2 individer. Klimatsänkningen påskyndade det men orsakade det inte: `f5-terrang` bar inte faunan innan heller. Se den öppna frågan nedan.
+
+**Bitidentiteten för `f4-start20` upphör här, och det är riktigt.** Kravet gällde att en platt värld inte ska påverkas av terrängburna mekanismer, och det står. Men klimatet är inte terrängburet: latituden var fel i varje värld, inte bara i dem med höjdskillnader. Att behålla den för platta scenarier vore att bevara just det maskineri som ska dö. Ersättningen är ett **ekvivalenstest**: med klimatet gjort rumsligt och tidsmässigt konstant i båda ändarna — `dT_pole = A_eq = A_pole = 0` före, `T_amp = 0` efter, samma medeltemperatur — är 1 500 tick av `f4-start20` bitidentiska, samma `md5` på `life.jsonl` och identisk konsolutskrift. Det visar att ingen annan väg än klimatets form har rubbats. `f4-start20` behöver en ny baslinje; de gamla talen i det här dokumentet är förklimatkollaps.
+
+### Klimatet får en position (7014)
+
+`T_mean` och `T_amp` är valda tal, inte härledda. Nästa patch gör dem till en följd av **var världen ligger på en jordlik planet**: latitud plus kontinentalitet.
+
+Det är inte en återkomst av latitudgradienten. Världen ligger *på* en breddgrad — den spänner inte över flera — så latituden blir en `WorldParams`-skalär och inte ett cellfält. Lagerplaceringen blir dessutom riktigare än den var: `Grid` skulle aldrig ha ägt latituden.
+
+Vad som är beräkningsbart och vad som inte är det:
+
+- **Dagslängd och insolation är exakt astronomi**, utan en enda kalibrerad konstant. Vid 55 grader: 6,9 timmars vinterdag mot 17,1 om sommaren, och årsmedelinsolationen faller från 415 W/m² vid ekvatorn till 260.
+- **Temperaturen kräver kontinentalitet.** Köpenhamn och Moskva ligger båda på 55–56 grader nord och skiljer 9 mot 5,8 grader i årsmedel och 8 mot 14,5 i amplitud. Skillnaden är havets termiska tröghet, inte solen. Termisk eftersläpning — varmast i juli och inte i juni — faller ut ur samma parameter.
+- **Nederbörden ska inte härledas.** Sahara och monsun-Indien ligger båda kring 20 grader nord och skiljer tre tusen millimeter. Latitud ger Hadleycellernas tendens, men spridningen inom en breddgrad är större än signalen.
+- **Longitud ger ingenting** utan en karta över planeten. Utelämnas hellre än införs som en parameter utan läsare.
+- **Dygnet kan inte vara en cykel.** `dt` är 14,6 timmar, alltså längre än dygnet, och en dygnsvariation som tidsserie skulle aliasa — samma klass av fel som det CFL-begränsade hydroschemat. Dygnets *amplitud* är däremot en legitim statisk parameter, och den har en väntande konsument: kalluftsdränering är ett nattfenomen, och dess styrka går som dygnsamplituden.
+
+**Fotoperioden är sannolikt större än klimatet.** Modellen har i dag ingen säsong i ljuset alls, bara i temperaturen, medan floran redan har ljuskonkurrens via Beer–Lambert. Och dagslängd är en brusfri kalender: ett varmt februaridygn lurar inte en organism som räknar timmar. Faunans häckningsfas läser i dag temperaturen, vilket är den svaga signalen; med fotoperiod finns en ärlig, och vilken dagslängd som utlöser häckning blir en trait att evolvera.
+
+Avgränsningen är viktig: **en uppslagsformel, inte en klimatmodell.** Astronomin exakt, temperaturen som en regression i två variabler kalibrerad mot jordens klimatologi en gång och sedan statisk. Växer det till albedo, moln och havsvärmetransport har vi bytt projekt.
+
 
 ### Öppna frågor efter Steg 7
 

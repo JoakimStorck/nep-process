@@ -395,7 +395,7 @@ Ett världsfält har både en ägare och en kadens. Ägaren säger vem som skriv
 
 **Statiska** — sveps aldrig. Är värdet dessutom rumsligt konstant lagras det som skalär, inte som array; fältet materialiseras först när något faktiskt varierar det. `elevation` och forcing-fälten så länge de är parametriska.
 
-**Profilberoende** — fältet är en funktion av en enda koordinat och lagras som sådan. Klimatet varierar bara med latitud och lagras därför per band, med längd `n_bands` i stället för `n_cells`. Läsning är en gather via `Grid.band_of_cell()`, inte en omberäkning. Formen är *profil plus eventuella per-cell-modifierare*: modifieraren kan vara frånvarande och kostar då ingenting.
+**Profilberoende** — fältet är en funktion av en enda koordinat och lagras som sådan, i formen *profil plus eventuella per-cell-modifierare*, där modifieraren kan vara frånvarande och då inte kostar något. Klimatet var klassens instans så länge det varierade med latitud och lagrades per band. Det gör det inte längre: världen är ett landskap och inte en planet, så klimatet är en skalär i tiden plus höjdens statiska modifierare — samma form med profillängd ett. Se `docs/varldens-skala.md`. Klassen står kvar som form; den väntar på nästa fält som faktiskt varierar med en enda koordinat.
 
 **Glest dynamiska** — fältet bär en aktiv mängd och pass arbetar mot den. Kontraktet är att en cell utanför den aktiva mängden är exakt noll, vilket gör glesheten till en prövbar egenskap i stället för ett antagande. `detritus` och `carcass`.
 
