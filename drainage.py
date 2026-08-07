@@ -64,7 +64,8 @@ class Drainage:
     filled       f32[n]   fylld höjd; över `elevation` inne i en sänka
     flow_to      i32[n]   granne nedströms; -1 bara i havet och i en sänka utan
                           utlopp
-    slope        f32[n]   höjdfall mot flow_to i fylld höjd
+    slope        f32[n]   **gradient** mot flow_to: höjdfall genom grannavstånd,
+                          alltså dimensionslös. 0,05 betyder fem procents lutning
     flow_order   i32[n]   topologisk ordning, källa -> mynning
     sea          bool[n]  under havsnivån
     lake_id      i32[n]   -1 utanför sjö
@@ -156,12 +157,17 @@ def _priority_flood(elev: np.ndarray, neighbor_idx: np.ndarray,
 
 
 @_njit(cache=True)
-def _flow_dirs(filled, neighbor_idx, sea, parent):
+def _flow_dirs(filled, neighbor_idx, sea, parent, nb_dist):
     """
     Brantaste fallet där ett fall finns, flodträdet där det inte gör det.
 
     Sluttningar dräneras därmed efter sin egen gradient, medan plana ytor —
-    sjöar och utfyllda sänkor — följer trädet till tröskeln. Blandningen är
+    sjöar och utfyllda sänkor — följer trädet till tröskeln.
+
+    `slope` är en verklig gradient: höjdfallet delat med grannavståndet. Utan
+    delningen är talet en höjdskillnad och inte en lutning, och varje
+    parameter som läser det tappar sin dimensionslöshet. På hex är delningen
+    gratis eftersom alla sex grannar ligger på exakt samma avstånd. Blandningen är
     acyklisk: den fyllda höjden avtar aldrig längs en väg, och de plana
     partierna följer ett träd rotat i havet.
     """
@@ -184,7 +190,7 @@ def _flow_dirs(filled, neighbor_idx, sea, parent):
             best = parent[i]
             bestd = 0.0
         to[i] = best
-        slope[i] = bestd
+        slope[i] = bestd / nb_dist
     return to, slope
 
 
@@ -287,7 +293,8 @@ def build(grid, elevation: np.ndarray, sea_level: float = 0.0) -> Drainage:
 
     sea = elev < float(sea_level)
     filled, parent = _priority_flood(elev, idx, sea)
-    to, slope = _flow_dirs(filled, idx, sea, parent)
+    to, slope = _flow_dirs(filled, idx, sea, parent,
+                           float(np.asarray(grid.neighbor_dist)[0]))
 
     lake_id, groups = _label_lakes(filled, elev, idx, sea)
 

@@ -67,6 +67,36 @@ class TerrainParams:
     """
 
     seed: int = 1
+
+    # Brusets standardavvikelse i **cellängder**.
+    #
+    # Höjd, vattendjup och vågrätt avstånd delar en enda längdenhet: cellarean
+    # är 1, alltså är cellbredden 1,07 och grannavståndet detsamma. Att uttrycka
+    # höjden i samma enhet gör lutningen till en verklig dimensionslös gradient
+    # och varje höjdtal läsbart — en bassäng på djup 0,8 är fyra femtedelar av
+    # en cellbredd djup, och det går att resonera om.
+    #
+    # Tidigare normerades bruset till spannet [0, 1] och skalades med `relief`.
+    # Det gav fast spann men **seedberoende spridning** — uppmätt 0,142 till
+    # 0,197 över fem frön — så amplituden var inte en höjd utan ett spann, och
+    # ett tal som `tilt: 1.2` betydde olika saker i olika världar.
+    #
+    # Normeringen sker nu mot den *analytiska* standardavvikelsen,
+    # `sqrt(Σ amp² / 2)` för en summa cosinus med slumpfaser. Den är exakt och
+    # seedoberoende, så fältets spridning blir `noise_sd` oavsett frö och
+    # oavsett hur bandet väljs.
+    noise_sd: float = 0.17
+
+    # Kontinentens grundhöjd över havsnivån, i cellängder, före lutning och
+    # brus. Egen parameter sedan bruset blev nollcentrerat: tidigare låg det i
+    # [0, 1] och bar en halv enhets grundhöjd som bieffekt av normeringen.
+    # Hur högt landet ligger över havet är en storhet i sin egen rätt och ska
+    # inte vara en artefakt av hur bruset skalades.
+    base: float = 0.5
+
+    # Global multiplikator på hela höjdfältet. Kvar för bakåtkompatibilitet och
+    # för att kunna skala en hel värld i ett grepp; 1,0 betyder att talen ovan
+    # gäller som de står.
     relief: float = 1.0
 
     # Bandets ändar i cellbredder. `lambda_max` bör ligga under världens
@@ -204,9 +234,13 @@ def generate_elevation(grid, tp: TerrainParams) -> np.ndarray:
                 2.0 * math.pi * (kx[j] * x / Lx + ky[j] * y / Ly) + phase[j]
             )
 
-    lo = float(out.min())
-    hi = float(out.max())
-    land = (out - lo) / (hi - lo) if hi - lo > 1e-30 else np.zeros_like(out)
+    # Analytisk normering: variansen hos en summa av cosinus med oberoende
+    # slumpfaser är summan av amplituderna i kvadrat genom två. Att dela med
+    # den ger ett fält med standardavvikelse ett oavsett frö och band, till
+    # skillnad från en normering mot det realiserade min och max.
+    sd = math.sqrt(float((amp ** 2).sum()) * 0.5)
+    land = (out / sd) if sd > 1e-300 else np.zeros_like(out)
+    land = land * float(tp.noise_sd)
 
     lat = np.abs(np.asarray(grid.cell_lat, dtype=np.float64))
     sea = _smoothstep(
@@ -215,7 +249,7 @@ def generate_elevation(grid, tp: TerrainParams) -> np.ndarray:
         lat,
     )
     tilt = float(tp.tilt) * (1.0 - lat)
-    z = land + tilt - float(tp.sea_depth) * (1.0 + float(tp.tilt)) * sea
+    z = float(tp.base) + land + tilt - float(tp.sea_depth) * (1.0 + float(tp.tilt)) * sea
     return (float(tp.relief) * z).astype(np.float32, copy=False)
 
 
