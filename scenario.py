@@ -47,6 +47,16 @@ class VarldSpec:
     # En multiplikator på näringsflödet. Skalar nutrient_input, nutrient_init
     # och detritus_init tillsammans, eftersom jämvikten är linjär i flödet.
     bordighet: float = 1.0
+    # Världens position på planeten. Klimatet härleds ur de två — se
+    # `klimat.py`. Latituden är världens som helhet och inte ett fält över
+    # celler: en dalgång på en kilometer ligger *på* en breddgrad. Negativ
+    # latitud lägger världen på södra halvklotet och inverterar årstiden.
+    #
+    # Kontinentalitet 0 är en ö i havet, 1 är mitt i en landmassa. Den styr
+    # årstidens djup och dess eftersläpning mot solen, alltså underlagets
+    # termiska tröghet — samma breddgrad kan bära Dublin och Irkutsk.
+    latitud: float = 48.0
+    kontinentalitet: float = 0.55
     # Terrängen. Utelämnad eller None ger en platt värld, vilket är vad varje
     # scenario före Steg 7 antog — de behöver därför inte ändras. Nycklarna är
     # fälten i terrain.TerrainParams; okända nycklar är fel, inte tystnad.

@@ -2525,7 +2525,8 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~7010~~ | ~~vattenaxeln som nisch~~ | | **slås ihop med 7009** |
 | ~~7011~~ | ~~glesning av hydro~~ | | **utgår**, se nedan |
 | ~~7013~~ | klimatet som tidsprofil; latituden faller ur världsmodellen | hela världen | **klart**, se nedan |
-| 7014 | världens position på en jordlik planet; klimatet härlett ur latitud och kontinentalitet | klimatet, fotoperioden | öppen |
+| ~~7014~~ | världens position på en jordlik planet; klimatet härlett ur latitud och kontinentalitet | klimatet, fotoperioden | **klart**, se nedan |
+| 7015 | fotoperioden med florans ljusbudget som första läsare | floran, fenologin | öppen |
 | ~~1010~~ | viewern visar terräng och vatten; världen klassar, viewern färgar | ögat | **klart** |
 | ~~1011~~ | höjden skickas en gång vid handskakningen | bandbredd | **klart**, protokoll 6 |
 
@@ -2648,24 +2649,50 @@ rain_base    fåror    sjömagasin   markfukt   flora    fauna
 
 **Bitidentiteten för `f4-start20` upphör här, och det är riktigt.** Kravet gällde att en platt värld inte ska påverkas av terrängburna mekanismer, och det står. Men klimatet är inte terrängburet: latituden var fel i varje värld, inte bara i dem med höjdskillnader. Att behålla den för platta scenarier vore att bevara just det maskineri som ska dö. Ersättningen är ett **ekvivalenstest**: med klimatet gjort rumsligt och tidsmässigt konstant i båda ändarna — `dT_pole = A_eq = A_pole = 0` före, `T_amp = 0` efter, samma medeltemperatur — är 1 500 tick av `f4-start20` bitidentiska, samma `md5` på `life.jsonl` och identisk konsolutskrift. Det visar att ingen annan väg än klimatets form har rubbats. `f4-start20` behöver en ny baslinje; de gamla talen i det här dokumentet är förklimatkollaps.
 
-### Klimatet får en position (7014)
+### Klimatet fick en position (7014)
 
-`T_mean` och `T_amp` är valda tal, inte härledda. Nästa patch gör dem till en följd av **var världen ligger på en jordlik planet**: latitud plus kontinentalitet.
+`T_mean` och `T_amp` var valda tal. De är nu följder av **var världen ligger på en jordlik planet**: `latitud` och `kontinentalitet`, två tal i scenariot. Regeln ligger i `klimat.py`, som är fysiklager — den äger inget tillstånd och rör inga cellfält. Världslagret tillämpar den en gång vid världens tillkomst, och därefter är klimatets tre tal konstanter under hela körningen.
 
-Det är inte en återkomst av latitudgradienten. Världen ligger *på* en breddgrad — den spänner inte över flera — så latituden blir en `WorldParams`-skalär och inte ett cellfält. Lagerplaceringen blir dessutom riktigare än den var: `Grid` skulle aldrig ha ägt latituden.
+Det är inte en återkomst av latitudgradienten. Världen ligger *på* en breddgrad — den spänner inte över flera — så latituden är en `WorldParams`-skalär och inte ett cellfält. `Grid` skulle aldrig ha ägt `cell_lat`.
 
-Vad som är beräkningsbart och vad som inte är det:
+**Anpassningen.** Sjutton stationer från Singapore till Jakutsk, var och en höjdkorrigerad till havsnivå med 6,5 grader per kilometer innan anpassningen — utan den skulle Ulan Bators tolvhundra meter räknas två gånger när modellens egen lapse rate lägger på höjden.
 
-- **Dagslängd och insolation är exakt astronomi**, utan en enda kalibrerad konstant. Vid 55 grader: 6,9 timmars vinterdag mot 17,1 om sommaren, och årsmedelinsolationen faller från 415 W/m² vid ekvatorn till 260.
-- **Temperaturen kräver kontinentalitet.** Köpenhamn och Moskva ligger båda på 55–56 grader nord och skiljer 9 mot 5,8 grader i årsmedel och 8 mot 14,5 i amplitud. Skillnaden är havets termiska tröghet, inte solen. Termisk eftersläpning — varmast i juli och inte i juni — faller ut ur samma parameter.
-- **Nederbörden ska inte härledas.** Sahara och monsun-Indien ligger båda kring 20 grader nord och skiljer tre tusen millimeter. Latitud ger Hadleycellernas tendens, men spridningen inom en breddgrad är större än signalen.
-- **Longitud ger ingenting** utan en karta över planeten. Utelämnas hellre än införs som en parameter utan läsare.
-- **Dygnet kan inte vara en cykel.** `dt` är 14,6 timmar, alltså längre än dygnet, och en dygnsvariation som tidsserie skulle aliasa — samma klass av fel som det CFL-begränsade hydroschemat. Dygnets *amplitud* är däremot en legitim statisk parameter, och den har en väntande konsument: kalluftsdränering är ett nattfenomen, och dess styrka går som dygnsamplituden.
+```
+T_mean = 25,93 - 49,20*(phi/100)^2 + k*(4,83 - 50,35*(phi/100)^2)    residual 1,96 °C
+T_amp  = (4,51 + 21,73*k) * sin|phi|                                  residual 2,13 °C
+eftersläpning = 2,0 - 1,0*k månader
+```
 
-**Fotoperioden är sannolikt större än klimatet.** Modellen har i dag ingen säsong i ljuset alls, bara i temperaturen, medan floran redan har ljuskonkurrens via Beer–Lambert. Och dagslängd är en brusfri kalender: ett varmt februaridygn lurar inte en organism som räknar timmar. Faunans häckningsfas läser i dag temperaturen, vilket är den svaga signalen; med fotoperiod finns en ärlig, och vilken dagslängd som utlöser häckning blir en trait att evolvera.
+Residualen är storleken på det en position inte kan veta: havsströmmar, molnighet, regnskuggor. Utfallet:
 
-Avgränsningen är viktig: **en uppslagsformel, inte en klimatmodell.** Astronomin exakt, temperaturen som en regression i två variabler kalibrerad mot jordens klimatologi en gång och sedan statisk. Växer det till albedo, moln och havsvärmetransport har vi bytt projekt.
+```
+ lat      k=0,0            k=0,5            k=1,0        (T_mean / T_amp)
+   0    25,9 /  0,0      28,3 /  0,0      30,8 /  0,0
+  20    24,0 /  1,5      25,4 /  5,3      26,8 /  9,0
+  40    18,1 /  2,9      16,4 /  9,9      14,8 / 16,9
+  55    11,0 /  3,7       5,8 / 12,6       0,6 / 21,5
+  66     4,5 /  4,1      -4,1 / 14,0     -12,6 / 24,0
+```
 
+**Kontinuiteten föll ut av sig själv.** 7013:s handvalda 11,0 / 12,0 motsvarar latitud 47,9 och kontinentalitet 0,54. Förvalet är därför 48,0 / 0,55, vilket ger 10,9 / 12,2 — patchen ändrar klimatets *härledning* utan att flytta dess *värde*. Med de tre talen tvingade till 7013:s och eftersläpningen till noll är 800 tick av `f4-start20` bitidentiska, samma `md5` på `life.jsonl`.
+
+**Tre saker som faller ut utan att kodas:**
+
+- **Södra halvklotet.** Negativ latitud inverterar årstiden, exakt sex månader förskjuten. Det följer av latitudens tecken och kostar en multiplikation.
+- **Termisk eftersläpning.** Varmaste månaden ligger efter solståndet, en månad i inlandet och två vid kusten, eftersom underlaget lagrar värme. Den gör `t = 0` till astronomisk vårdagjämning i stället för till termiskt medel: startklimatet är nu 2,6 grader och stigande i stället för 10,9. Sådden sker alltså i sen vinter, vilket är rätt tid att så.
+- **Nederbördens referens.** `rain_T_ref` var ett fast tal och är nu världens egen årsmedeltemperatur. Ett fast tal var det som gjorde 25 grader till en kvarleva; flyttas världen norrut utan att referensen följer med torkar den ut av ett tal ingen valt.
+
+**Vad som medvetet inte gjordes.** Fotoperioden och dygnsamplituden hör hit fysiskt men saknar läsare, och en mekanism utan konsument är precis det fel projektet hittat hos sig självt fyra gånger — `water_heatloss_gain`, `cold_aversion`, `nutrient` som allokerades och aldrig rördes, `g_band`. Longitud ger dessutom ingenting utan en karta över planeten och infördes inte alls.
+
+**Kända svagheter i formeln**, dokumenterade i `klimat.py` så att de inte upptäcks på nytt: maritim amplitud på hög latitud underskattas — Bergen har 6,8 där formeln ger 3,9, eftersom få stationer är både kustnära och nordliga — och kontinentalitet nära 1 vid ekvatorn extrapolerar utanför underlaget.
+
+### Fotoperioden som nästa steg (7015)
+
+Modellen har i dag **ingen säsong i ljuset alls**, bara i temperaturen, medan floran redan har ljuskonkurrens via Beer–Lambert. Vid 55 grader är vinterdagen 6,9 timmar och sommardagen 17,1 — en faktor 2,5 i ljustillgång, helt oberoende av temperaturen. Dagslängd och insolation är exakt astronomi ur latituden och kostar ingen kalibrering.
+
+Dagslängd är dessutom en **brusfri kalender**: ett varmt februaridygn lurar inte en organism som räknar timmar. Faunans häckningsfas läser i dag temperaturen, vilket är den svaga signalen; med fotoperiod finns en ärlig, och vilken dagslängd som utlöser häckning blir en trait att evolvera.
+
+**Dygnet kan däremot inte vara en cykel.** `dt` är 14,6 timmar, alltså längre än dygnet, och en dygnsvariation som tidsserie skulle aliasa — samma klass av fel som det CFL-begränsade hydroschemat. Dygnets *amplitud* är en legitim statisk parameter och hör ihop med kalluftsdräneringen, som är ett nattfenomen och skalar med den.
 
 ### Öppna frågor efter Steg 7
 

@@ -16,6 +16,12 @@ except ImportError:
     _NUMBA_AVAILABLE = False
 
 from grid import Grid
+from klimat import (
+    arsamplitud,
+    arsmedeltemperatur,
+    faseftersläpning,
+    halvklotstecken,
+)
 from terrain import TerrainParams, generate_elevation
 from drainage import build as build_drainage
 from hydro import (
@@ -74,39 +80,41 @@ class WorldParams:
     # -------------------------
     year_len: float = 12.0
 
-    # Klimatet som **tidsprofil**:
+    # Klimatet som **tidsprofil, härledd ur världens position**:
     #
-    #     T(t) = T_mean + T_amp * sin(2π t / year_len - season_phase0)
+    #     T(t) = T_mean + T_amp * sin(2π (t - lag) / year_len - season_phase0)
     #
-    # Den rumsliga latitudgradienten är borta. Skälet står i
+    # där `T_mean`, `T_amp` och `lag` inte är parametrar utan följder av
+    # `latitud` och `kontinentalitet`. Se `klimat.py`, som äger regeln.
+    #
+    # Den rumsliga latitudgradienten föll i 7013. Skälet står i
     # `docs/varldens-skala.md`: en cell har arean 100 m², och även den största
     # körbara världen — 4096x4096 celler, alltså 44x38 km — spänner 0,11 grader
-    # av jordens meridionella gradient. Modellen hade trettio. En klimatmodell
-    # byggd på latitud förutsätter en planet, och världen är en dalgång.
+    # av jordens meridionella gradient. Modellen hade trettio.
     #
-    # Årstiden beror däremot inte alls på skalan: en dal på fyrtio kilometer har
-    # fullständigt normala årstider, samma sol och samma axellutning. Det som
-    # försvinner är att amplituden varierade med latitud, och att säsongstermen
-    # var proportionell mot den — hade profilen bara kollapsat till en konstant
-    # latitud hade årstiden följt med i fallet. Den har därför fått en egen
-    # amplitud, vilket är vad den alltid borde ha haft.
+    # **Det som kommer tillbaka här är inte gradienten utan positionen.**
+    # Världen ligger *på* en breddgrad; den spänner inte över flera. Latituden
+    # är därför en skalär i fysiklagret och inte ett fält över celler, och den
+    # hör inte hemma i `Grid` — cellformen ska inte veta var på en planet
+    # världen ligger.
     #
-    # **Nivån är ett val, inte en kalibrering.** Med en enda klimatzon är
-    # medeltemperaturen en fri parameter för första gången, och den sätts till
-    # ett tempererat inlandsklimat: årsmedel 11 grader, januari -1, juli 23.
-    # Det är en dalgång i södra Sverige eller norra Mellaneuropa.
+    # Vinsten är att klimatet blir härlett i stället för valt. 7013 satte
+    # årsmedel 11 och amplitud 12 med motiveringen "en dalgång i södra Sverige"
+    # — en analogi, inte en härledning. Förvalet nedan ger samma klimat
+    # (11,0 / 12,0 inom en tiondel), men nu som en följd av var världen ligger:
+    # 48 grader nord, halvvägs in i en landmassa. Ett experiment blir en
+    # flyttning i stället för fyra nya tal.
     #
-    # Alternativet var att bevara den gamla världens landmedel på 20,1 grader
-    # och därmed dess produktivitet. Det valdes bort. En subtropisk värld där
-    # tillväxten aldrig stannar har ingen vinter att överleva, och årstiden blir
-    # en modulering i stället för en ekologisk kraft. Priset är verkligt och
-    # mätt: termokostnaden går som (Tb_set - T_env) och stiger därmed 53 procent
-    # i medel, floran möter fyra månader då tillväxten är nära noll, och
-    # frånvaron av fröbank gör den vintern farligare än den vore i en färdig
-    # modell. De problemen ska lösas, inte undvikas.
-    T_mean: float = 11.0
-    T_amp: float = 12.0
+    # Årstiden inverteras söder om ekvatorn; det faller ur latitudens tecken.
+    latitud: float = 48.0
+    kontinentalitet: float = 0.55
 
+    # Fasen i årscykeln vid t = 0. Den termiska eftersläpningen är **inte**
+    # detta tal utan en följd av kontinentaliteten — havet lagrar värme och
+    # släpper den sent, så varmaste månaden ligger en till två månader efter
+    # solståndet. Den ändringen gör t = 0 till astronomisk vårdagjämning, där
+    # temperaturen ännu ligger under årsmedlet. Före 7014 låg t = 0 vid
+    # termiskt medel, alltså ungefär en och en halv månad senare.
     season_phase0: float = 0.0
 
     # Growth gating thresholds (degC): g(T) in [0,1]
@@ -216,28 +224,39 @@ class WorldParams:
     #
     # Enheten för vatten är densamma som för höjd, eftersom fri yta är summan.
 
-    # Nederbörd per månad vid referenstemperaturen, före orografi.
+    # Nederbörd per månad vid världens årsmedeltemperatur, före orografi.
     #
     # Var 0,65 med referensen på 25 grader. Referensen låg då nära den gamla
-    # världens beboeliga mitt, så basen betydde ungefär "nederbörd på en
+    # latitudvärldens beboeliga mitt, så basen betydde ungefär "nederbörd på en
     # normalt bördig plats". När klimatet blev en dalgång på 11 grader hade
     # samma referens halverat nederbörden — inte som ett val utan som en
     # kvarleva av en världsbild.
     #
-    # Referensen är därför världens årsmedel, och basen den nederbörd som hör
-    # till det. Talet är satt så att **vattenbudgeten är oförändrad**: uppmätt
-    # landmedel av temperaturfaktorn var 0,897 i den gamla `f5-terrang`, och
-    # tidsmedlet vid amplitud 12 är 1,180 — alltså 0,65 · 0,897 / 1,180.
-    # Temperaturen ändras avsiktligt; vattnet ska inte följa med av misstag,
-    # eftersom hydrologins kalibrering hänger på det: sjöandel, fårlängd och
-    # antalet strandade celler.
+    # Referensen är därför världens årsmedel, som positionen sätter, och basen
+    # den nederbörd som hör till det. Talet är satt så att **ariditeten är
+    # oförändrad**: uppmätt landmedel av temperaturfaktorn var 0,897 i den
+    # gamla `f5-terrang` och tidsmedlet vid amplitud 12 är 1,180, vilket ger
+    # 0,494 för bevarad nederbörd — och gånger 0,532/0,821, kvoten mellan ny
+    # och gammal potentiell avdunstning, blir det 0,320. Ett kallare klimat ska
+    # ha mindre nederbörd; att hålla P konstant medan PET faller vore att smyga
+    # in en våtare värld i en klimatändring.
+    #
+    # **Nederbörden härleds inte ur positionen.** Sahara och monsun-Indien
+    # ligger båda kring tjugo grader nord och skiljer tre tusen millimeter —
+    # spridningen inom en breddgrad är större än signalen mellan breddgrader.
+    # Talet nedan hör därför till världen och inte till platsen, och bör ses
+    # över när världen flyttas långt.
     rain_base: float = 0.320
     # Varm luft bär mer fukt — ungefär en fördubbling per tio grader. Med
     # klimatet som tidsprofil ger det en regnperiod på sommaren och en torr
     # vinter, vilket är den kontinentala nederbördsfördelningen. Den rumsliga
     # delen — våta tropiker och torra poler — föll med latituden; kvar rumsligt
     # är bara det orografiska lyftet.
-    rain_T_ref: float = 11.0
+    #
+    # Referensen är inte en parameter utan **världens egen årsmedeltemperatur**,
+    # och sätts därför av positionen. Ett fast tal var det som gjorde 25 grader
+    # till en kvarleva: flyttas världen norrut utan att referensen följer med
+    # torkar den ut av ett tal ingen valt.
     rain_T_doubling: float = 10.0
     # Orografiskt lyft: nederbörden växer med höjden. Ingen regnskugga — den
     # kräver en förhärskande vindriktning och hör till senare arbete.
@@ -717,6 +736,15 @@ class World:
         # höjden och senare kan bära kalluftsdränering.
         self.T_air = np.float32(0.0)
 
+        # Klimatets tal härleds **en gång** ur positionen. Fysiklagret äger
+        # regeln (`klimat.py`), världslagret instansierar den, och därefter är
+        # de tre konstanter under hela körningen — ingen tick rör dem.
+        lat = float(self.WP.latitud)
+        kont = float(self.WP.kontinentalitet)
+        self.T_mean = float(arsmedeltemperatur(lat, kont))
+        self.T_amp = float(arsamplitud(lat, kont)) * float(halvklotstecken(lat))
+        self.season_lag = float(faseftersläpning(kont))
+
         self._update_temperature()
 
     def _build_T_offset(self):
@@ -754,23 +782,26 @@ class World:
     # -------------------------
     def _update_temperature(self) -> None:
         """
-        Årstiden. Ett sinusvarv per år kring `T_mean`, med amplituden som egen
-        parameter.
+        Årstiden. Ett sinusvarv per år kring `T_mean`, förskjutet med den
+        termiska eftersläpningen.
 
-        Tillväxtgrinden räknas inte här längre. Den var en bandvektor som ingen
-        läste — grinden behövs alltid per cell, eftersom höjdmodifieraren gör
-        den olika inom vad som en gång var ett band, och `_gate_from_T()` är
-        den enda vägen dit.
+        Eftersläpningen är skälet att den varmaste månaden inte är den
+        soligaste: underlaget lagrar värme och släpper den sent, en månad i
+        inlandet och två vid kusten. `t = 0` är därmed astronomisk
+        vårdagjämning, där temperaturen ännu ligger under årsmedlet.
+
+        Tillväxtgrinden räknas inte här. Den var en bandvektor som ingen läste
+        — grinden behövs alltid per cell, eftersom höjdmodifieraren gör den
+        olika inom vad som en gång var ett band, och `_gate_from_T()` är den
+        enda vägen dit.
         """
         WP = self.WP
         year_len = float(WP.year_len) if float(WP.year_len) > 1e-9 else 1.0
 
-        phase = 2.0 * math.pi * ((self.t % year_len) / year_len)
+        phase = 2.0 * math.pi * (((self.t - self.season_lag) % year_len) / year_len)
         phase -= float(WP.season_phase0)
 
-        self.T_air = np.float32(
-            float(WP.T_mean) + float(WP.T_amp) * math.sin(phase)
-        )
+        self.T_air = np.float32(self.T_mean + self.T_amp * math.sin(phase))
 
     def _gate_from_T(self, T):
         """
@@ -1008,7 +1039,7 @@ class World:
         rumsligt är `_oro`.
         """
         WP = self.WP
-        dT = float(self.T_air) - float(WP.rain_T_ref)
+        dT = float(self.T_air) - self.T_mean
         return float(WP.rain_base) * 2.0 ** (dT / max(1e-9, float(WP.rain_T_doubling)))
 
     def hydro_pass(self) -> tuple[float, float]:

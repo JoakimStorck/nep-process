@@ -203,6 +203,12 @@ Ingen del av biologin — inte ett enda systempass, inte sensing, inte spridning
 
 Allt rumsligt arbete sker via ett väldefinierat `Grid`-gränssnitt. Det är den enda plats där geometrin existerar. Det gör det möjligt att byta geometri utan att röra biologin.
 
+**Geometrin äger både topologi och metrik.** Grannrelationer, avstånd och wrap är den ena halvan; hur stor en cell är den andra. Cellen har arean 100 m², vilket ger längdenheten 10 meter och centrumavståndet 10,746 — `d = sqrt(2A/sqrt(3))` för en regelbunden hexagon. Arean är det runda talet och avståndet dess härledda följd, eftersom arean är vad ekologin räknar med: biomassa, näring och ljus per cell.
+
+**Metriken måste vara en enda.** Höjd, vattendjup och vågrätt avstånd delar samma enhet, eftersom fri yta är summan av de två första och lutning kvoten mellan den tredje och den första. En modell med två längdskalor kan inte ha lagbunden fysik: en lutning blir ett tal utan innebörd, och varje konstant som uttrycks per meter går inte att sätta. Projektet levde med det tills höjden fick sin enhet — och upptäckte då att faunans fart låg tvåhundra gånger fel. Se `docs/varldens-skala.md`.
+
+**Vad geometrin inte äger.** Klimat, latitud och andra villkor som världen möter utifrån är inte geometriska egenskaper. `Grid` bar en gång `cell_lat`, och det var en felplacering: cellformen ska inte veta var på en planet världen ligger. Sådant hör till fysiklagret.
+
 ### 7. Fysiklager
 
 Simulatorn skiljer explicit mellan tre nivåer:
@@ -213,13 +219,24 @@ Simulatorn skiljer explicit mellan tre nivåer:
 
 Fysiklagret definierar:
 - grundstorheter: massa, energi, volym, tid
+- enheter och skalor: en längdenhet, en tidsenhet, en massenhet — namngivna, inte underförstådda
 - bevarandeprinciper: kontinuitet för materia och energi; bevarade storheter uppdateras alltid via tvåstegsmetod
 - generella transportlagar: diffusion och gradientdrivet flöde
-- globala konstanter och skalor
+- randvillkor: det som ligger utanför världens rand men bestämmer villkoren inom den
 
 Fysiklagret opererar inte direkt på världens tillstånd. Det definierar reglerna som världspass tillämpar.
 
 **Energi och massa** är kopplade storheter i hela modellen. Biomassa representerar lagrad kemisk energi. Energi används för tillväxt, underhåll och arbete och överförs mellan organismer och till detritus vid dödsfall och konsumtion. Fysiklagret definierar konverteringsfaktorer och grundläggande kostnadsskalor. Biologiska systempass implementerar dessa relationer men bryter inte mot dem.
+
+**En storhet utan enhet är ingen fysisk storhet.** Den ser ut som ett tal och beter sig som ett tal, men den går inte att ställa mot något utanför modellen — och därmed går den inte heller att sätta fel på ett sätt som märks. Projektet har gjort det felet flera gånger: höjden var enhetslös och gjorde lutningen godtycklig, `water_extract_frac` var per tick där den skulle vara per månad, lapse rate valdes mot vad den gjorde med tillväxtgrinden i stället för mot 6,5 grader per kilometer. Varje ny konstant ska kunna uttryckas i modellens enheter och jämföras med ett värde från verkligheten. Kan den inte det är den en kalibrerad fri parameter, och det ska stå i klartext där den definieras.
+
+**Randvillkor är fysik, inte biologi.** Världen är åtta tusen till en miljon celler, alltså ett landskap på någon kilometer till några mil. Planeten fortsätter utanför randen, och det som kommer därifrån — solens gång, årstidens djup, luftmassornas tröghet — kan inte simuleras inifrån. Modellen anger i stället **var världen ligger**: en latitud och en kontinentalitet. Ur latituden faller solhöjd, dagslängd och insolation som exakt astronomi utan en enda kalibrerad konstant; ur de två tillsammans faller årsmedeltemperatur, årstidens amplitud och dess eftersläpning som en uppslagsformel anpassad mot jordens klimatologi en gång. Se `klimat.py`.
+
+Det är motsatsen till den latitudgradient modellen en gång hade. Världen ligger **på** en breddgrad — den spänner inte över flera — så positionen är en skalär i fysiklagret och inte ett fält över celler. Vad randvillkoret ger är att klimatet blir härlett i stället för valt, och att ett experiment uttrycks som en flyttning i stället för som fyra nya tal.
+
+Vad som inte härleds ur positionen: nederbörden. Sahara och monsun-Indien ligger båda kring tjugo grader nord och skiljer tre tusen millimeter — spridningen inom en breddgrad är större än signalen mellan breddgrader, och nederbörden förblir därför världens egen parameter.
+
+**Modellen har en känd inkonsistens.** Faunans fart är omkring tvåhundra gånger för låg för en tvåkilos organism vid tio meters celler, och den kan inte höjas mer än ungefär femtio gånger utan att djuret rör sig längre än sitt sensingavstånd på ett tidssteg. Antingen kortas tidssteget, eller så accepteras att faunan är långsammare än sin kropp motiverar, eller så byts kroppsstorleken. Att skriva ut det här är avsiktligt: en inkonsistens som står i manifestet är en öppen fråga, medan en som bara finns i koden är en dold felkälla.
 
 ### 8. Lokal upptäckt och situerad interaktion
 

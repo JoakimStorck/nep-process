@@ -26,6 +26,15 @@ varld:
   bredd: 64
   hojd: 128
   bordighet: 4.0
+  # Världens position på planeten. Klimatet härleds ur de två — se `klimat.py`.
+  # 48 grader nord, halvvägs in i en landmassa, ger årsmedel 10,9 och amplitud
+  # 12,2: kallast -1,4 i februari, varmast 23,1 i juli. Det är samma klimat som
+  # 7013 satte för hand, men nu som en följd av var världen ligger.
+  #
+  # Talen står här trots att de är förvalet, eftersom de beskriver vilken värld
+  # scenariot är. Att flytta världen är numera ett experiment i två tal.
+  latitud: 48.0
+  kontinentalitet: 0.55
   terrang:
     seed: 1
     relief: 1.0

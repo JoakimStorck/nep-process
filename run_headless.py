@@ -599,6 +599,13 @@ def build_population(a: argparse.Namespace, seed: int, hub=None) -> Population:
     if _sc_terr is not None and _sc_terr.terrain is not None:
         wp_over["terrain"] = _sc_terr.terrain
 
+    # Världens position. Den hör till scenariot av samma skäl som terrängen:
+    # den beskriver vilken värld som körs, inte hur den körs. Två tal, och de
+    # ersätter fyra klimatparametrar som tidigare inte gick att sätta alls.
+    if _sc_terr is not None:
+        wp_over["latitud"] = float(_sc_terr.varld.latitud)
+        wp_over["kontinentalitet"] = float(_sc_terr.varld.kontinentalitet)
+
     if int(a.size) > 0:
         WP = WorldParams(size=int(a.size), width=0, height=0, dt=float(a.dt), **wp_over)
     else:
@@ -1017,6 +1024,16 @@ def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
             f"init_pop={a.init_pop} max_pop={a.max_pop} seed={seed}",
             flush=True,
         )
+        # Positionen gäller varje värld, platt som kuperad, och skrivs därför
+        # utanför terrängblocket. Två tal som ersätter fyra, och raden gör
+        # synligt vad de blev.
+        from klimat import beskriv as _beskriv_klimat
+
+        print(
+            "[klimat] "
+            + _beskriv_klimat(pop.world.WP.latitud, pop.world.WP.kontinentalitet),
+            flush=True,
+        )
         _dr = getattr(pop.world, "drainage", None)
         if _dr is not None:
             from drainage import describe as _describe_drainage
@@ -1042,7 +1059,7 @@ def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
             if isinstance(_off, np.ndarray) and float(_off.min()) < 0.0:
                 _gl = g[(~_dr.sea) & (_dr.lake_id < 0)]
                 print(
-                    f"[klimat] höjdgradient {float(_off.min()):.1f} °C på högsta punkten  "
+                    f"[höjdklimat] höjdgradient {float(_off.min()):.1f} °C på högsta punkten  "
                     f"tillväxtgrind p10/median/p90 "
                     f"{np.quantile(_gl, 0.1):.2f}/{np.quantile(_gl, 0.5):.2f}/"
                     f"{np.quantile(_gl, 0.9):.2f}",
