@@ -2531,7 +2531,9 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~7017~~ | landformerna som styrt brus; regionens form som romb i hexgitter | planen | **klart**, se nedan |
 | ~~7018~~ | havet placeras efter höjd som bred bassäng; latituden ur terrängen | dräneringen | **klart**, se nedan |
 | ~~7019~~ | bandet skalat mot världen; amplituden som Hurstexponent | höjdgradienten, sjöarna | **klart**, se nedan |
-| 7020 | fotoperioden med florans ljusbudget som första läsare | floran, fenologin | öppen |
+| ~~7020~~ | havet som nivå i stället för form; kustlinjen blir en nivåkurva | kusten | **klart**, se nedan |
+| 7021 | knäckt spektrallutning: brant för långa vågor, flack för korta | kusten, sjöarna | öppen |
+| 7022 | fotoperioden med florans ljusbudget som första läsare | floran, fenologin | öppen |
 | ~~1010~~ | viewern visar terräng och vatten; världen klassar, viewern färgar | ögat | **klart** |
 | ~~1011~~ | höjden skickas en gång vid handskakningen | bandbredd | **klart**, protokoll 6 |
 
@@ -2927,7 +2929,54 @@ kalibrering mot en världsstorlek som väntar på florans GPU-väg.
 och amplitudskalan är då exakt ett. Verifierat med `md5` på renderad PNG före
 och efter.
 
-### Fotoperioden som senare steg (7020)
+### Havet blev en nivå i stället för en form (7020)
+
+Kustlinjen såg utklippt ut — en blå form lagd ovanpå landskapet — och mätningen
+visade varför.
+
+Kustlinjen är nivåkurvan `z = 0`, så dess krokighet är brusets amplitud delad
+med formens lutning just där. Uppmätt vid 256x256: **bassängens lutning vid
+kustlinjen 0,0248 mot landskapets typiska 0,0135**, alltså nästan dubbelt så
+brant. Kusten följde formens kant och inte terrängen; den vandrade sjutton
+celler av en våglängd på 192, alltså nio procent.
+
+**Havet är därför inte längre en form utan en nivå.** Det som läggs är bara en
+regional lutning som gör en del av världen systematiskt lägre, och havsnivån
+sätts som den kvantil av det färdiga fältet som ger den begärda andelen.
+Kustlinjen blir då per konstruktion en nivåkurva i hela höjden — brus, lutning
+och placerade former tillsammans.
+
+Tre följder:
+
+- **Bisektionen på radien försvinner.** En kvantil är exakt och kostar
+  ingenting, medan bisektionen dessutom blev icke-monoton så snart formen var
+  flackare än bruset.
+- **`base` faller som parameter.** Den satte var vattenlinjen hamnade, och det
+  gör `hav_andel` nu direkt. Två rattar för samma sak låter den ena tyst vinna.
+- **Lutningens styrka är dimensionslös**, uttryckt som multipel av landskapets
+  egen typiska lutning, och därmed skalfri.
+
+Avvägningen blir synlig i ett enda tal. Uppmätt vid 256x256:
+
+```
+kvot 0,5   kust 2,11   hav  9,7 %   sjö 14,70 %   största sjö 6 855
+kvot 1,0   kust 1,91   hav 19,4 %   sjö  3,42 %                2 077
+kvot 2,0   kust 1,27   hav 20,0 %   sjö  2,82 %                1 627
+kvot 3,0   kust 1,19   hav 20,0 %   sjö  0,18 %                   37
+```
+
+Under ungefär ett ligger de lägsta punkterna utspridda i landskapets egna
+sänkor i stället för samlade, och det som skulle vara hav blir insjöar. Över två
+tar den regionala lutningen över och kusten blir en cirkel igen. 1,0 är den
+svagaste lutning som fortfarande ger ett hav.
+
+**Det räckte inte, och fröberoendet avslöjade varför.** Kusttalet blev 1,22 för
+frö 1 men 2,15 för frö 2 med identiska parametrar. Orsaken är spektrallutningen
+och inte havet: vid `beta = 2,4` har landskapet nästan ingen kortvågig energi,
+alltså *är* ytan slät lokalt, och då kan ingen kustlinje bli fransig hur havet än
+läggs. Se 7021.
+
+### Fotoperioden som senare steg (7022)
 
 Modellen har i dag **ingen säsong i ljuset alls**, bara i temperaturen, medan floran redan har ljuskonkurrens via Beer–Lambert. Vid 55 grader är vinterdagen 6,9 timmar och sommardagen 17,1 — en faktor 2,5 i ljustillgång, helt oberoende av temperaturen. Dagslängd och insolation är exakt astronomi ur latituden och kostar ingen kalibrering.
 

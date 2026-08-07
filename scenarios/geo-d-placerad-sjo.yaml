@@ -9,8 +9,11 @@
 # cellarean är 1. En bassäng på djup 1,2 är alltså lite mer än en cellbredd
 # djup. Positionerna är andel av utsträckningen; **radierna är det inte.** En
 # rygg är en tektonisk struktur med en storlek i meter och ska inte växa för
-# att kartan blir större. Havet är undantaget och skalas därför via
-# `hav_radie`, inte via formlistan.
+# att kartan blir större.
+#
+# Havsnivån sätts alltid ur `hav_andel`, även med egen formlista: havet är en
+# nivå och inte en form. Formerna bestämmer var det låga ligger, kvantilen var
+# vattenlinjen går.
 namn: geo-d-placerad-sjo
 varld:
   bredd: 64
@@ -24,11 +27,11 @@ varld:
     lambda_max_frac: 0.75
     lambda_min: 3.0
     beta: 2.4
-    base: 1.5
+    hav_andel: 0.20
     former:
-      # Havet, som basnivå. Radien i cellängder här, eftersom formlistan tagit
-      # över — 68,8 motsvarar hav_radie 1,0 vid 64 cellers bredd.
-      - {typ: bassang, x: 0.5, y: 0.5, radie: 68.8, djup: 2.0}
+      # Den regionala lutningen mot basnivån. Elliptisk, så den följer världens
+      # form; djupet är fallhöjden från kant till mitt.
+      - {typ: bassang, x: 0.5, y: 0.5, radie_x: 49.5, radie_y: 85.8, djup: 1.5}
       # Insjön: en bred, grund sänka en bit in på land. Djupet måste överstiga
       # vad havsbassängens kant faller över sjöns egen bredd, annars dräneras
       # den ut.

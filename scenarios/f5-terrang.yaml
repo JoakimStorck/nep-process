@@ -58,8 +58,8 @@ varld:
     # havsarea. Havsandelen 18–23 % ligger nära det polarhavet gav (19,3 %), så
     # landytan är i praktiken oförändrad.
     hav_andel: 0.20
-    hav_djup: 2.0
-    base: 1.5
+    hav_lutning: 1.0
+
 flora:
   sadd: bordighet
   plantmassa: 1.32

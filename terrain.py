@@ -125,12 +125,10 @@ class TerrainParams:
     # eroderad yta, och sådana byggs som placerade former med höjd i meter.
     hurst: float = 0.64
 
-    # Kontinentens grundhöjd över havsnivån, i cellängder, före lutning och
-    # brus. Egen parameter sedan bruset blev nollcentrerat: tidigare låg det i
-    # [0, 1] och bar en halv enhets grundhöjd som bieffekt av normeringen.
-    # Hur högt landet ligger över havet är en storhet i sin egen rätt och ska
-    # inte vara en artefakt av hur bruset skalades.
-    base: float = 1.5
+    # Grundhöjden är borttagen som parameter. Den satte var havsnivån hamnade i
+    # höjdfältet, och det gör `hav_andel` nu direkt: nivån är den kvantil som
+    # ger den begärda andelen. En grundhöjd vid sidan av den vore två rattar för
+    # samma sak, och den ena skulle tyst vinna.
 
     # Global multiplikator på hela höjdfältet. Kvar för bakåtkompatibilitet och
     # för att kunna skala en hel värld i ett grepp; 1,0 betyder att talen ovan
@@ -170,47 +168,52 @@ class TerrainParams:
     # form och håller kostnaden linjär i cellantalet.
     max_modes: int = 4096
 
-    # Havet som bred bassäng. **Havet är inte en landform utan världens
-    # basnivå** — allt annat dräneras till det och det dräneras ingenstans — och
-    # det är därför den enda form som skalar med världen. Ett berg blir inte
-    # högre för att kartan blir större, men en basnivå måste omsluta det den är
-    # basnivå för.
+    # Havet som regional lutning plus en havsnivå.
     #
-    # Det som anges är därför **havsandelen och inte radien.** Radien löses fram
-    # så att andelen träffas, vilket gör talet skalfritt på ett sätt en radie
-    # inte kan vara: en radie som andel av bredden ger 21 procent hav vid 64x128
-    # men bara 12 vid 64x256, eftersom en cirkel inte når hörnen i en avlång
-    # värld. Med andelen som mål blir bassängen automatiskt ett bälte tvärs den
-    # avlånga världen och en cirkel i den kvadratiska — samma sak uttryckt i
-    # geometrin den råkar ha.
+    # **Havet är inte en form utan en nivå.** Det var den insikt som saknades:
+    # så länge havet var en bassäng med ett djup blev kustlinjen bassängens kant
+    # och inte landskapets nivåkurva. Uppmätt vid 256x256 var bassängens lutning
+    # vid kustlinjen 0,0248 mot brusets typiska 0,0135 — nästan dubbelt så
+    # brant — så kusten följde formen och terrängen syntes inte i den.
+    # Kustlinjen vandrade 17 celler av en våglängd på 192, alltså nio procent.
     #
-    # Bassängens mjuka kant gör två jobb: den är havet, och den är den regionala
-    # lutningen mot basnivån. Kontinentallutningen behövs inte som egen form —
-    # den generaliseras från "mot polerna" till "mot basnivån", vilket är vad
-    # den alltid var.
+    # Nu läggs i stället en **regional lutning** över världen, och havsnivån
+    # sätts som den kvantil av det färdiga fältet som ger den begärda
+    # havsandelen. Kustlinjen är därmed per konstruktion en nivåkurva i hela
+    # höjdfältet, bruset inräknat, och får vikar, uddar och öar utan att någon
+    # mekanism läggs till.
     #
-    # Uppmätt vid 64x128 över tre frön, grundhöjd 1,5 och djup 2,0:
+    # Lutningens styrka anges som **multipel av landskapets egen typiska
+    # lutning**, alltså dimensionslöst och skalfritt. Det är också den enda
+    # storhet som styr avvägningen mellan en fransig kust och ett sammanhängande
+    # hav. Uppmätt vid 256x256:
     #
-    #     radie 0,9   hav 15–17 %   sjö 2,1–4,8 %   flod 1 224–1 909   kust 1,16–1,51
-    #     radie 1,0   hav 18–23 %   sjö 1,4–3,4 %   flod 1 161–1 629   kust 1,27–1,38
-    #     radie 1,1   hav 22–28 %   sjö 1,2–3,2 %   flod 1 173–1 558   kust 1,31–1,39
+    #     kvot 0,5   kust 2,11   hav  9,7 %   sjö 14,70 %   största sjö 6 855
+    #     kvot 1,0   kust 1,91   hav 19,4 %   sjö  3,42 %                2 077
+    #     kvot 1,5   kust 1,38   hav 20,0 %   sjö  2,94 %                1 676
+    #     kvot 2,0   kust 1,27   hav 20,0 %   sjö  2,82 %                1 627
+    #     kvot 3,0   kust 1,19   hav 20,0 %   sjö  0,18 %                   37
     #
     # Kusttalet är kustlinjens längd delad med omkretsen hos en cirkel med samma
-    # havsarea, alltså hur mycket kusten avviker från bassängens egen form. Den
-    # styrs av kvoten mellan brusets lutning och bassängkantens: en **flack och
-    # bred** bassäng ger levande kust, en djup och smal ger en cirkel. Den
-    # tidigare kandidaten radie 40 och djup 4,0 gav kusttal 1,05–1,09 och
-    # dessutom 5,8–11,7 procent sjö mot målets tio.
+    # havsarea. Under ungefär ett fragmenteras havet: de lägsta punkterna ligger
+    # då utspridda i landskapets egna sänkor i stället för i en sammanhängande
+    # bassäng, och det som skulle vara hav blir insjöar. Över två tar den
+    # regionala lutningen över och kusten blir en cirkel igen.
     #
-    # Andelen 0,20 ligger nära vad polarhavet gav (19,3 %), så landytan är i
-    # praktiken oförändrad mot före bytet.
+    # 1,0 är valt som den svagaste lutning som fortfarande ger ett hav.
+    hav_lutning: float = 1.0
+
+    # Andel av världen under havsnivån. Nivån läses som denna kvantil ur det
+    # färdiga höjdfältet, så talet träffas exakt i varje världsform och
+    # storlek — till skillnad från en radie, som gav 21 procent hav vid 64x128
+    # men 12 vid 64x256 eftersom en cirkel inte når hörnen i en avlång värld.
     hav_andel: float = 0.20
-    hav_djup: float = 2.0
 
     # Placerade former. `None` ger havsbassängen ovan, alltså världens basnivå
-    # och ingenting annat. Sätts listan tar den över helt, och `hav_radie` och
-    # `hav_djup` läses inte längre: det finns då bara ett ställe som beskriver
-    # strukturen.
+    # och ingenting annat. Sätts listan tar den över helt, och `hav_lutning`
+    # läses inte längre: det finns då bara ett ställe som beskriver strukturen.
+    # Havsnivån sätts däremot alltid ur `hav_andel`, eftersom den är en nivå och
+    # inte en form.
     #
     # Se `_shapes` för formtyperna.
     former: list | None = None
@@ -313,74 +316,37 @@ def _modes(tp: TerrainParams, Lx: float, Ly: float, lam_max: float, rng):
     return kx, ky, amp, phase
 
 
-def _default_shapes(grid, tp, land: np.ndarray, skala: float) -> list:
+def _default_shapes(grid, tp, lam_max: float, skala: float) -> list:
     """
-    Formlistan när scenariot inte anger någon: **havet, och ingenting annat.**
+    Formlistan när scenariot inte anger någon: **den regionala lutningen mot
+    basnivån, och ingenting annat.**
 
-    Havet är världens basnivå — allt annat dräneras till det, det dräneras
-    ingenstans — och det är en hydrologisk definition och inte en geografisk.
-    Den är skalfri och fungerar lika bra i en dalgång på en kilometer som på en
-    planet. Kaspiska havet är ett hav i exakt den meningen.
+    Havet självt är inte en form utan en nivå — se `TerrainParams.hav_lutning`.
+    Det som läggs här är bara den lutning som gör en del av världen
+    systematiskt lägre, så att de lägsta punkterna hamnar samlade i stället för
+    utspridda. Utan den blir havet en arkipelag av isolerade sänkor.
 
-    Tidigare låg här två former: en polarsänka och en kontinental lutning, båda
-    funktioner av latituden. Polarsänkan placerade havet där klimatet var
-    obeboeligt, och det argumentet finns inte kvar sedan latituden föll ur
-    världsmodellen. Lutningen organiserade dräneringen mot polerna, och den
-    behövs inte som egen form: bassängens mjuka kant *är* den regionala
-    lutningen mot basnivån, vilket är vad kontinentallutningen alltid var.
-
-    **Radien löses fram ur havsandelen** med bisektion mot det färdiga
-    brusfältet, eftersom en radie inte är skalfri men en andel är det. Sökningen
-    kostar ett tjugotal svep över `hypot` och ligger i världens engångsuppbygge.
+    Lutningen uttrycks som multipel av landskapets egen typiska lutning,
+    `sd * 2π / lambda`, vilket gör talet dimensionslöst och därmed skalfritt:
+    samma värde ger samma karaktär i varje världsstorlek.
     """
     forms = getattr(tp, "former", None)
     if forms:
         return list(forms)
 
-    x = np.asarray(grid.cell_center_x, dtype=np.float64)
-    y = np.asarray(grid.cell_center_y, dtype=np.float64)
     Lx = float(grid.extent_x)
     Ly = float(grid.extent_y)
-    dx = x - 0.5 * Lx
-    dy = y - 0.5 * Ly
-    dx -= Lx * np.round(dx / Lx)
-    dy -= Ly * np.round(dy / Ly)
-    # Avståndet normeras mot utsträckningen i varje led, så bassängen blir en
-    # ellips som följer världens form: en cirkel i en kvadratisk värld, ett
-    # avlångt hav i en avlång. En rund bassäng når inte hörnen när världen är
-    # fyra gånger högre än bred — uppmätt gav den 14 procent sjö vid 64x256 mot
-    # 1,5 vid 64x128, eftersom landet längst från mitten saknade väg till havet.
-    d = np.hypot(dx / Lx, dy / Ly)
-
-    mal = min(max(float(tp.hav_andel), 0.0), 0.95)
-    djup = float(tp.hav_djup) * float(skala)
-    grund = float(tp.base) * float(skala)
-
-    def andel(r: float) -> float:
-        z = grund + land - djup * (1.0 - _smoothstep(0.0, 1.0, np.minimum(d / r, 1.0)))
-        return float((z < 0.0).mean())
-
-    lo, hi = 1e-4, float(d.max()) * 2.0
-    if mal <= 0.0:
-        r = lo
-    elif andel(hi) < mal:
-        r = hi
-    else:
-        for _ in range(40):
-            mid = 0.5 * (lo + hi)
-            if andel(mid) < mal:
-                lo = mid
-            else:
-                hi = mid
-        r = 0.5 * (lo + hi)
-
+    sd = float(tp.noise_sd) * float(skala)
+    bruslutning = sd * 2.0 * math.pi / max(1e-9, float(lam_max))
+    # Fallhöjden över halva världsdiagonalen vid den begärda lutningen.
+    amp = float(tp.hav_lutning) * bruslutning * 0.5 * math.hypot(Lx, Ly)
     return [{
         "typ": "bassang",
         "x": 0.5,
         "y": 0.5,
-        "radie_x": r * Lx,
-        "radie_y": r * Ly,
-        "djup": djup,
+        "radie_x": 0.72 * Lx,
+        "radie_y": 0.72 * Ly,
+        "djup": amp,
     }]
 
 
@@ -513,9 +479,21 @@ def generate_elevation(grid, tp: TerrainParams) -> np.ndarray:
     skala = amp_scale(tp, lam_max)
     land = land * (float(tp.noise_sd) * skala)
 
-    struct = _shapes(grid, tp, _default_shapes(grid, tp, land, skala))
+    struct = _shapes(grid, tp, _default_shapes(grid, tp, lam_max, skala))
 
-    z = float(tp.base) * skala + land + struct
+    # **Havsnivån är en kvantil, inte en form.** Den nivå som ger den begärda
+    # havsandelen läses direkt ur det färdiga fältet, så kustlinjen blir en
+    # nivåkurva i hela höjden — brus, lutning och placerade former tillsammans.
+    # Det är skälet att kusten får vikar och öar utan att någon mekanism läggs
+    # till: den *är* landskapets egen nivåkurva.
+    #
+    # Tidigare löstes en bassängradie fram med bisektion mot samma mål. Det gav
+    # rätt havsandel men fel kust, eftersom bassängens kant var brantare än
+    # landskapet och därmed bestämde kustlinjens form.
+    z = land + struct
+    mal = min(max(float(tp.hav_andel), 0.0), 0.95)
+    if mal > 0.0:
+        z = z - float(np.quantile(z, mal))
     return (float(tp.relief) * z).astype(np.float32, copy=False)
 
 

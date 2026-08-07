@@ -27,8 +27,8 @@ varld:
     beta: 2.4
     # Havet som bred bassäng vid basnivån. Andelen styr; radien löses fram.
     hav_andel: 0.20
-    hav_djup: 2.0
-    base: 1.5
+    hav_lutning: 1.0
+
 flora:
   sadd: 4000.0
   plantmassa: 1.32
