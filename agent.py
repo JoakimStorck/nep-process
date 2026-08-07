@@ -306,6 +306,18 @@ class AgentParams:
     # Uppmätt lutning på land vid 64x128: p10 0,018, median 0,041, p90 0,079,
     # max 0,43. `slope_ref` är satt vid p90, så medianterrängen ligger halvvägs
     # in i skalan och de brantaste sluttningarna mättar.
+    # Metabol kostnad för att röra sig i vatten, per enhet pådrag och
+    # nedsänkning, skalad med massa på samma sätt som dragkraften. Sätts i
+    # storleksordningen F0 = 5e4 så att vadande i full nedsänkning kostar
+    # jämförbart med att springa i full fart på land.
+    wade_cost: float = 3.0e4
+
+    # Passiv drift. `drift_gain` skalar genomströmningen per vattendjup till en
+    # fart i cellbredder per månad; `drift_max` är taket, satt under faunans
+    # egen fart så att strömmen kan flytta men aldrig kasta.
+    drift_gain: float = 12.0
+    drift_max: float = 12.0
+
     climb_gain: float = 1.5
     descend_gain: float = 0.5
     slope_ref: float = 0.08
@@ -1026,6 +1038,7 @@ class Body:
         pheno: Phenotype,
         extra_drain: float = 0.0,
         T_env: float = 0.0,
+        submersion: float = 0.0,
         age_s: float = 0.0,
     ) -> None:
         """
@@ -1126,6 +1139,7 @@ class Body:
         _heatcap      = float(AP.heatcap_J_per_kgC)
         _thermo_Pmax  = float(AP.thermo_Pmax_per_kg)
         _cold_dmg     = float(AP.cold_damage_gain)
+        _water_heat   = float(getattr(AP, "water_heatloss_gain", 0.0))
         _gest_burden  = float(getattr(AP, "gestation_mass_burden", 0.0))
         _gest_over    = float(getattr(AP, "gestation_P_overhead_per_kg", 0.0))
         _gest_rate    = float(AP.gestation_growth_kg_per_s)
@@ -1227,7 +1241,18 @@ class Body:
         Tb   = float(self.Tb)
         Tenv = float(T_env)
 
+        # Vatten leder värme ungefär tjugofem gånger snabbare än luft. **Det
+        # är det verkliga skälet att nedsänkning dödar en jämnvarm organism** —
+        # inte drunkning, som kräver ett andningssubsystem modellen inte har.
+        #
+        # `submersion` är samma tal som draget läser: djupet mättat mot en
+        # referens, gånger hur långt kroppens täthet ligger från vattnets. En
+        # neutral kropp har alltså inte bara lättare att röra sig utan också
+        # lättare att hålla värmen, vilket är riktigt: den ligger högre i
+        # vattnet och exponerar mindre yta.
         K   = _thermo_k * (M_eff ** _thermo_exp)
+        if submersion > 0.0:
+            K *= 1.0 + _water_heat * float(submersion)
         Cth = max(1e-9, _heatcap * M_eff)
 
         P_need = max(0.0, K * (_Tb_set - Tenv)) if Tb < _Tb_set else 0.0
@@ -3139,6 +3164,23 @@ class Agent:
         # föregående ticks numeriska transient.
         eta = clamp(float(self.AP.locomotion_eff), 1e-6, 1.0)
         E_move = (dt * max(0.0, F_prop * speed)) / eta
+
+        # Vadandet kostar, och det måste läggas till uttryckligen.
+        #
+        # `E_move` är dragkraftens dissipation vid kraftbalans, alltså
+        # proportionell mot den *uppnådda* farten. Höjt drag sänker farten och
+        # därmed energin: ett landdjur som vadade brände mindre per tick än ett
+        # som sprang. Vatten var en fälla, inte en fara — djuret kom ingenstans
+        # men led inte medan det stod där.
+        #
+        # Det är fysiologiskt bakvänt. Den metabola kostnaden för rörelse sätts
+        # av muskelarbetet, inte av sträckan man faktiskt tillryggalägger, och
+        # att vada är ansträngande just därför att arbetet inte omsätts i
+        # förflyttning. Tillägget är därför proportionellt mot pådraget och mot
+        # hur illa kroppen möter vattnet, oberoende av vad farten blev.
+        if w_fac > 0.0 and u > 0.0:
+            E_move += (dt * float(self.AP.wade_cost) * u * w_fac
+                       * (M_pre ** float(self.AP.force_mass_exp))) / eta
 
         # --- 2. riktning: relaxation med tak, plus persistent brus ------------
         # Centripetalvillkoret: en snabb organism svänger trögt. Vid låg fart

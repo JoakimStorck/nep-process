@@ -2520,6 +2520,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~7008~~ | partikulär transport av förna nedströms; sjöar som fällor | faunans asätande | **klart** |
 | ~~7009~~ | täthet härledd ur strukturandel; `buoyancy` får skrivare och läsare; drag i vatten | faunans rörelse | **klart, men läsaren fyrar aldrig — se nedan** |
 | ~~7009b~~ | lutningen som framkomlighet: uppför kostar, nedför är billigt | faunans rörelse | **klart**, fart 55 nedför mot 20 uppför |
+| ~~7009c~~ | vadandet kostar, värmeledning vid nedsänkning, passiv drift ur kontinuitet | faunan möter vattnet | **klart** |
 | 7010 | vattendjupet som fjärde världskanal och fri MLP-ingång | selektionen | öppen |
 | ~~7010~~ | ~~vattenaxeln som nisch~~ | | **slås ihop med 7009** |
 | ~~7011~~ | ~~glesning av hydro~~ | | **utgår**, se nedan |
@@ -2565,6 +2566,30 @@ lutning        n      fart
 Korrelation −0,573. Asymmetrin mellan `climb_gain` 1,5 och `descend_gain` 0,5 är fysiologi och inte en avvägning: koncentriskt muskelarbete uppför kostar ungefär tre gånger excentriskt nedför.
 
 **En mätfälla värd att veta om.** Ett första försök mätte andelen tick som djuren pekade nedför och fick 40,5 procent *med* kostnaden mot 51,6 utan — alltså till synes tvärtemot. Det är ett samplingsartefakt: ett långsamt djur bidrar med fler mätpunkter medan det pekar uppför. Tidsviktade och sträckviktade mått på rörelse går isär så snart farten beror på riktningen, och det gäller varje framtida mått på var djuren befinner sig.
+
+### Vattnet fick två element med var sin kostnad
+
+7009 gav bara halva asymmetrin. Tre fel rättade:
+
+**Vatten var en fälla, inte en fara.** `E_move` är dragkraftens dissipation vid kraftbalans, alltså proportionell mot den *uppnådda* farten. Höjt drag sänkte farten och därmed energin — ett landdjur som vadade brände mindre per tick än ett som sprang. Den metabola kostnaden för rörelse sätts av muskelarbetet, inte av sträckan, så vadandet har nu ett eget tillägg proportionellt mot pådraget och nedsänkningen.
+
+**`water_heatloss_gain` deklarerades i 7009 och kopplades aldrig.** En parameter utan läsare, införd av samma slags förbiseende som projektet gång på gång hittar hos sig självt. Nu multiplicerar den värmeledningen: vatten leder värme tjugofem gånger snabbare än luft, vilket är det verkliga skälet att nedsänkning dödar en jämnvarm organism.
+
+**Passiv drift ger den flytande änden sin nedsida**, och den behövde inte uppfinnas: strömmen går till havet, och havet ligger vid noll grader.
+
+**Strömhastigheten kommer ur kontinuitetsvillkoret**, `Q = A · v`. Cellarean är 1, så tvärsnittet är vattendjupet och hastigheten blir `Q / djup` i cellbredder per tick — `discharge` är redan en volym per tick, så ingen `dt` ska in en gång till. Ett mellanliggande försök skalade i stället med lutningen; det gav rätt kvalitativt utfall men ersatte en bevarandelag med en heuristik, och dolde att `dt` räknades två gånger.
+
+Utfallet faller ut utan att kodas:
+
+```
+fåror   60 celler   hastighet median 2,00 (mättar mot taket)
+sjöar  153 celler   hastighet median 0,34
+faunans egen fart               0,48 cellbredder/tick
+```
+
+**Sjöar är simbara, floder är enkelriktade.** Och eftersom sjöarna är sedimentfällor sedan 7008 ligger födan just där vattnet står stilla. Den akvatiska nischen är alltså sjöar; floderna är rutschbanor till havet.
+
+Taket på 2,0 binder i fåror och är inte ett numeriskt undantag utan en utsaga om det som ligger under cellskalan: en verklig flod har stränder och bakvatten där en organism kan hålla position, och en cellmedelhastighet överdriver hur obönhörligt strömmen sveper.
 
 ### Öppna frågor efter Steg 7
 

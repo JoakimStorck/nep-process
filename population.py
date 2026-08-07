@@ -3033,6 +3033,87 @@ class Population:
     # -----------------------------
     # step-methods
     # -----------------------------
+    def _drift_system(self) -> float:
+        """
+        Passiv drift: flytande organismer förs med strömmen.
+
+        Direkt efter hydro och **före** sensing och beslut, som manifestet
+        kräver. Det håller isär rörelse som fysik från rörelse som beteende:
+        ett djur som drivit en bit ska fatta sitt nästa beslut från den plats
+        strömmen lämnade det på, inte tvärtom.
+
+        Riktningen kommer från `flow_to`, alltså samma nät som vattnet självt
+        följer, och styrkan ur genomströmningen. Att drivas är proportionellt
+        mot flytförmågan: en tät kropp står emot, en lätt förs med.
+
+        **Det är den flytande ändens nedsida, och den behöver inte uppfinnas.**
+        Strömmen går till havet, och havet ligger i polarbältet vid noll
+        grader. En kropp som flyter bra men inte tar sig någonstans hamnar där
+        det inte går att leva.
+
+        Returnerar summan av tillryggalagd sträcka, som diagnostik.
+        """
+        world = self.world
+        dr = getattr(world, "drainage", None)
+        if dr is None or float(self.AP.drift_gain) <= 0.0:
+            return 0.0
+        alive = [a for a in self.agents if a.body.alive]
+        if not alive:
+            return 0.0
+
+        grid = self.grid
+        xs = np.fromiter((a.x for a in alive), dtype=np.float64, count=len(alive))
+        ys = np.fromiter((a.y for a in alive), dtype=np.float64, count=len(alive))
+        cells = grid.cell_of_many(xs, ys).astype(np.int64, copy=False)
+
+        depth = np.asarray(world.water, dtype=np.float64)[cells]
+        wet = depth > float(world.WP.submerged_threshold)
+        if not wet.any():
+            return 0.0
+
+        to = np.asarray(dr.flow_to)[cells]
+        ok = wet & (to >= 0)
+        if not ok.any():
+            return 0.0
+
+        # Riktningen mot nedströmscellens centrum, på torusen.
+        cx = np.asarray(grid.cell_center_x, dtype=np.float64)
+        cy = np.asarray(grid.cell_center_y, dtype=np.float64)
+        idx = np.flatnonzero(ok)
+        moved = 0.0
+        buoy = np.fromiter((float(alive[i].pheno.buoyancy) for i in idx),
+                           dtype=np.float64, count=idx.size)
+        q = np.asarray(world.discharge, dtype=np.float64)[cells[idx]]
+        # Strömhastigheten ur kontinuitetsvillkoret: `Q = A · v`. Cellarean är
+        # 1, så tvärsnittet är vattendjupet och hastigheten blir `Q / djup`,
+        # uttryckt i cellbredder per **tick** — `discharge` är redan en
+        # volym per tick, så ingen `dt` ska in en gång till.
+        #
+        # Sjöar blir lugnvatten av sig själva: ett magasin har stort djup mot
+        # måttligt genomflöde, alltså lång uppehållstid och låg hastighet. En
+        # fåra har det omvända. Ingendera behöver kodas.
+        #
+        # Ett mellanliggande försök skalade med lutningen i stället. Det gav
+        # rätt kvalitativt utfall men ersatte en bevarandelag med en
+        # heuristik, och dolde samtidigt att `dt` räknades två gånger.
+        speed = q / np.maximum(depth[idx], float(world.WP.submerged_threshold))
+        np.minimum(speed, float(self.AP.drift_max), out=speed)
+        step = speed * buoy * float(self.AP.drift_gain)
+
+        for k, i in enumerate(idx):
+            if step[k] <= 0.0:
+                continue
+            a = alive[i]
+            c = int(cells[i])
+            t = int(to[i])
+            dx, dy = grid.torus_delta_pos(cx[c], cy[c], cx[t], cy[t])
+            n = math.hypot(dx, dy)
+            if n <= 1e-12:
+                continue
+            a.x, a.y = grid.wrap_pos(a.x + step[k] * dx / n, a.y + step[k] * dy / n)
+            moved += float(step[k])
+        return moved
+
     def _step_world_and_flora(self) -> tuple[float, int, float]:
         """
         Kör världspass + florapass och bygger avledda store-index.
@@ -3040,7 +3121,8 @@ class Population:
           (dM_growth_flora, flora_established, flora_dispersed_mass)
         """
         self.world.step()
-    
+        self._drift_system()
+
         dM_growth_flora, dM_uptake, dM_flora_death = self._growth_system_flora()
         flora_established, flora_dispersed_mass = self._dispersal_system_flora()
     
@@ -3751,6 +3833,7 @@ class Population:
                 pheno=a.pheno,
                 extra_drain=body_in.E_move,
                 T_env=body_in.Tloc,
+                submersion=a._water_factor(),
                 age_s=age_s,
             )
 
