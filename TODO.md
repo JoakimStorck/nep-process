@@ -2591,6 +2591,26 @@ faunans egen fart               0,48 cellbredder/tick
 
 Taket på 2,0 binder i fåror och är inte ett numeriskt undantag utan en utsaga om det som ligger under cellskalan: en verklig flod har stränder och bakvatten där en organism kan hålla position, och en cellmedelhastighet överdriver hur obönhörligt strömmen sveper.
 
+### Världens skala är fastställd — och latituden faller
+
+Se `docs/varldens-skala.md`. **En cell har arean 100 m², längdenheten är 10 m.**
+
+Tre oberoende mått på cellstorleken: florans biomassa säger 2,6–26 m, faunans täthet 4,1–18 m, faunans fart 1 250–6 250 m. De två första kommer från skilda delar av modellen och överlappar; farten är den ensamma avvikaren och är omkring tvåhundra gånger för låg.
+
+Konsekvenserna, som alla är verkliga:
+
+**Latituden är död.** Jordens meridionella gradient är 0,003 °C/km. Över 4096 rader, alltså 38 km, ger det 0,11 grader. Modellen har trettio. Klimatbanden, polarhavet och kontinentallutningen vilar alla på ett antagande som inte håller.
+
+**Årstiden överlever oförändrad.** Den beror inte på skalan. Det som försvinner är att dess amplitud varierar med latitud.
+
+**Höjdgradienten och kalluftsdräneringen överlever och är starkare.** Vid 6,5 °C/km ger 300–500 meters relief två till tre grader, alltså tjugo gånger latitudens bidrag. Kalluft som samlas i sänkor ger inversioner på 5–10 grader och har dessutom *motsatt* tecken mot lapse rate, vilket lapse rate inte kan ersätta.
+
+**Havet överlever.** Det definieras av basnivån och inte av polen: allt annat dräneras till det, det dräneras ingenstans. Den definitionen är skalfri, och `_ocean_mask` klassar redan efter höjd. Bara *placeringen* var latitudberoende. Uppmätt med havet placerat som bred bassäng och ingen latitud alls: 27 % hav, 6,7 % sjö, floder på 2 012 celler, noll strandade celler. Bassängens mjuka kant är dessutom den regionala lutningen, så kontinentallutningen generaliseras från "mot polerna" till "mot basnivån" — vilket är vad den alltid var. Näringssänkan består; den döps om från export till sedimentation.
+
+**Faunans fart är inte löst.** Att höja den tvåhundra gånger går inte — taket är omkring en cellbredd per tick, alltså femtio gånger, och även det är tio gånger under det realistiska. Antingen kortas tidssteget, eller så accepteras att faunan är långsammare än sin kropp motiverar, eller så byts kroppsstorleken. Det är den viktigaste öppna frågan i modellen.
+
+**Lapse rate kan inte sättas förrän skalorna är ense.** Patch 7010 var påbörjad och lades åt sidan av det skälet: att kalibrera ett tal mot en enhet vi vet är trasig är samma fel som lutningen hade så länge höjden saknade enhet.
+
 ### Öppna frågor efter Steg 7
 
 **Vad ska den akvatiska axeln heta och kosta?** `flood_tolerance` är ett symtomnamn — det beskriver ett utfall, inte en kroppsegenskap — och projektets egen erfarenhet säger att det spelar roll: `structure` blev modellens bästa trait därför att den är en materialegenskap med fem konsumenter. Kandidaterna är rörelseform (drag i vatten ned, drag på land upp, som säl och utter), täthet (fett och luft mot förtätat skelett, den enda med ett *inre* optimum), och värmeledning vid nedsänkning (vatten leder värme tjugofem gånger snabbare än luft, vilket är det verkliga skälet att nedsänkning är farligt för en jämnvarm organism). Beslut krävs innan 7009 byggs.
