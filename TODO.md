@@ -2532,7 +2532,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~7018~~ | havet placeras efter höjd som bred bassäng; latituden ur terrängen | dräneringen | **klart**, se nedan |
 | ~~7019~~ | bandet skalat mot världen; amplituden som Hurstexponent | höjdgradienten, sjöarna | **klart**, se nedan |
 | ~~7020~~ | havet som nivå i stället för form; kustlinjen blir en nivåkurva | kusten | **klart**, se nedan |
-| 7021 | knäckt spektrallutning: brant för långa vågor, flack för korta | kusten, sjöarna | öppen |
+| ~~7021~~ | knäckt spektrallutning: brant för långa vågor, flack för korta | kusten, sjöarna | **klart**, se nedan |
 | 7022 | fotoperioden med florans ljusbudget som första läsare | floran, fenologin | öppen |
 | ~~1010~~ | viewern visar terräng och vatten; världen klassar, viewern färgar | ögat | **klart** |
 | ~~1011~~ | höjden skickas en gång vid handskakningen | bandbredd | **klart**, protokoll 6 |
@@ -2975,6 +2975,57 @@ frö 1 men 2,15 för frö 2 med identiska parametrar. Orsaken är spektrallutnin
 och inte havet: vid `beta = 2,4` har landskapet nästan ingen kortvågig energi,
 alltså *är* ytan slät lokalt, och då kan ingen kustlinje bli fransig hur havet än
 läggs. Se 7021.
+
+### Spektret knäcker (7021)
+
+7020 gjorde havet till en nivå men kusten blev ändå slät för hälften av frön.
+Fröberoendet avslöjade orsaken: den låg i spektret och inte i havet. Vid
+`beta = 2,4` har landskapet nästan ingen kortvågig energi — ytan **är** slät
+lokalt, och då kan ingen kustlinje bli fransig hur havet än läggs.
+
+Amplitudkurvan knäcker därför vid `lambda_bryt`: `beta` för de långa vågorna,
+`beta_kort` för de korta, kontinuerlig i knäcken. Verklig topografi har en sådan
+knäck, där tektonikens formgivning slutar och erosionens tar över.
+
+**Det som gjorde uppdelningen värd att bygga:** största sjön är praktiskt taget
+oförändrad genom hela svepet — 1039 mot 954, 2622 mot 2402 — oavsett hur flackt
+kortvågsspektret är. De stora sjöarna styrs av de långa vågorna, alltså av
+dräneringens organisation, och den rörs inte. Det som växer är antalet små
+sjöar. Med en enda lutning måste ett tal göra båda jobben, och det kan det inte.
+
+Uppmätt, tre frön:
+
+```
+β_kort    64x128 kust / sjö %        256x256 kust / sjö %     lutning p95
+  1,0   2,86/4,10/3,61  15,3/13,6   1,55/5,03/1,81   7,6/15,8   0,164 / 0,082
+  1,2   2,41/3,55/3,00  12,4/11,4   1,41/4,06/1,45   5,2/13,2   0,136 / 0,067
+  1,4   2,01/3,12/2,52   9,9/ 9,5   1,32/3,42/1,36   3,7/10,8   0,114 / 0,057
+  1,6   1,85/2,57/2,19   7,5/ 7,3   1,28/2,93/1,29   2,7/ 9,1   0,098 / 0,051
+```
+
+**1,4 valt**: kusttalet stiger från 7020:s 1,43–1,90 till 2,01–3,12 vid 64x128,
+och sjöandelen landar på 8,6–9,9 procent, alltså omkring tio.
+
+**Brytpunkten är absolut och skalar inte med världen.** Erosionens finstruktur
+bestäms av jordart och nederbörd, inte av kartans storlek — samma argument som
+gör placerade former skalfria. Följden är att den lilla världen blir strävare
+än den stora, eftersom en större del av dess band ligger under knäcken: lutning
+p95 0,114 vid 64x128 mot 0,057 vid 256x256.
+
+**Ett för flackt kortvågsspektrum bryter dräneringen.** Vid `beta_kort = 0,6`
+kraschade `drainage.build` med en cykel — den topologiska ordningen täckte
+65 532 av 65 536 celler, sannolikt plana partier där grannar blir exakt lika
+höga i float32. Under ungefär 0,8 existerar ingen dräneringsordning. Golvet bör
+fångas med ett begripligt fel i stället för en RuntimeError om nätet.
+
+**Faunans framkomlighet måste mätas om.** Lutningen p95 går från 0,077 till
+0,114 vid 64x128. `climb_gain 1,5` mot `descend_gain 0,5` kalibrerades mot
+lutningar kring ±0,05, och korrelationen −0,573 mättes där.
+
+**Målvärdet för sjöandel skrivs om** från "median under tio procent" till
+"median omkring tio". Det gamla sattes när sjöar var en artefakt av att
+dräneringen inte samlade sig, inte när de var en nisch — och Sverige har omkring
+nio procent sjöyta.
 
 ### Fotoperioden som senare steg (7022)
 

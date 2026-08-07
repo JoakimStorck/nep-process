@@ -158,10 +158,49 @@ class TerrainParams:
     # bitidentisk med före Hurstskalningen.
     lambda_ref: float = 48.0
 
-    # Spektrallutning: amplituden går som våglängden upphöjt till beta. Låga
-    # värden ger ett finkornigt landskap där varje sänka är sin egen
-    # ändstation; höga ger få stora former och inga sjöar.
+    # Spektrallutningen för de **långa** vågorna: amplituden går som våglängden
+    # upphöjt till beta. Den avgör om floderna samlar sig och hur många stora
+    # sänkor som finns att fylla, eftersom det är samma egenskap sedd i två
+    # skalor.
     beta: float = 2.2
+
+    # Spektrallutningen för de **korta** vågorna, under `lambda_bryt`.
+    #
+    # **Verklig topografi har en knäck i spektret**, där tektonikens formgivning
+    # slutar och erosionens tar över. Med en enda lutning måste ett tal göra två
+    # jobb: hålla dräneringen samlad och ge ytan finstruktur. Vid `beta = 2,4`
+    # har landskapet nästan ingen kortvågig energi — ytan *är* slät lokalt, och
+    # då kan ingen kustlinje bli fransig hur havet än läggs.
+    #
+    # Uppmätt vid 256x256, tre frön, med havet som nivå:
+    #
+    #     β_kort  bryt   kusttal            sjö %            största sjö
+    #      2,4     —    1,22/2,15/1,22    1,7/ 6,5/ 3,8    1039/2622/1675
+    #      1,2     12   1,24/2,70/1,25    2,3/ 8,3/ 5,0     995/2553/1658
+    #      1,4     24   2,01/3,12/2,52    9,9/ 9,5/ 8,6  (64x128)
+    #      1,4     24   1,32/3,42/1,36    3,7/10,8/ 7,4  (256x256)
+    #      0,8     24   1,78/6,27/2,24   10,4/18,8/15,2     954/2402/1580
+    #
+    # **Största sjön är praktiskt taget oförändrad** genom hela svepet. Det var
+    # hela poängen: de stora sjöarna styrs av de långa vågorna, alltså av
+    # dräneringens organisation, och den rörs inte. Det som växer är antalet
+    # små sjöar — och tio procent sjöyta i ett kuperat landskap är inte ett fel
+    # utan Fennoskandien.
+    #
+    # **Golvet är hårt.** Vid 0,6 kraschade dräneringen med en cykel: den
+    # topologiska ordningen täckte 65 532 av 65 536 celler, sannolikt plana
+    # partier där grannar blir exakt lika höga i float32. Under ungefär 0,8 är
+    # spektret för flackt för att en dräneringsordning ska existera.
+    beta_kort: float = 1.4
+
+    # Brytvåglängden i cellbredder, alltså i **absolut mått och inte som andel
+    # av världen**. Erosionens finstruktur bestäms av jordart och nederbörd,
+    # inte av hur stor kartan är — samma argument som gör placerade former
+    # skalfria. I en större värld hamnar knäcken därmed längre ner i bandet,
+    # vilket är riktigt.
+    #
+    # 24 cellbredder är omkring 260 meter.
+    lambda_bryt: float = 24.0
 
     # Antalet moder växer som kvadraten på bandets bredd i vågtal, alltså till
     # tiotusentals i en stor värld. Ett slumpmässigt urval bevarar spektrets
@@ -293,7 +332,14 @@ def _modes(tp: TerrainParams, Lx: float, Ly: float, lam_max: float, rng):
                 continue
             kxs.append(float(a))
             kys.append(float(b))
-            amps.append(lam ** float(tp.beta))
+            # Knäckt potenslag, kontinuerlig i brytpunkten: brant för de långa
+            # vågorna som organiserar dräneringen, flack för de korta som ger
+            # ytan och kustlinjen sin finstruktur.
+            lb = max(1e-9, float(tp.lambda_bryt))
+            if lam >= lb:
+                amps.append(lam ** float(tp.beta))
+            else:
+                amps.append((lb ** float(tp.beta)) * (lam / lb) ** float(tp.beta_kort))
 
     kx = np.asarray(kxs, dtype=np.float64)
     ky = np.asarray(kys, dtype=np.float64)

@@ -399,7 +399,7 @@ det är hela skälet att bygga hydro nu snarare än senare.
 | näringsjämvikt före och efter vittringens rumsliga fördelning | oförändrad ±2 % |
 | hydro-passets kostnad vid 16 384 celler | < 0,1 ms/tick |
 | hydro-passets kostnad vid 262 144 celler | < 2 ms/tick |
-| andel land som är sjö, över tio frön | median under 10 % |
+| andel land som är sjö, över tio frön | median omkring 10 % |
 | `flora_water_limited` vid jämvikt | jämförbar med `flora_light_limited` |
 | korskorrelation i födelsetakt mellan latitudband | under dagens 0,45–0,67 |
 | kapacitetsfält utan läsare efter 7009 | `flood_tolerance` och `buoyancy` borta ur listan |
