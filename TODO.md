@@ -2527,9 +2527,10 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~7013~~ | klimatet som tidsprofil; latituden faller ur världsmodellen | hela världen | **klart**, se nedan |
 | ~~7014~~ | världens position på en jordlik planet; klimatet härlett ur latitud och kontinentalitet | klimatet, fotoperioden | **klart**, se nedan |
 | ~~7015~~ | lapse rate ur fysik: 6,5 °C/km, referensytan mot havsnivån | höjdklimatet | **klart**, se nedan |
-| 7016 | reliefen skalas upp mot tre- till femhundra meter | höjdgradienten får verkan | öppen |
-| 7017 | havet placeras efter höjd som bred bassäng; latituden dör helt | dräneringen, `Grid.cell_lat` | öppen |
-| 7018 | fotoperioden med florans ljusbudget som första läsare | floran, fenologin | öppen |
+| ~~7016~~ | `docs/regionen-och-omlandet.md`: den detaljerade världen som en region i ett grovt rutnät | planen | **klart**, se nedan |
+| 7017 | reliefen skalas upp mot tre- till femhundra meter | höjdgradienten får verkan | öppen |
+| 7018 | havet placeras efter höjd som bred bassäng; latituden dör helt | dräneringen, `Grid.cell_lat` | öppen |
+| 7019 | fotoperioden med florans ljusbudget som första läsare | floran, fenologin | öppen |
 | ~~1010~~ | viewern visar terräng och vatten; världen klassar, viewern färgar | ögat | **klart** |
 | ~~1011~~ | höjden skickas en gång vid handskakningen | bandbredd | **klart**, protokoll 6 |
 
@@ -2701,7 +2702,52 @@ Det gick inte att veta förrän skalan fanns. Talet valdes mot vad det gjorde me
 
 Verkan kommer med 7016. Ett kuperat landskap på tio till fyrtio kilometer har tre- till femhundra meters relief, och då blir bidraget två till tre grader — tjugo gånger mer än latituden någonsin kunde ge vid den här storleken.
 
-### Fotoperioden som senare steg (7018)
+### Regionen och omlandet (7016)
+
+Se `docs/regionen-och-omlandet.md`. Frågan var vad världens rand ska vara när
+den har en position på en planet och därmed inte gärna kan wrappa in i sig
+själv. Svaret är att frågan var fel ställd: det som saknas är inte en rand utan
+ett **omland**.
+
+Den detaljerade världen blir en **region** i ett grovt rutnät av regioner utan
+inre upplösning. Det är one-way nesting, som klimatmodeller gjort i decennier.
+Tiotusen regioner med tio fält vardera är åttahundra kilobyte — lagret är
+gratis, det är kopplingen som kostar.
+
+Tre saker det löser:
+
+**Hydrologin har inget uppströms.** Regionen är i dag hela sitt eget
+avrinningsområde, och en flod kan därför aldrig bli större än regionens egen
+nederbörd. För ett landskap på tio kilometer är det nästan alltid osant. Ett
+tal per randcell rättar det.
+
+**Latituden återuppstår på rätt skala.** Tre grader kräver tusen kilometer, och
+hundra gånger hundra regioner à 1024² är elvahundra. Latituden dog som
+cellfält, vilket var rätt, och kan komma tillbaka som regionfält, vilket också
+är rätt.
+
+**Genflödet.** Effektiv populationsstorlek fem är projektets tystaste problem.
+En migrant per generation räcker enligt Wrights tumregel för att hindra
+delpopulationer från att driva isär — flödet får alltså vara mycket glest och
+ändå verka.
+
+Fyra faror, alla dokumenterade: två biologier om grovregioner får evolvera
+(gränsen dras vid *produktivitet, inte population*), tvåvägskoppling som ger
+artefakter, massbalansen som kräver konton och inte bara egenskaper, och nya
+skalfel — en region är 1 048 576 gånger en cell, och varje flöde över gränsen
+måste bära den kvoten.
+
+**Ordning:** statiskt omland envägs → konton → migration → tvåvägs endast om
+mätning kräver det.
+
+**Två följder för arbetet som pågår.** Torusen behålls tills nivå 1 — ett
+periodiskt randvillkor är ett ärligare provisorium än en kant utan andra sida.
+Och havet i 7018 blir delvis ett provisorium, eftersom basnivån med ett omland
+ligger utanför regionen; det ska därför byggas som **en form bland andra** och
+inte som ett antagande inbakat i dräneringskoden. Skillnaden avgör om flytten
+senare kostar en parameter eller en ombyggnad.
+
+### Fotoperioden som senare steg (7019)
 
 Modellen har i dag **ingen säsong i ljuset alls**, bara i temperaturen, medan floran redan har ljuskonkurrens via Beer–Lambert. Vid 55 grader är vinterdagen 6,9 timmar och sommardagen 17,1 — en faktor 2,5 i ljustillgång, helt oberoende av temperaturen. Dagslängd och insolation är exakt astronomi ur latituden och kostar ingen kalibrering.
 
