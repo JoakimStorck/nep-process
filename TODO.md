@@ -2529,7 +2529,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~7015~~ | lapse rate ur fysik: 6,5 °C/km, referensytan mot havsnivån | höjdklimatet | **klart**, se nedan |
 | ~~7016~~ | `docs/regionen-och-omlandet.md`: den detaljerade världen som en region i ett grovt rutnät | planen | **klart**, se nedan |
 | ~~7017~~ | landformerna som styrt brus; regionens form som romb i hexgitter | planen | **klart**, se nedan |
-| 7018 | havet placeras efter höjd som bred bassäng; latituden dör helt | dräneringen, `Grid.cell_lat` | öppen |
+| ~~7018~~ | havet placeras efter höjd som bred bassäng; latituden ur terrängen | dräneringen | **klart**, se nedan |
 | 7019 | terrängens amplitud som Hurstexponent i stället för fast tal | höjdgradienten | öppen |
 | 7020 | fotoperioden med florans ljusbudget som första läsare | floran, fenologin | öppen |
 | ~~1010~~ | viewern visar terräng och vatten; världen klassar, viewern färgar | ögat | **klart** |
@@ -2815,6 +2815,58 @@ yta. Höjdgradienten kommer därför från en placerad form med en höjd i meter
 **placerade former skalar inte med världen** — ett berg blir inte högre för att
 kartan blir större. Radien ska av samma skäl inte normeras; positionen är var på
 kartan, radien är hur stor i meter.
+
+### Havet placerat efter höjd (7018)
+
+Polarsänkan och kontinentallutningen är borta. Båda var funktioner av
+`grid.cell_lat`, och terrängen är därmed det sista stället i simuleringen som
+läste latituden. Kvar står **en enda förvald form: havet**.
+
+**Havsandelen styr, inte radien.** En radie är inte skalfri: som andel av
+bredden gav den 21 procent hav vid 64x128 men bara 12 vid 64x256, eftersom en
+cirkel inte når hörnen i en avlång värld. Radien löses därför fram med bisektion
+mot det färdiga brusfältet så att den angivna andelen träffas — ett tjugotal
+svep över `hypot` i världens engångsuppbygge.
+
+**Bassängen är elliptisk och följer världens form.** Avståndet normeras mot
+utsträckningen i varje led, så havet blir en cirkel i en kvadratisk värld och
+ett avlångt hav i en avlång. Med en rund bassäng blev sjöandelen 14 procent vid
+64x256 mot 1,5 vid 64x128, eftersom landet längst från mitten saknade väg till
+havet. Formtypen `bassang` tar därför `radie_x` och `radie_y` vid sidan av
+`radie`; en landform har ingen anledning att vara elliptisk och anger bara den
+senare.
+
+Uppmätt över tre frön och fyra världsformer, `hav_andel = 0,20` och djup 2,0:
+
+```
+  värld      hav %        sjö %         största sjö    största flod
+ 64x128    20,0–20,0    1,57–2,00        51–124        1 059–1 404
+ 64x256    18,8–20,0    3,41–5,87       155–332        3 261–4 319
+128x128    19,3–20,0    3,30–4,38        99–265        1 830–3 634
+256x256    19,3–19,7   10,57–14,00      465–854        9 137–10 704
+```
+
+Havsandelen träffas i varje form och storlek. Sjöandelen vid 256x256 är däremot
+över målet på tio procent — och det är **inte havets fel utan bandets**:
+`lambda_max` är fast 48 celler medan världen är fyra gånger bredare, så
+landskapet blir en slätt med krusningar där varje sänka blir sin egen
+ändstation. Det är precis vad 7019 ska rätta.
+
+**Kusten lever nu.** Kusttalet — kustlinjens längd delad med omkretsen hos en
+cirkel med samma havsarea — är 1,32 till 1,48 mot den tidigare kandidatens 1,05
+till 1,09. Den flackare och bredare bassängen gör bruset synligt i kustlinjen,
+precis som 7017 förutsade. Batymetrin bär samma brus, spridning 1,5–1,8 meter,
+så botten är inte en slät skål.
+
+Havsandelen 20 procent ligger nära vad polarhavet gav (19,3 %), så landytan är i
+praktiken oförändrad — bytet flyttar havet, det krymper inte världen.
+
+`f4-start20` är oförändrad. En platt värld har ingen terräng och berörs inte.
+
+**Vad som står kvar.** `Grid.cell_lat`, `band_lat`, `n_bands`, `band_of_cell`
+och `bands_of_cells` har inga läsare i simuleringen längre, men lever kvar i
+viewerns backljus och i `calibrate.py`s gruppering. De rivs när de två flyttats,
+som egen patch — det är en städning och inte en del av den här ändringen.
 
 ### Fotoperioden som senare steg (7020)
 

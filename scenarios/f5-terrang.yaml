@@ -8,9 +8,9 @@
 #
 # Vad som skiljer mot f4-start20:
 #
-#   - havet upptar polarbältet, omkring 20 procent av cellerna, och floran
-#     etablerar sig inte där eftersom markvattnet är noll
-#   - nederbörden följer temperaturen, så bördigheten faller mot polerna
+#   - havet är en bred bassäng vid basnivån, omkring 20 procent av cellerna,
+#     och floran etablerar sig inte där eftersom markvattnet är noll
+#   - nederbörden följer temperaturen över året, alltså sommarregn
 #   - höjden kyler mot omlandet, vilket ger struktur inom latitudbanden
 #   - markvattnet är tredje resurs i tillväxten vid sidan av näring och ljus
 #
@@ -41,22 +41,23 @@ varld:
     lambda_max: 48.0
     lambda_min: 3.0
     beta: 2.4
-    # Kontinental lutning från kust mot inland. Utan den blir landskapet en
-    # platå av gupp utan gradient och vattnet blir stående i varje bassäng.
+    # Havet som bred bassäng. Det som anges är havsandelen och inte radien: radien
+    # löses fram så att andelen träffas, vilket är skalfritt på ett sätt en radie
+    # inte kan vara. Havet är basnivån och skalar därför med världen, till skillnad
+    # från andra former vars mått är absoluta.
     #
-    # Talet skalar med radantalet: lutningen måste vara ungefär brusamplitud
-    # gånger rader delat med lambda_max för att dominera bruset, vilket ger 2,7
-    # vid 256 rader och 1,3 vid 128. Att bära över 3,0 från 64x256 sopade bort
-    # varje sänka — uppmätt noll sjöar och noll fåror.
+    # Uppmätt över tre frön vid 64x128, grundhöjd 1,5 och djup 2,0:
     #
-    #     tilt 0,8   sjö 5,5 %   14–22 sjöar   maxflod 1 521
-    #     tilt 1,2   sjö 3,0 %                          1 459
-    #     tilt 2,0   sjö 0,4 %                          1 289
-    #     tilt 3,0   sjö 0,0 %    1 sjö                 1 177
-    tilt: 1.2
-    coast_lat: 0.93
-    coast_width: 0.06
-    sea_depth: 1.0
+    #     radie 0,9   hav 15–17 %   sjö 2,1–4,8 %   flod 1 224–1 909   kust 1,16–1,51
+    #     radie 1,0   hav 18–23 %   sjö 1,4–3,4 %   flod 1 161–1 629   kust 1,27–1,38
+    #     radie 1,1   hav 22–28 %   sjö 1,2–3,2 %   flod 1 173–1 558   kust 1,31–1,39
+    #
+    # Kusttalet är kustlinjens längd delad med omkretsen hos en cirkel med samma
+    # havsarea. Havsandelen 18–23 % ligger nära det polarhavet gav (19,3 %), så
+    # landytan är i praktiken oförändrad.
+    hav_andel: 0.20
+    hav_djup: 2.0
+    base: 1.5
 flora:
   sadd: bordighet
   plantmassa: 1.32

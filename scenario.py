@@ -228,7 +228,8 @@ class Scenario:
             else (
                 f"terräng frö {tp.seed} relief {tp.relief:g} "
                 f"band {tp.lambda_min:g}–{tp.lambda_max:g} celler β{tp.beta:g} "
-                f"kust |lat| {tp.coast_lat:g}"
+                + (f"hav {100*tp.hav_andel:g} % djup {tp.hav_djup:g}"
+                   if not tp.former else f"{len(tp.former)} placerade former")
             )
         )
         return (
