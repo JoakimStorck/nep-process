@@ -121,39 +121,38 @@ class WorldParams:
     T0: float = 0.0
     T1: float = 20.0
 
-    # Höjdgradient: grader per höjdenhet, mätt mot en referensyta.
+    # Höjdgradient: grader per längdenhet, mätt mot havsnivån.
     #
-    # Referensytan är landets medelhöjd i samma latitudband, inte havsnivån.
-    # Skälet är att terrängens kontinentala lutning är ett dräneringsgrepp och
-    # inte orografi: den stiger från kust mot inland och följer alltså
-    # latituden. Mätt mot rå höjd tappade ekvatorn 7,3 grader vid lapse 2,0
-    # medan rad 32 tappade 2,1 — lutningen åt upp latitudgradienten och
-    # klimatet inverterades. Mot bandets landmedel bidrar den exakt noll, och
-    # bara verklig lokal relief kyler.
+    # **Talet är fysik och inte längre ett val.** Jordens lapse rate i fri luft
+    # är 6,5 grader per kilometer. Längdenheten är tio meter sedan skalan
+    # fastställdes, alltså 0,065 grader per enhet. Se `docs/varldens-skala.md`.
     #
-    # Att referensytan är en bandstorhet gör inte världen bandformad: den
-    # beräknas en gång ur den statiska terrängen, och resultatet varierar per
-    # cell. Temperaturen och tillväxtgrinden är per cell från och med nu.
+    # Var 16,0, vilket är tvåhundrafemtio gånger för mycket — men det gick inte
+    # att veta då, eftersom höjden saknade enhet. Talet valdes mot vad det
+    # gjorde med tillväxtgrinden inom ett latitudband i stället för mot en
+    # storhet utanför modellen, vilket är precis det manifestet nu förbjuder:
+    # en storhet utan enhet går inte att sätta fel på ett sätt som märks.
     #
-    # Uppmätt lokal relief: p5 till p95 kring ±0,25 höjdenheter och max +0,4
-    # till +0,5, stabilt över 64x256, 256x256 och 512x512.
+    # **Referensytan mot bandets landmedel är borttagen.** Den fanns därför att
+    # terrängens kontinentala lutning följde latituden och därmed åt upp
+    # latitudgradienten — mätt mot rå höjd tappade ekvatorn 7,3 grader medan
+    # rad 32 tappade 2,1, och klimatet inverterades. Med latituden borta finns
+    # varken gradienten att äta upp eller banden att mäta mot. Referensen är
+    # havsnivån, vilket är vad en höjd mäts från.
     #
-    # Nivån vald mot vad den gör med tillväxtgrinden inom ett band, inte mot
-    # gradens storlek. Uppmätt vid 64x256, rad 32–63:
+    # **Höjdgradienten är försumbar tills reliefen växer, och det är riktigt.**
+    # Vid dagens relief på omkring två längdenheter, alltså tjugo meter, ger
+    # den 0,14 grader. Ett kuperat landskap på tio till fyrtio kilometer har
+    # tre- till femhundra meters relief, och då blir bidraget två till tre
+    # grader — tjugo gånger mer än latituden någonsin kunde ge vid den här
+    # storleken. Reliefen skalas upp som eget steg; det är den ändringen som
+    # ger höjden dess verkan, inte den här.
     #
-    #     lapse  8   ΔT max  -3,3   grind 0,20–0,62   area 98,9 % av platt
-    #     lapse 16   ΔT max  -6,6   grind 0,09–0,62   area 97,7 %
-    #     lapse 24   ΔT max  -9,8   grind 0,00–0,62   area 96,3 %
-    #
-    # Vid 24 uppstår höglandsceller med grinden i noll — alpin öken är ett
-    # verkligt fenomen, men inte ett vi vill införa oavsiktligt. Vid 16 blir
-    # spridningen inom band 0,065 mot 0,000 före steget, till en kostnad av
-    # 2,3 procent grindviktad area.
-    #
-    # Grinden mättar över 20 grader, så höjden biter bara i de tempererade
-    # banden. Det är rätt: en kulle vid ekvatorn ändrar ingenting, en kulle vid
-    # trädgränsen ändrar allt.
-    lapse_rate: float = 16.0
+    # Sänkor kyls inte: bara upphöjning över havsnivån ger avdrag. Att en grop
+    # skulle bli varmare än sitt omland är inte ett fenomen modellen har —
+    # inversion har motsatt tecken och är kalluftsdränering, en egen mekanism
+    # med egen orsak.
+    lapse_rate: float = 0.065
 
     # -------------------------
     # Hydrology / terrain / world fields
@@ -753,27 +752,22 @@ class World:
 
         Kadensdokumentet förutsåg formen — *profil plus eventuella
         per-cell-modifierare* — och att modifieraren kan vara frånvarande och
-        då inte kosta något. I en platt värld returneras skalären 0,0, och
-        klimatet är bitidentiskt med före Steg 7.
+        då inte kosta något. I en platt värld returneras skalären 0,0.
 
-        Referensytan är landets medelhöjd per latitudband. Se `lapse_rate`.
+        Referensytan är **havsnivån**, vilket är vad en höjd mäts från. Den var
+        en gång landets medelhöjd i samma latitudband, som en lapp på att
+        terrängens kontinentala lutning följde latituden och åt upp
+        klimatgradienten. Med latituden borta finns varken gradienten eller
+        banden, och lappen kan tas bort. Se `lapse_rate`.
+
+        Bara upphöjning kyler. Att en sänka blir varmare än sitt omland är inte
+        ett fenomen modellen har — inversion har motsatt tecken och är
+        kalluftsdränering, en egen mekanism med egen orsak.
         """
         if self.WP.terrain is None or float(self.WP.lapse_rate) == 0.0:
             return 0.0
         z = np.asarray(self.elevation, dtype=np.float64)
-        bands = np.asarray(self.grid.bands_of_cells(np.arange(int(self.grid.n_cells))))
-        land = z >= float(self.WP.sea_level)
-        nb = int(self.grid.n_bands)
-        wsum = np.bincount(bands, weights=land.astype(np.float64), minlength=nb)
-        zsum = np.bincount(bands, weights=np.where(land, z, 0.0), minlength=nb)
-        # Band utan land — de rena havsbanden — får havsnivån som referens.
-        ref = np.where(wsum > 0.0, zsum / np.maximum(wsum, 1e-12),
-                       float(self.WP.sea_level))
-        # Bara upphöjning kyler. En sänka under omlandet blir inte varmare än
-        # sitt band: inversion är ett verkligt fenomen men inte ett vi
-        # modellerar, och en varm grop vore lika mycket ett artefakt som en
-        # kall ekvator.
-        rel = np.maximum(z - ref[bands], 0.0)
+        rel = np.maximum(z - float(self.WP.sea_level), 0.0)
         return (-float(self.WP.lapse_rate) * rel).astype(np.float32, copy=False)
 
 

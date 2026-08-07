@@ -2526,7 +2526,10 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~7011~~ | ~~glesning av hydro~~ | | **utgår**, se nedan |
 | ~~7013~~ | klimatet som tidsprofil; latituden faller ur världsmodellen | hela världen | **klart**, se nedan |
 | ~~7014~~ | världens position på en jordlik planet; klimatet härlett ur latitud och kontinentalitet | klimatet, fotoperioden | **klart**, se nedan |
-| 7015 | fotoperioden med florans ljusbudget som första läsare | floran, fenologin | öppen |
+| ~~7015~~ | lapse rate ur fysik: 6,5 °C/km, referensytan mot havsnivån | höjdklimatet | **klart**, se nedan |
+| 7016 | reliefen skalas upp mot tre- till femhundra meter | höjdgradienten får verkan | öppen |
+| 7017 | havet placeras efter höjd som bred bassäng; latituden dör helt | dräneringen, `Grid.cell_lat` | öppen |
+| 7018 | fotoperioden med florans ljusbudget som första läsare | floran, fenologin | öppen |
 | ~~1010~~ | viewern visar terräng och vatten; världen klassar, viewern färgar | ögat | **klart** |
 | ~~1011~~ | höjden skickas en gång vid handskakningen | bandbredd | **klart**, protokoll 6 |
 
@@ -2686,7 +2689,19 @@ Residualen är storleken på det en position inte kan veta: havsströmmar, molni
 
 **Kända svagheter i formeln**, dokumenterade i `klimat.py` så att de inte upptäcks på nytt: maritim amplitud på hög latitud underskattas — Bergen har 6,8 där formeln ger 3,9, eftersom få stationer är både kustnära och nordliga — och kontinentalitet nära 1 vid ekvatorn extrapolerar utanför underlaget.
 
-### Fotoperioden som nästa steg (7015)
+### Lapse rate blev fysik (7015)
+
+`lapse_rate` var 16,0 grader per höjdenhet. Den är nu **0,065**, alltså jordens 6,5 grader per kilometer uttryckt i modellens längdenhet om tio meter. Skillnaden är tvåhundrafemtio gånger.
+
+Det gick inte att veta förrän skalan fanns. Talet valdes mot vad det gjorde med tillväxtgrinden inom ett latitudband — alltså mot en storhet inuti modellen — eftersom höjden saknade enhet och det inte fanns något utanför att jämföra med. Det är precis den fällan manifestets nya avsnitt 7 beskriver: en storhet utan enhet går inte att sätta fel på ett sätt som märks.
+
+**Referensytan mot bandets landmedel är borttagen.** Den var en lapp på att terrängens kontinentala lutning följde latituden och därmed åt upp klimatgradienten — mätt mot rå höjd tappade ekvatorn 7,3 grader medan rad 32 tappade 2,1, och klimatet inverterades. Med latituden borta finns varken gradienten att äta upp eller banden att mäta mot, och referensen är havsnivån. Det tar också bort `_build_T_offset`s sista beroende till `Grid`s bandmaskineri; kvar är bara terränggeneratorns `cell_lat`, som dör i 7017.
+
+**Höjdgradienten är nu försumbar, och det är riktigt.** Uppmätt i `f5-terrang`: −0,1 grader på högsta punkten mot −7,0 före. Dagens relief är omkring två längdenheter, alltså tjugo meter, och tjugo meter *ska* inte kyla mätbart. Att den gjorde det förut var felet, inte att den slutat.
+
+Verkan kommer med 7016. Ett kuperat landskap på tio till fyrtio kilometer har tre- till femhundra meters relief, och då blir bidraget två till tre grader — tjugo gånger mer än latituden någonsin kunde ge vid den här storleken.
+
+### Fotoperioden som senare steg (7018)
 
 Modellen har i dag **ingen säsong i ljuset alls**, bara i temperaturen, medan floran redan har ljuskonkurrens via Beer–Lambert. Vid 55 grader är vinterdagen 6,9 timmar och sommardagen 17,1 — en faktor 2,5 i ljustillgång, helt oberoende av temperaturen. Dagslängd och insolation är exakt astronomi ur latituden och kostar ingen kalibrering.
 
