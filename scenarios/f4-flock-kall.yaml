@@ -1,0 +1,54 @@
+# Kontroll: svarar späckaxeln på selektionstryck i **båda** riktningar?
+#
+# p159 visade att `fast_frac` går från 0,70 till 0,89 på fyrahundra månader i
+# `f4-flock` — hela fördelningen flyttar, p10 följer medianen — alltså att
+# späcket selekteras bort så hårt mutationsklippet tillåter. Det är rätt svar
+# för den världen: platt, tempererad, inget vatten att äta i och ingen kyla som
+# biter. Isoleringen ger noll och kvar av späcket är bara nackdelen, den
+# otillgängliga energin som bromsar tillväxt och dräktighet.
+#
+# Mekanismen är därmed verifierad åt ett håll. Den här filen prövar det andra.
+# Vänder `fast_frac` nedåt när klimatet kräver isolering är axeln validerad
+# hela vägen. Står den still är sänkningen av `K` för svag och
+# `isolering_max` (0,55) behöver räknas om.
+#
+# **En variabel.** Allt utom latituden är identiskt med f4-flock: samma
+# storlek, samma bördighet, samma åttio grundare i tre fläckar vid florajämvikt,
+# samma fartskala och sällskaplighet. Vattnet och terrängen hålls utanför —
+# de dödar djuren av andra skäl, och den cirkeln ska inte blandas in här.
+#
+# Klimatet ur `klimat.py` vid kontinentalitet 0,55:
+#
+#     latitud   årsmedel   amplitud   kallast   varmast
+#        48       10,9      ±12,2       -1,4      23,1     f4-flock
+#        55        5,3      ±13,5       -8,2      18,8
+#        60        0,9      ±14,3      -13,4      15,2     <- här
+#        65       -3,9      ±14,9      -18,8      11,0
+#
+# 60 grader valt för att vintern ska bita hårt utan att sommaren försvinner:
+# kallast -13,4 mot varmast 15,2. Vid 65 är årsmedlet under noll och floran
+# riskerar att inte bära ett bestånd alls, vilket vore en andra ändring.
+# Amplituden växer dessutom med latituden, så årstidsväxlingen blir starkare —
+# och det är just den som gör en långsam pool värd sitt pris: fett byggs på
+# sommaren och tas ut på vintern, vilket är hela poolens tidsskala.
+
+namn: f4-flock-kall
+varld:
+  bredd: 64
+  hojd: 256
+  bordighet: 4.0
+  latitud: 60.0
+  kontinentalitet: 0.55
+flora:
+  sadd: bordighet
+  plantmassa: 1.32
+fauna:
+  antal: 80
+  insatts_vid: jamvikt
+  flackar: 3
+  flackradie: 20.0
+  max_antal: 8192
+fysiologi:
+  fartskala: 0.5
+  sociability: 0.8
+  sociability_sd: 0.5
