@@ -472,6 +472,22 @@ class AgentParams:
     # Någon `flee_score_sat` finns inte. Flyktstyrkans mättnad *är*
     # `attack_score_min`: den punkt där motparten kan anfalla. Se
     # `styrning.styrka_flykt`.
+    # Den långsamma reservpoolens mobiliseringstak, som andel av `M_slow` per
+    # månad.
+    #
+    # `M_fast` och `M_slow` fanns men uttaget fördelades efter poolernas
+    # *storlek* och inte efter takt, med fast insättning 85/15. De töms i takt
+    # och håller alltid samma proportion — en pool med två namn. Organismen
+    # saknade därmed fysiologins mellansteg: glykogen på timmar, fett på
+    # veckor, protein sist. Modellen hade det första och det tredje, så svälten
+    # var abrupt.
+    #
+    # 0,25 per månad betyder att fettet räcker ungefär fyra månader vid full
+    # mobilisering — en vinter. Talet är valt ur den tidsskala poolen ska
+    # täcka, inte trimmat: `M_fast` täcker tick, `M_slow` ska täcka säsong, och
+    # strukturen är sista utvägen.
+    slow_mobil_frac: float = 0.25
+
     flee_score_min: float = 0.12
 
     # Andel av underhållet som måste betalas ur egen vävnad för att djuret ska
@@ -726,12 +742,17 @@ class Body:
         if n > 0.0:
             self.out_nutrient_kg += n
 
-    def _take_reserve_mass(self, kg: float) -> float:
+    def _take_reserve_mass(self, kg: float, dt: float = 1.0) -> float:
         """
-        Ta reservmassa proportionellt ur båda poolerna. Returnerar uttaget.
+        Ta reservmassa: snabbt först, långsamt med tak. Returnerar uttaget.
 
         Ingen näringsbokföring här — anroparen avgör om massan brändes,
         byggdes in i vävnad eller överfördes till en avkomma.
+
+        `dt` styr hur mycket av den långsamma poolen som får mobiliseras. Utan
+        det blir taket beroende av hur ofta metoden råkar anropas i stället för
+        av tid, vilket är samma klass av fel som `k_age1` — en takt som inte är
+        skalfri mot tidsenheten.
         """
         want = float(kg)
         if want <= 0.0:
@@ -740,10 +761,28 @@ class Body:
         if Mr <= 1e-15:
             return 0.0
         take = want if want < Mr else Mr
-        d_fast = take * (float(self.M_fast) / Mr)
-        self.M_fast = max(0.0, float(self.M_fast) - d_fast)
-        self.M_slow = max(0.0, float(self.M_slow) - (take - d_fast))
-        return float(take)
+
+        # Snabbt först, långsamt sedan — och det långsamma med tak.
+        #
+        # Uttaget fördelades tidigare i proportion till poolernas storlek, vilket
+        # gjorde dem till en pool med två namn. Nu töms `M_fast` innan `M_slow`
+        # rörs, och `M_slow` får bara lämna ifrån sig `slow_mobil_frac · dt` av
+        # sitt eget innehåll per steg. Det ger fettets tidsskala: veckor, mellan
+        # glykogenets tick och strukturens sista utväg.
+        #
+        # Räcker inte taket returneras mindre än begärt. Anroparen ser det som
+        # ett kvarstående underskott, och det är riktigt: ett djur med fett kvar
+        # kan ändå svälta om det inte hinner mobilisera det.
+        d_fast = min(take, float(self.M_fast))
+        self.M_fast = float(self.M_fast) - d_fast
+        rest = take - d_fast
+        if rest > 0.0 and self.M_slow > 0.0:
+            tak = float(self.M_slow) * float(self.AP.slow_mobil_frac) * float(dt)
+            d_slow = min(rest, tak)
+            self.M_slow = max(0.0, float(self.M_slow) - d_slow)
+        else:
+            d_slow = 0.0
+        return float(d_fast + d_slow)
 
     def _catabolize(self, dM_cat: float, structure: float) -> float:
         """
@@ -919,13 +958,14 @@ class Body:
         self.M_fast = float(self.M_fast) * f
         self.M_slow = float(self.M_slow) * f
 
-    def take_energy(self, amount: float, *, burn: bool = True) -> float:
+    def take_energy(self, amount: float, *, burn: bool = True,
+                    dt: float = 1.0) -> float:
         """
         Ta ut energi ur reserven. Returnerar faktiskt uttag i joule.
 
-        Uttaget fördelas proportionellt mot poolernas massa. Skillnaden mellan
-        snabb och långsam ligger tills vidare bara i insättningskvoten; att
-        göra den till en åtkomsttakt är en egen ändring.
+        Uttaget tar `M_fast` först och `M_slow` med tak — se
+        `_take_reserve_mass`. Det ger fettets tidsskala mellan glykogenets tick
+        och strukturens sista utväg.
 
         `burn=True` betyder att massan oxideras och att dess näring utsöndras.
         `burn=False` används när massan i stället överförs någon annanstans —
@@ -936,7 +976,7 @@ class Body:
             return 0.0
 
         e_lab = float(self.AP.E_labile_J_per_kg)
-        take_kg = self._take_reserve_mass(amt / e_lab)
+        take_kg = self._take_reserve_mass(amt / e_lab, dt)
         if take_kg <= 0.0:
             return 0.0
 
@@ -1317,10 +1357,10 @@ class Body:
 
                     build_kg = min(dM_want, have_kg / kg_per_kg)
                     if build_kg > 0.0:
-                        out_gest_build = float(self.take_energy(build_kg * _gest_build_E_kg))
+                        out_gest_build = float(self.take_energy(build_kg * _gest_build_E_kg, dt=dt))
                         # Fostret är ännu odifferentierad, labil vävnad; dess
                         # struktur läggs på först vid födseln.
-                        dM_gest = self._take_reserve_mass(build_kg)
+                        dM_gest = self._take_reserve_mass(build_kg, dt)
                         E_material += dM_gest * _E_labile
                         if dM_gest > 0.0:
                             self.gest_M = M_cur + dM_gest
@@ -1362,7 +1402,7 @@ class Body:
             + out_gest_overhead
         )
 
-        paid = float(self.take_energy(E_out_drain))
+        paid = float(self.take_energy(E_out_drain, dt=dt))
         deficit = max(0.0, E_out_drain - paid)
         E_paid_drain = paid
         self._svalt_andel = styrning.styrka_svalt(deficit, E_out_drain)
@@ -1404,7 +1444,7 @@ class Body:
                 dD_cat = _k_cat_dmg * dM_cat / max(float(self.M), 1e-9)
                 self.D = clamp(float(self.D) + dD_cat, 0.0, _D_max)
 
-            paid2      = float(self.take_energy(deficit))
+            paid2      = float(self.take_energy(deficit, dt=dt))
             deficit    = max(0.0, deficit - paid2)
             E_paid_drain += paid2
 
@@ -1446,8 +1486,8 @@ class Body:
                 dM_want = min(dM_want, self.M_reserve() / _kg_per_kg_growth)
 
                 if dM_want > 0.0:
-                    out_growth = float(self.take_energy(dM_want * _growth_build_E_kg))
-                    mat = self._take_reserve_mass(dM_want)
+                    out_growth = float(self.take_energy(dM_want * _growth_build_E_kg, dt=dt))
+                    mat = self._take_reserve_mass(dM_want, dt)
                     if mat > 0.0:
                         self.M = float(self.M) + mat
                         dM_growth = mat
