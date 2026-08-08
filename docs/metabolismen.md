@@ -48,6 +48,61 @@ Den bevarade storheten är summan. `M` bär organismens egen strukturandel; rese
 
 Reservens tak är `reserve_cap · M`, där `reserve_cap` är en genetisk axel som spänner ungefär 8 till 42 procent av kroppsmassan. Att bära reserv kostar, eftersom reservmassan räknas in i `M_carry` och därmed belastar basalmetabolism, rörelse och värmeförlust. Utan den kostnaden hade axeln ingen avvägning att selekteras på.
 
+
+### Den långsamma poolen är inte långsam
+
+Namnen lovar två tidsskalor. Koden levererar en:
+
+```python
+d_fast = take * (M_fast / Mr)          # uttag i proportion till andelarna
+M_slow -= (take - d_fast)
+```
+
+Uttaget fördelas efter poolernas **storlek**, inte efter olika mobiliserings-
+takt, och insättningen är fast 85/15. Nettot är att de töms i takt och alltid
+håller samma proportion — alltså en pool med två namn.
+
+Det gör att organismen saknar det mellansteg riktig fysiologi har. Verkliga
+djur går glykogen på timmar, fett på veckor och protein sist av allt, och det
+sista är det som skadar. Modellen har det första och det tredje: reserven
+räcker några tick, och när den är slut tas strukturen direkt. Därför är svälten
+abrupt — det finns ingen buffert mellan "reserven tog slut" och "jag äter min
+egen kropp".
+
+**Fettet behöver ingen ny pool.** `M_slow` är fettet; den behöver bara ett tak
+på hur mycket som får mobiliseras per tick. Blir den långsam faller tre saker
+ut som modellen i dag saknar:
+
+**Svälten blir gradvis.** `M_fast` töms först, `M_slow` i sin egen takt, och
+först därefter rörs strukturen. `_svalt_andel` mäter då det den utger sig för
+att mäta — andelen av underhållet som kommer ur den egna kroppen och inte ur
+en tom reserv.
+
+**Isoleringen får en bärare och en sårbarhet.** Låt `M_slow` sänka
+värmeledningen `K`. Späck isolerar, och till skillnad från päls gör det så även
+blött — det är därför sälar har det och inte ull. Ett djur som bränner fettet
+för att överleva en svält blir kallare efteråt, och det är den dubbelbindning
+som gör vintern till en flaskhals i stället för en jämn skatt. Kopplingen är
+inte konstruerad: den följer av att samma massa bär flera funktioner.
+
+**`buoyancy` blir ett tillstånd i stället för ett anlag.** Den härleds i dag ur
+strukturandelen och skrivs vid födsel. Med `M_slow` i uttrycket följer
+flytkraften kroppens aktuella sammansättning — välgödd flyter, utmärglad
+sjunker — och vattenanpassning blir något som kan förloras. Ett flytande djur
+ligger dessutom högre i vattnet och exponerar mindre yta, så späcket verkar två
+gånger på värmen: en gång som isolering och en gång genom mindre nedsänkning.
+
+Axeln som evolverar är alltså `reserve_cap`s fördelning mellan snabbt och
+långsamt plus mobiliseringstakten, inte en ny trait. Den motverkande
+konsekvensen finns redan: reservmassan räknas in i `M_carry` och belastar
+basalmetabolism, rörelse och värmeförlust.
+
+**Utan en vattennisch är axeln ändå död.** Vatten är i dag rent minus —
+värmeförlust, drag, vadkostnad, ingen mat — så varje anpassning till det
+selekteras mot noll. Samtidigt ligger 8,9 procent av all förna i vatten och är
+oåtkomlig för alla. Nischen är den utdelning som gör späcket värt sin massa,
+och den bör finnas innan axeln kan prövas.
+
 ---
 
 ## Flödena genom en tick
