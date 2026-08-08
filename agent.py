@@ -488,6 +488,25 @@ class AgentParams:
     # strukturen är sista utvägen.
     slow_mobil_frac: float = 0.25
 
+    # Späckets isolerande verkan: den andel av värmeledningen `K` som faller
+    # bort vid full späckandel.
+    #
+    # Härledd ur vad vattennischen kräver. Nedsänkt växer `K` fyra gånger
+    # (`water_heatloss_gain` 3,0) och temperaturgapet från 27 till 32 grader,
+    # alltså en faktor 4,7. Termoregleringen låg på 23,6 procent av intaget i
+    # luft (p148), så nedsänkt skulle den kosta 113 procent — djuret betalar
+    # mer än det tjänar varje tick och svälter medan det håller värmen.
+    #
+    # Värmegenereringens tak binder inte: `P_need / P_max` är 0,67 vid M = 1,5
+    # i fem grader vatten. Det går att hålla värmen, det är priset som dödar.
+    # För att termon ska tillbaka till ungefär halva intaget krävs att `K`
+    # sänks med drygt hälften.
+    #
+    # 0,55 är alltså vad som krävs för att nischen ska bära, inte ett trimmat
+    # tal. Ett djur utan späck är oförändrat; ett med maximal andel har knappt
+    # halva värmeledningen.
+    isolering_max: float = 0.55
+
     flee_score_min: float = 0.12
 
     # Andel av underhållet som måste betalas ur egen vävnad för att djuret ska
@@ -1290,7 +1309,25 @@ class Body:
         # neutral kropp har alltså inte bara lättare att röra sig utan också
         # lättare att hålla värmen, vilket är riktigt: den ligger högre i
         # vattnet och exponerar mindre yta.
-        K   = _thermo_k * (M_eff ** _thermo_exp)
+        # Späcket isolerar, och till skillnad från päls gör det så även blött.
+        # Det är därför sälar har det och inte ull, och det är den egenskap som
+        # gör vattennischen möjlig att exploatera: 8,9 procent av all förna
+        # ligger i vatten och är åtkomlig — `sample_carcass` har ingen
+        # vattengrind — men den tjugofemfaldiga värmeledningen dödar innan
+        # måltiden lönar sig.
+        #
+        # Andelen och inte massan: allometrin sitter redan i `M_eff^exp`, så en
+        # stor kropp med samma späckandel ska ha samma *relativa* isolering.
+        #
+        # `M_slow` är fettet sedan 0157 gav den en egen mobiliseringstakt. Det
+        # gör isoleringen till ett tillstånd som byggs långsamt och förloras
+        # långsamt — ett djur som bränner späcket för att överleva en svält är
+        # kallare i månader efteråt, och det är den dubbelbindningen som gör
+        # vintern till en flaskhals i stället för en jämn skatt.
+        _spack = float(self.M_slow) / max(1e-9, M_eff)
+        _isol = float(getattr(AP, "isolering_max", 0.0)) * min(1.0, _spack)
+
+        K   = _thermo_k * (M_eff ** _thermo_exp) * (1.0 - _isol)
         if submersion > 0.0:
             K *= 1.0 + _water_heat * float(submersion)
         Cth = max(1e-9, _heatcap * M_eff)
