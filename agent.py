@@ -507,6 +507,31 @@ class AgentParams:
     # halva värmeledningen.
     isolering_max: float = 0.55
 
+    # Späckandelen som ger halva den maximala isoleringen.
+    #
+    # Formen var linjär i andelen, alltså `i_max · f`. Den härledningen antog
+    # implicit att `f = 1` går att nå, men ett djur kan inte bestå av fett:
+    # `reserve_cap` spänner 8 till 42 procent av kroppsmassan, och uppmätt låg
+    # `M_slow / M_carry` på 0,169 i median. Verklig isolering blev därmed
+    # 0,55 · 0,17 ≈ 9 procent, vilket sparar ungefär 2,5 procent av intaget —
+    # andra ordningen mot den strypta mobiliseringens kostnad, som är omedelbar.
+    #
+    # p159 visade följden: `fast_frac` gick till mutationsklippets tak både vid
+    # 48 och 60 grader, alltså även när termoregleringen kostade 28 procent av
+    # intaget. Axeln optimerade korrekt — fett lönade sig inte — och det var en
+    # självförstärkande fälla, eftersom isoleringen kräver en stor pool medan
+    # en stor pool är dyr just nu.
+    #
+    # Mättande form mot en uppnåelig andel i stället för mot en omöjlig:
+    #
+    #     isolering = i_max · f / (f + f_halv)
+    #
+    # `f_halv = 0,15` ligger strax under den uppmätta medianen, så en normal
+    # späckandel ger drygt halva effekten: 0,169 → 29 procent i stället för 9,
+    # och reservtakets 0,42 → 40 procent. `i_max` behåller sin härledning ur vad
+    # nedsänkning kräver, men den gäller nu vid andelar som går att uppnå.
+    isolering_halv: float = 0.15
+
     flee_score_min: float = 0.12
 
     # Andel av underhållet som måste betalas ur egen vävnad för att djuret ska
@@ -1345,7 +1370,9 @@ class Body:
         # kallare i månader efteråt, och det är den dubbelbindningen som gör
         # vintern till en flaskhals i stället för en jämn skatt.
         _spack = float(self.M_slow) / max(1e-9, M_eff)
-        _isol = float(getattr(AP, "isolering_max", 0.0)) * min(1.0, _spack)
+        _fh = max(1e-9, float(getattr(AP, "isolering_halv", 0.15)))
+        _isol = (float(getattr(AP, "isolering_max", 0.0))
+                 * _spack / (_spack + _fh))
 
         K   = _thermo_k * (M_eff ** _thermo_exp) * (1.0 - _isol)
         if submersion > 0.0:
