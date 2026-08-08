@@ -1,0 +1,61 @@
+# Kontroll B: samma värld, samma klimat, fyra gånger tätare bestånd.
+#
+# p160 hade åttio grundare i 65 536 celler, alltså 1,2 djur per tusen celler.
+# p154, som klarade sig, hade åttio i 16 384 — 4,9 per tusen. Världen växte fyra
+# gånger utan att beståndet gjorde det.
+#
+# Den här filen flyttar **bara tätheten**, och gör det på det sätt som inte
+# smugglar in en andra ändring: antalet fläckar går från 3 till 12 medan
+# fläckradien står still. Hade jag i stället lagt 320 djur i tre fläckar skulle
+# den lokala tätheten inne i en fläck blivit fyra gånger p154:s, och då mäter
+# körningen något annat än den ska — grundarnas möjlighet att hitta varandra i
+# början, snarare än beståndets förmåga att hålla ihop i längden. Nu är den
+# lokala tätheten oförändrad och bara den globala ändras.
+#
+# `insatts_vid` står kvar på `start`, av samma skäl. Att byta till `jamvikt`
+# vore en tredje ändring — faunan skulle möta en helt annan flora — och det är
+# just det felet som gjorde p87 och p97 ogiltiga.
+#
+# Vad utfallet betyder:
+#
+#   överlever      gleshet. Scenariot är feldimensionerat, fysiologin står, och
+#                  steg 4 kan börja utan att isoleringen byggs först.
+#   dör ändå       tätheten var inte det bindande. Då är kylan (kontroll A) eller
+#                  rörelsekostnaden kvar som förklaring.
+#
+# Och om **båda** kontrollerna dör ligger felet i den nya rörelsefysiken snarare
+# än i klimat eller demografi. Då ska `wade_cost`, lutningsmultiplikatorn och
+# `effort` mätas mot varandra innan något byggs — `effort = speed_n + 0,6·activity`
+# är redan känt trasigt, eftersom farten numera beror på lutning och vatten och
+# `speed_n` därför inte längre mäter ansträngning.
+
+namn: f6-256-tat
+varld:
+  bredd: 256
+  hojd: 256
+  dt: 0.02
+  bordighet: 4.0
+  latitud: 48.0
+  kontinentalitet: 0.55
+  terrang:
+    seed: 1
+    lambda_max_frac: 0.75
+    lambda_min: 3.0
+    beta: 2.4
+    hav_andel: 0.2
+    hav_lutning: 1.0
+flora:
+  sadd: bordighet
+  plantmassa: 1.32
+fauna:
+  antal: 320             # <- 80 -> 320, samma globala täthet som p154
+  insatts_vid: start
+  flackar: 12            # <- 3 -> 12, så lokal täthet per fläck är oförändrad
+  flackradie: 20.0
+  grupp_avstand: 0.0
+  grupp_spridning: 1.0
+  max_antal: 8192
+fysiologi:
+  fartskala: 0.5
+  sociability: 0.8
+  sociability_sd: 0.5

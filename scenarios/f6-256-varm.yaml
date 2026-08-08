@@ -1,0 +1,68 @@
+# Kontroll A: samma värld, varmare läge.
+#
+# p160 dog ut på tvåhundra tick med 714 000 kg flora i världen. Dödsorsaken var
+# svält hos 77 av 81, och energibudgeten visar varför: termoregleringen kostade
+# ungefär lika mycket som basalomsättningen, och intag genom underhåll föll från
+# 4,7 till 1,2. I p148 låg termo på 23,6 procent av intaget mot basalens 43,9.
+#
+# Men p160 ändrade två saker samtidigt mot p154. Klimatet blev kallt, och
+# världen blev fyra gånger större med samma åttio grundare. Sällskapet föll från
+# 54,5 till 18,6 procent av agenttickarna och kontakterna från 1,67 till 0,57
+# per djur och månad. Antingen förklaringen kan ha dödat beståndet, och de
+# kräver helt olika åtgärder — isolering som evolverbar trait, eller ett annat
+# dimensionerat scenario.
+#
+# Den här filen flyttar **bara latituden**. Terrängfrö, relief, havsandel,
+# bördighet, antal djur, fläckar och fartskala är identiska med f6-256.
+#
+# Klimatet ur `klimat.py` vid kontinentalitet 0,55:
+#
+#     latitud   årsmedel   amplitud   kallast   varmast
+#        48       10,9      ±12,2       -1,4      23,1     <- p160
+#        40       16,3      ±10,6        5,7      26,9
+#        35       19,2       ±9,4        9,7      28,6
+#        25       23,8       ±7,0       16,8      30,7     <- här
+#
+# 25 grader valt för att kallaste månaden går från -1,4 till +16,8. Det är en
+# avgörande kontrast och inte en nyansering: binder kylan alls ska den släppa
+# helt här. Räcker inte skillnaden för att skilja fallen åt är 35 nästa steg,
+# inte 15 — vid 15 grader är amplituden nere på ±4,3 och årstiden försvinner,
+# vilket är en tredje ändring vi inte vill ha med.
+#
+# Vad utfallet betyder:
+#
+#   överlever      klimatkalibrering. Isoleringsarbetet är rätt spår, och
+#                  fysiologin i övrigt står.
+#   dör ändå       kylan var inte det bindande. Titta då på gleshet (kontroll B)
+#                  och på den nya rörelsekostnaden — `wade_cost` och lutningen.
+
+namn: f6-256-varm
+varld:
+  bredd: 256
+  hojd: 256
+  dt: 0.02
+  bordighet: 4.0
+  latitud: 25.0          # <- enda ändringen mot f6-256
+  kontinentalitet: 0.55
+  terrang:
+    seed: 1
+    lambda_max_frac: 0.75
+    lambda_min: 3.0
+    beta: 2.4
+    hav_andel: 0.2
+    hav_lutning: 1.0
+flora:
+  sadd: bordighet
+  plantmassa: 1.32
+fauna:
+  antal: 80
+  insatts_vid: start
+  flackar: 3
+  flackradie: 20.0
+  grupp_avstand: 0.0
+  grupp_spridning: 1.0
+  max_antal: 8192
+fysiologi:
+  fartskala: 0.5
+  sociability: 0.8
+  sociability_sd: 0.5

@@ -165,6 +165,111 @@ def _s_hist(d: dict, namn: str, v: float) -> None:
     e[2][min(19, max(0, int(v * 20.0)))] += 1
 
 
+# ---------------------------------------------------------------------------
+# Sektorprofilen mot vattnet.
+#
+# Sensingen ger redan riktningsupplöst information: `_acc_dir_B` och
+# `_acc_dir_C` är födoaggregat per sektor över hela synfältet, sex sektorer om
+# sextio grader i kroppsram. Djuret *skannar* alltså sin omgivning.
+#
+# Men `_samla_anspravk` tar `argmax` och kastar resten. Sju anspråk, sju
+# kollapsade riktningar. Frågan den här mätningen ska avgöra är om det spelar
+# någon roll — alltså om profilen bär information utöver sin topp, och om en
+# kostnadsterm skulle ha ändrat valet.
+#
+# Tre tal:
+#
+#   **tvekan**  näst bästa sektorns värde delat med bästas. Nära noll betyder
+#     entoppig profil, och då ger en ombyggnad till sektorrum lite: toppen *är*
+#     svaret. Nära ett betyder att flera riktningar är likvärdiga och att
+#     kostnaden kan avgöra utan att djuret ger upp något.
+#
+#   **våt topp**  andelen tick där den valda födosektorn leder ut i vatten.
+#     Det är den direkta orsaken vi tror dödade p160–p162: djuret ser flora på
+#     andra sidan en vik, får en bäring rakt över vattnet och fryser ihjäl vid
+#     tjugofem gånger värmeledning.
+#
+#   **billigare granne**  andelen tick där någon annan sektor är torr och har
+#     minst hälften av toppens födovärde. Det är precis de tick där en
+#     kostnadsvägd riktning hade valt annorlunda — alltså mätningens svar på
+#     om ombyggnaden är värd sin storlek.
+#
+# Vattnet samplas ett par cellbredder ut längs varje sektor, inte i cellen
+# djuret står i: framåtblick är hela poängen. Uppslaget går via samma
+# `world.water` och `water_drag_depth_ref` som `_water_factor` läser, så
+# mätningen och fysiken kan inte glida isär.
+_W: dict = {"tick": 0, "vat_topp": 0, "billigare": 0, "vat_sektor": 0,
+            "n_sektor": 0, "tvekan": [0] * 20, "vatandel": [0] * 20}
+
+# Hur långt fram sektorn prövas, i cellbredder.
+_W_FRAMAT = 2.0
+
+
+def _vat_kostnad(agent, world, ang_kropp):
+    """Vattnets hinder en bit fram längs en sektor, i [0, 1]."""
+    import math as _m
+    a = float(agent.heading) + float(ang_kropp)
+    x = float(agent.x) + _W_FRAMAT * _m.cos(a)
+    y = float(agent.y) + _W_FRAMAT * _m.sin(a)
+    try:
+        d = float(world.water[world.grid.cell_of(x, y)])
+    except Exception:
+        return 0.0
+    if d <= float(world.WP.submerged_threshold):
+        return 0.0
+    ref = max(1e-9, float(agent.AP.water_drag_depth_ref))
+    return min(1.0, d / ref) * (1.0 - float(getattr(agent.pheno, "buoyancy", 0.0)))
+
+
+_INSTRUMENTED_VATTEN = False
+
+
+def instrument_vatten() -> None:
+    """Mät sektorprofilen och vattnet längs varje sektor, en gång per tick."""
+    global _INSTRUMENTED_VATTEN
+    if _INSTRUMENTED_VATTEN:
+        return
+    _INSTRUMENTED_VATTEN = True
+
+    import numpy as _np
+    import styrning as _st
+    from agent import Agent
+
+    orig = Agent._samla_anspravk
+
+    def wrapped(self, world, *ar, **kw):
+        sens = getattr(self, "sensors", None)
+        aB = getattr(sens, "_acc_dir_B", None) if sens is not None else None
+        aC = getattr(sens, "_acc_dir_C", None) if sens is not None else None
+        ang = getattr(sens, "_acc_dir_ang", None) if sens is not None else None
+        if aB is not None and aC is not None and ang is not None and len(aB) > 1:
+            diet = float(getattr(self.pheno, "diet", 0.5))
+            combo = (_np.asarray(aB, dtype=_np.float64) * ((1.0 - diet) ** 0.7)
+                     + _np.asarray(aC, dtype=_np.float64) * (diet ** 0.7))
+            kost = _np.array([_vat_kostnad(self, world, a) for a in ang])
+
+            _W["tick"] += 1
+            _W["n_sektor"] += kost.size
+            _W["vat_sektor"] += int(_np.count_nonzero(kost > 0.0))
+            for k in kost:
+                _W["vatandel"][min(19, max(0, int(k * 20.0)))] += 1
+
+            i = int(_np.argmax(combo))
+            b = float(combo[i])
+            if b > 1e-9:
+                andra = _np.sort(combo)[-2]
+                _W["tvekan"][min(19, max(0, int(andra / b * 20.0)))] += 1
+                if kost[i] > 0.0:
+                    _W["vat_topp"] += 1
+                    # Finns en torr sektor med minst halva toppens värde?
+                    torr = (kost <= 0.0) & (combo >= 0.5 * b)
+                    if bool(_np.any(torr)):
+                        _W["billigare"] += 1
+        return orig(self, world, *ar, **kw)
+
+    Agent._samla_anspravk = wrapped
+
+
 _INSTRUMENTED_STEERING = False
 
 
@@ -826,6 +931,18 @@ def print_summary(pop: Population, d0: dict, nb0: dict, unika: int, worst_drift:
                       f"   styrka median {_hist_median(e[2], 0.0, 1.0):.3f}"
                       f"  medel {e[1] / e[0]:.3f}")
 
+    if _W["tick"]:
+        n = _W["tick"]
+        print(f"\n  sektorer     {n} tick, {_W['n_sektor'] / n:.1f} sektorer per tick")
+        print(f"    tvekan       näst bästa sektorn är {100 * _hist_median(_W['tvekan'], 0.0, 1.0):.0f} % "
+              f"av bästa i median")
+        print(f"    vatten       {100 * _W['vat_sektor'] / max(1, _W['n_sektor']):5.1f} % av sektorerna "
+              f"leder i vatten två cellbredder fram")
+        print(f"    våt topp     {100 * _W['vat_topp'] / n:5.1f} % av tickarna pekar födotoppen i vatten")
+        if _W["vat_topp"]:
+            print(f"      av dem har {100 * _W['billigare'] / _W['vat_topp']:5.1f} % en torr sektor "
+                  f"med minst halva toppens värde")
+
     print(f"\n  näring (kg)  fri {nb['free']:.2f}  flora {nb['in_flora']:.2f}  "
           f"fauna {nb['in_fauna']:.2f}  förna {nb.get('in_litter', nb['in_detritus']):.2f}  "
           f"kadaver {nb.get('in_carcass', 0.0):.2f}")
@@ -882,6 +999,7 @@ def run(a: argparse.Namespace, seed: int | None = None) -> int:
         instrument_mating()
         instrument_contacts()
         instrument_steering()
+        instrument_vatten()
         for k in _R:
             _R[k] = 0
 
@@ -903,6 +1021,17 @@ def run(a: argparse.Namespace, seed: int | None = None) -> int:
     # som avslutades i den förra. `langder` behöver inte samma behandling
     # eftersom den bara nås som `_C["langder"].append(...)`.
     _C["state"].clear()
+
+    # Per körning, inte vid avläsning. Nollställningen låg först i
+    # `styr_fonster()`, som tömmer vid läsning — samma fälla som 0140 skrev
+    # varningen om, och blocket skrevs därför aldrig ut.
+    _W["tick"] = 0
+    _W["vat_topp"] = 0
+    _W["billigare"] = 0
+    _W["vat_sektor"] = 0
+    _W["n_sektor"] = 0
+    _W["tvekan"] = [0] * 20
+    _W["vatandel"] = [0] * 20
     # Per körning, som `_C` — inte vid avläsning, som `gestation_window()`.
     # Hamnar en räknare i det andra mönstret är den alltid noll när blocket
     # ska skrivas ut, och blocket hoppas tyst över.
