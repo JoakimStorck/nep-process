@@ -1262,8 +1262,28 @@ class Body:
         # sektion (5), där överskottet exkreteras i stället för att raderas —
         # att klippa intaget mot taket lät massa försvinna ur bokföringen.
         if m_assim > 0.0:
-            self.M_fast += 0.85 * m_assim
-            self.M_slow += 0.15 * m_assim
+            # Fördelningen mellan snabb och långsam reserv är en evolverbar
+            # axel, inte en konstant.
+            #
+            # Den var hårdkodad 85/15. Med 0157 och 0158 har de två poolerna
+            # olika egenskaper, och då finns en verklig avvägning att
+            # selektera på — självbegränsande åt båda håll utan att något tak
+            # behöver sättas:
+            #
+            #   för mycket snabbt    ingen vinterbuffert, ingen isolering
+            #   för mycket långsamt  varm men trög — `M_slow` släpper bara
+            #                        `slow_mobil_frac · dt` per steg, och både
+            #                        tillväxt och dräktighet drar ur reserven,
+            #                        så fett som ligger som fett finansierar
+            #                        ingenting
+            #
+            # Det är den andra kostnaden som gör axeln levande, och den är en
+            # bieffekt av 0157 snarare än något som konstruerats för ändamålet.
+            # Den tredje kommer när arbetets värme går in i värmebalansen:
+            # isolering sätter tak på uthållig effekt.
+            _fs = float(getattr(pheno, "fast_frac", 0.85))
+            self.M_fast += _fs * m_assim
+            self.M_slow += (1.0 - _fs) * m_assim
 
         dE_store = E_in
         E_to_M = 0.0

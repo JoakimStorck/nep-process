@@ -52,6 +52,7 @@ class Phenotype:
     stress_per_drain: float
     repair_capacity: float
     reserve_cap: float
+    fast_frac: float
     frailty_gain: float
     E_rep_min: float
 
@@ -225,6 +226,19 @@ _T_BREED_SYNC      = 39
 # mot.
 _T_BREED_PULL      = 40
 
+# Andelen av assimilerad massa som går till den snabba reserven. Resten blir
+# späck.
+#
+# Poolerna fick olika egenskaper i 0157 och 0158 — `M_slow` mobiliseras med tak
+# och isolerar — och först då finns en avvägning att selektera på. Axeln är
+# självbegränsande åt båda håll: för mycket snabbt ger ingen vinterbuffert och
+# ingen isolering, för mycket långsamt ger en varm kropp som är trög att växa
+# och föröka sig, eftersom både tillväxt och dräktighet drar ur reserven och
+# `M_slow` bara släpper `slow_mobil_frac · dt` per steg.
+#
+# Därför behövs inget tak: överdriften straffar sig själv i båda riktningarna.
+_T_FAST_FRAC       = 41
+
 @dataclass(frozen=True)
 class PhenoRanges:
     # maturity
@@ -288,6 +302,11 @@ class PhenoRanges:
     # kroppsmassan som mobiliserbar reserv, 4,0e6 är drygt 40 % — magert
     # respektive vinterfett. Att bära reserven kostar, eftersom den räknas
     # in i M_carry och därmed i basal, rörelse och värmeförlust.
+    # Spännvidden runt det gamla hårdkodade 0,85. Nedre änden gör späcket till
+    # huvudpoolen, övre nästan renodlar den snabba.
+    fast_frac_min: float = 0.50
+    fast_frac_max: float = 0.95
+
     reserve_cap_min: float = 0.5e6
     reserve_cap_max: float = 4.0e6
 
@@ -404,6 +423,8 @@ def derive_pheno(traits: np.ndarray | None, R: PhenoRanges = PhenoRanges()) -> P
         repair_capacity=float(_lerp(R.repair_capacity_min, R.repair_capacity_max, u_rep)),
         reserve_cap=float(_lerp(R.reserve_cap_min, R.reserve_cap_max,
                                 _sigmoid(_get_trait(traits, _T_RESERVE)))),
+        fast_frac=float(_lerp(R.fast_frac_min, R.fast_frac_max,
+                              _sigmoid(_get_trait(traits, _T_FAST_FRAC)))),
         frailty_gain=float(_lerp(R.frailty_gain_min, R.frailty_gain_max, u_frail)),
         E_rep_min=float(_lerp(R.E_rep_min_min, R.E_rep_min_max, u_erep)),
     

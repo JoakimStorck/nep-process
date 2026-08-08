@@ -226,7 +226,7 @@ class PopParams:
     store_growth_min_chunk: int = 256
     store_growth_factor: float = 2.0
     
-    n_traits: int = 41   # +1: _T_BREED_PULL = 40, social fassynkronisering
+    n_traits: int = 42   # +1: _T_FAST_FRAC = 41, snabb mot långsam reserv
 
     spawn_jitter_r: float = 1.5
 
