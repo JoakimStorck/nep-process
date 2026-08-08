@@ -24,6 +24,9 @@ Figure_*.png
 results/
 runs/
 
+# --- Archives ---
+*.tar.gz
+
 # --- OS / editor ---
 .DS_Store
 .repo-agent/
