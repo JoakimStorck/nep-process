@@ -270,6 +270,71 @@ def instrument_vatten() -> None:
     Agent._samla_anspravk = wrapped
 
 
+# ---------------------------------------------------------------------------
+# Reservuttagets strypning.
+#
+# `slow_mobil_frac = 0,25` per månad gör `M_slow` till fett med veckors
+# tidsskala. Men p160b visar att `fast_frac` fortsätter drifta mot den snabba
+# poolen även när isoleringen sänker termoregleringen från 102 till 81 procent
+# av basalomsättningen — späcket lönar sig inte trots att det fungerar.
+#
+# Misstanken är att taket kostar på fel ställe. Det sattes för att motsvara en
+# vinter, alltså fyra månaders **uttömning av hela poolen**. Men uttaget sker
+# per tick, och vid dt = 0,02 släpper taket bara en halv procent av poolen per
+# steg. Det är inte en vinterbudget utan en flaskhals i vardagen — och tillväxt
+# och dräktighet drar ur samma pool.
+#
+# Frågan mätningen ska avgöra: **vem svälter på strypningen?**
+#
+#   underhållet   då är taket för hårt och bör lätta
+#   tillväxten    då ska taket gälla underhåll men inte anabolism, vilket
+#     dräktigheten  också är biologiskt rimligare — en dräktig hona omsätter
+#                 sina reserver snabbare än en vilande
+#
+# Anroparna skiljs på anropsplats via stackens radnummer, inte på en flagga i
+# produktionskoden. Det håller mätningen utanför `agent.py` helt.
+_M: dict = {}
+
+_M_RADER = {1023: "underhåll", 1447: "dräktighet", 1574: "tillväxt",
+            1699: "trimning"}
+
+_INSTRUMENTED_RESERV = False
+
+
+def instrument_reserv() -> None:
+    """Bokför hur ofta reservuttaget ger mindre än begärt, och till vem."""
+    global _INSTRUMENTED_RESERV
+    if _INSTRUMENTED_RESERV:
+        return
+    _INSTRUMENTED_RESERV = True
+
+    import sys as _sys
+    from agent import Body
+
+    orig = Body._take_reserve_mass
+
+    def wrapped(self, kg, dt=1.0):
+        ut = orig(self, kg, dt)
+        want = float(kg)
+        if want > 1e-15:
+            rad = _sys._getframe(1).f_lineno
+            namn = _M_RADER.get(rad, f"rad {rad}")
+            e = _M.get(namn)
+            if e is None:
+                e = [0, 0, 0.0, 0.0]      # anrop, strypta, begärt, givet
+                _M[namn] = e
+            e[0] += 1
+            e[2] += want
+            e[3] += float(ut)
+            # Strypt om uttaget understiger det begärda trots att reserven
+            # hade räckt — alltså att taket och inte tomheten band.
+            if ut < want * 0.999 and float(self.M_reserve()) > want:
+                e[1] += 1
+        return ut
+
+    Body._take_reserve_mass = wrapped
+
+
 _INSTRUMENTED_STEERING = False
 
 
@@ -943,6 +1008,12 @@ def print_summary(pop: Population, d0: dict, nb0: dict, unika: int, worst_drift:
             print(f"      av dem har {100 * _W['billigare'] / _W['vat_topp']:5.1f} % en torr sektor "
                   f"med minst halva toppens värde")
 
+    if _M:
+        print("\n  reservuttag   anrop      strypta    begärt kg    givet kg   andel given")
+        for k, e in sorted(_M.items(), key=lambda kv: -kv[1][0]):
+            print(f"    {k:<12}{e[0]:9d}{100 * e[1] / max(1, e[0]):9.1f} %"
+                  f"{e[2]:12.4g}{e[3]:12.4g}{100 * e[3] / max(1e-12, e[2]):11.1f} %")
+
     print(f"\n  näring (kg)  fri {nb['free']:.2f}  flora {nb['in_flora']:.2f}  "
           f"fauna {nb['in_fauna']:.2f}  förna {nb.get('in_litter', nb['in_detritus']):.2f}  "
           f"kadaver {nb.get('in_carcass', 0.0):.2f}")
@@ -999,6 +1070,7 @@ def run(a: argparse.Namespace, seed: int | None = None) -> int:
         instrument_mating()
         instrument_contacts()
         instrument_steering()
+        instrument_reserv()
         instrument_vatten()
         for k in _R:
             _R[k] = 0
@@ -1021,6 +1093,7 @@ def run(a: argparse.Namespace, seed: int | None = None) -> int:
     # som avslutades i den förra. `langder` behöver inte samma behandling
     # eftersom den bara nås som `_C["langder"].append(...)`.
     _C["state"].clear()
+    _M.clear()
 
     # Per körning, inte vid avläsning. Nollställningen låg först i
     # `styr_fonster()`, som tömmer vid läsning — samma fälla som 0140 skrev
