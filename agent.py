@@ -786,7 +786,8 @@ class Body:
         if n > 0.0:
             self.out_nutrient_kg += n
 
-    def _take_reserve_mass(self, kg: float, dt: float = 1.0) -> float:
+    def _take_reserve_mass(self, kg: float, dt: float = 1.0,
+                           *, strypt: bool = True) -> float:
         """
         Ta reservmassa: snabbt först, långsamt med tak. Returnerar uttaget.
 
@@ -797,6 +798,25 @@ class Body:
         det blir taket beroende av hur ofta metoden råkar anropas i stället för
         av tid, vilket är samma klass av fel som `k_age1` — en takt som inte är
         skalfri mot tidsenheten.
+
+        **`strypt=False` för anabolism.** Taket gäller löpande förbrukning, inte
+        byggande. Fett mobiliseras långsamt när det bränns — det är därför man
+        magrar gradvis under en svält — men en organism som bygger vävnad
+        omsätter reserver i den takt byggandet kräver, och en dräktig hona
+        snabbast av alla.
+
+        0161 mätte att taket band på fel ställe: tillväxten ströps i 19,3
+        procent av anropen mot underhållets 5,8, och fick bara fyra femtedelar
+        av det begärda. Ett djur som ville växa fick vänta på droppet medan ett
+        som bara ville överleva knappt märkte något. Det gjorde späcket dyrt att
+        bära utan att göra det långsamt att förlora, alltså kostnaden utan
+        egenskapen — och `fast_frac` driftade mot den snabba poolen även när
+        isoleringen sänkte termoregleringen från 102 till 81 procent av
+        basalomsättningen.
+
+        Poolens tidsskala är oförändrad: `M_slow` är fortfarande långsam att
+        *förbruka*, vilket är det som gör svälten gradvis och isoleringen till
+        ett tillstånd som byggs och förloras över månader.
         """
         want = float(kg)
         if want <= 0.0:
@@ -821,8 +841,11 @@ class Body:
         self.M_fast = float(self.M_fast) - d_fast
         rest = take - d_fast
         if rest > 0.0 and self.M_slow > 0.0:
-            tak = float(self.M_slow) * float(self.AP.slow_mobil_frac) * float(dt)
-            d_slow = min(rest, tak)
+            if strypt:
+                tak = float(self.M_slow) * float(self.AP.slow_mobil_frac) * float(dt)
+                d_slow = min(rest, tak)
+            else:
+                d_slow = min(rest, float(self.M_slow))
             self.M_slow = max(0.0, float(self.M_slow) - d_slow)
         else:
             d_slow = 0.0
@@ -1444,7 +1467,7 @@ class Body:
                         out_gest_build = float(self.take_energy(build_kg * _gest_build_E_kg, dt=dt))
                         # Fostret är ännu odifferentierad, labil vävnad; dess
                         # struktur läggs på först vid födseln.
-                        dM_gest = self._take_reserve_mass(build_kg, dt)
+                        dM_gest = self._take_reserve_mass(build_kg, dt, strypt=False)
                         E_material += dM_gest * _E_labile
                         if dM_gest > 0.0:
                             self.gest_M = M_cur + dM_gest
@@ -1571,7 +1594,7 @@ class Body:
 
                 if dM_want > 0.0:
                     out_growth = float(self.take_energy(dM_want * _growth_build_E_kg, dt=dt))
-                    mat = self._take_reserve_mass(dM_want, dt)
+                    mat = self._take_reserve_mass(dM_want, dt, strypt=False)
                     if mat > 0.0:
                         self.M = float(self.M) + mat
                         dM_growth = mat

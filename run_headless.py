@@ -295,8 +295,10 @@ def instrument_vatten() -> None:
 # produktionskoden. Det håller mätningen utanför `agent.py` helt.
 _M: dict = {}
 
-_M_RADER = {1023: "underhåll", 1447: "dräktighet", 1574: "tillväxt",
-            1699: "trimning"}
+# Radnumren flyttar när `agent.py` ändras. Kartan slås därför upp mot
+# funktionsnamn plus offset vid installationen i stället för mot fasta tal —
+# se `instrument_reserv`.
+_M_RADER: dict = {}
 
 _INSTRUMENTED_RESERV = False
 
@@ -313,8 +315,29 @@ def instrument_reserv() -> None:
 
     orig = Body._take_reserve_mass
 
-    def wrapped(self, kg, dt=1.0):
-        ut = orig(self, kg, dt)
+    # Bind radnumren vid installationen genom att läsa källan. Fasta tal
+    # åldras med första ändring i `agent.py`, och en mätning som tyst byter
+    # etikett är värre än ingen.
+    import inspect as _insp
+    from agent import Body as _B
+    _src, _lin0 = _insp.getsourcelines(_insp.getmodule(_B))
+    for _i, _rad in enumerate(_src):
+        if "_take_reserve_mass(" not in _rad or "def " in _rad:
+            continue
+        n = _lin0 + _i
+        if "strypt=False" in _rad:
+            _namn = "dräktighet" if "gest" in _rad else "tillväxt"
+        elif "Ecap" in _rad or "trim" in _rad:
+            _namn = "trimning"
+        else:
+            _namn = "underhåll"
+        # `f_lineno` pekar på raden där uttrycket *avslutas*, vilket kan vara
+        # nästa rad när anropet är radbrutet. Registrera båda.
+        _M_RADER[n] = _namn
+        _M_RADER[n + 1] = _namn
+
+    def wrapped(self, kg, dt=1.0, **kw):
+        ut = orig(self, kg, dt, **kw)
         want = float(kg)
         if want > 1e-15:
             rad = _sys._getframe(1).f_lineno
@@ -330,6 +353,8 @@ def instrument_reserv() -> None:
             # hade räckt — alltså att taket och inte tomheten band.
             if ut < want * 0.999 and float(self.M_reserve()) > want:
                 e[1] += 1
+            # Anabolismen går sedan 0162 förbi taket. Raden står kvar i
+            # mätningen för att kunna visa att strypningen faktiskt upphörde.
         return ut
 
     Body._take_reserve_mass = wrapped
