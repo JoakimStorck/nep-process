@@ -1692,16 +1692,20 @@ class World:
 
     def consume_food(self, x: float, y: float, amount: float,
                      diet: float = 0.5,
-                     reach: int = 1) -> Tuple[float, float, float, float]:
+                     vag=None) -> Tuple[float, float, float, float]:
         """
         Reservkonsumtion i World: bara detritus. Levande föda hanteras av
         Population via consume_food_hook.
+
+        `vag` är organismens uppehållsfördelning under ticket — en lista av
+        `(cell, andel)` som summerar till ett. Se `Agent._vagens_celler`. Den
+        ersätter `reach`, en cirkel med heltalsradie kring slutpunkten.
 
         Returnerar (kg_levande, kg_detritus, energi_levande_J, energi_detritus_J).
         """
         hook = getattr(self, "consume_food_hook", None)
         if hook is not None:
-            return hook(x, y, amount, diet, reach)
+            return hook(x, y, amount, diet, vag)
     
         amt = float(amount)
         if not math.isfinite(amt) or amt <= 0.0:

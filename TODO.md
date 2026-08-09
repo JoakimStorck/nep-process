@@ -2556,6 +2556,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~7023~~ | kroppen får ett djupmått; tre läsare delar det | draget, styrningen, driften | **klart**, se nedan |
 | ~~7024~~ | driften blir uppehållstid längs nätet; `drift_max` utgår | styrningen | **klart**, se nedan — max 143 → 13 utan tak |
 | ~~0169~~ | perceptets halvmättnad; `C_sense_K` var en halv gram | perceptet, 0170 | **klart**, se nedan — havet 0,60 → 0,003 |
+| ~~0170~~ | betningen följer vägen i stället för en cirkel | florans fläckighet | **klart**, se nedan — kalibrering öppen |
 | 7010 | vattendjupet som fjärde världskanal och fri MLP-ingång | selektionen | öppen |
 | ~~7010~~ | ~~vattenaxeln som nisch~~ | | **slås ihop med 7009** |
 | ~~7011~~ | ~~glesning av hydro~~ | | **utgår**, se nedan |
@@ -2646,6 +2647,35 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Betningen följer vägen (0170)
+
+`reach = ceil(fart · dt)` gav en cirkel med heltalsradie kring **slutpunkten**.
+Den var fel åt två håll samtidigt: för stor, eftersom ett steg på en halv
+cellbredd avrundades upp till radie ett och alltså sju celler, och osymmetrisk,
+eftersom cirkeln låg kring slutpunkten och inte längs vägen.
+
+Betningen läser nu organismens **uppehållsfördelning**: banan under ticket är en
+sträcka från utgångspunkten till den skrivna positionen, och tiden i en cell är
+sträckans andel i den. Vikterna summerar till ett av konstruktion — samma regel
+som all annan transport i modellen, en uppdelning av ett lager.
+
+Det är den första verkliga konsumenten av fördelningsrepresentationen, och det
+gör betningen **mer** lokal, inte mindre. Farhågan var motsatt: en fördelning som
+smetas ut betar medelfältet och förstör den lokala utarmning som driver rörelse.
+Med ett halvt cellsteg täcker vägen en till två celler mot cirkelns sju, så
+riktningen är den omvända.
+
+**Men Hollings funktionella respons räknar sitt tak över den tillgängliga massan
+inom räckhåll**, och räckhållet krympte sjufalt. `graze_search_a` och
+`graze_handle_h` kalibrerades mot cirkeln. Uppmätt faller `toppandel` med
+ungefär 0,011 i samtliga tre frön och `svält` vinner oftare — 18,7 mot 17,2
+procent av tickarna i frö 1. Beståndet: 37, 37, 38 mot 0169:s 32, 39, 39.
+
+**Geometrin är rättad, kalibreringen är det inte.** Talen ovan ska inte läsas
+som att ändringen är dålig utan som att den frilade ett tal som var bundet till
+en form som inte längre finns. Rätt plats att sätta det är mot betningens egen
+mätning av intag per tick, och det hör till en egen patch.
 
 ### Driften blir en uppehållstid (7024)
 

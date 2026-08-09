@@ -1884,7 +1884,8 @@ class Population:
         return created
         
             
-    def _consume_flora_from_store(self, x: float, y: float, amount: float, max_radius: int = 1) -> tuple[float, float]:
+    def _consume_flora_from_store(self, x: float, y: float, amount: float,
+                                  vag=None) -> tuple[float, float]:
         """
         Konsumera växtmassa från diskret flora i OrganismStore via gemensamt spatialindex.
 
@@ -1899,10 +1900,14 @@ class Population:
         got = 0.0
         energy = 0.0
 
-        # Grannskapet en gång, ur grannskapstabellen. Det gamla anropet gjorde
-        # en bredden-först-sökning per radie och slog sedan ihop resultaten med
-        # en mängd; `cells_within` ger redan ringarna i ordning utan dubbletter.
-        ordered_cells = self.grid.cells_within(cell0, int(max_radius))
+        # Cellerna organismen uppehöll sig i under ticket, tyngst först. Utan
+        # en väg — vid init eller om rörelsepasset inte kört — är det den egna
+        # cellen och ingen annan, vilket är rätt: ett djur som inte rört sig har
+        # bara betat där det står.
+        if vag:
+            ordered_cells = [int(c) for c, _w in vag]
+        else:
+            ordered_cells = (cell0,)
 
         # Funktionell respons av Hollings typ II, härledd ur att betandet tar
         # tid. Tillgänglig massa inom räckhåll räknas först; efterfrågan kapas
@@ -2900,7 +2905,7 @@ class Population:
         return out
         
     def consume_food(self, x: float, y: float, amount: float,
-                     diet: float = 0.5, reach: int = 1) -> tuple[float, float, float, float]:
+                     diet: float = 0.5, vag=None) -> tuple[float, float, float, float]:
         """
         Konsumera upp till `amount` kg, från det mest värdefulla först.
 
@@ -2921,9 +2926,16 @@ class Population:
         `diet` är alltså bara en avvägning mellan verkningsgrader, inte
         dessutom en smakriktning.
 
-        `reach` är hur många celler ut betningen når. Den följer sträckan
-        organismen färdats under ticken: ett betande djur äter medan det går,
-        och när ticket är över fjorton timmar hinner det korsa flera celler.
+        `vag` är organismens **uppehållsfördelning** under ticket: en lista av
+        `(cell, andel)` som summerar till ett, byggd ur den sträcka den
+        faktiskt tillryggalade. Se `Agent._vagens_celler`.
+
+        Den ersätter `reach`, en cirkel med heltalsradie kring slutpunkten.
+        Cirkeln var fel åt två håll: för stor, eftersom ett halvt cellsteg
+        avrundades upp till radie ett och alltså sju celler, och osymmetrisk,
+        eftersom den låg kring slutpunkten och inte längs vägen. Att rätta den
+        gör betningen **mer** lokal, och lokal utarmning är vad som gör världen
+        fläckig.
 
         Uppdelningen levande/detritus finns kvar därför att den är verklig i
         anskaffningen: levande vävnad tillhör en organism som växer tillbaka
@@ -2969,7 +2981,7 @@ class Population:
             nonlocal got_l, e_l
             if want <= 0.0:
                 return 0.0
-            g, e = self._consume_flora_from_store(x, y, want, max_radius=int(reach))
+            g, e = self._consume_flora_from_store(x, y, want, vag=vag)
             got_l += g
             e_l += e
             return float(g)
