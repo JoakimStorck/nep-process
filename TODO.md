@@ -2569,6 +2569,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~1010~~ | viewern visar terräng och vatten; världen klassar, viewern färgar | ögat | **klart** |
 | ~~1011~~ | höjden skickas en gång vid handskakningen | bandbredd | **klart**, protokoll 6 |
 | ~~1012~~ | höjdkurvor i viewern, ovanpå vattnet | ögat | **klart**, se nedan |
+| ~~1013~~ | riktningsfördelningen fångas och mäts | 0169, 1014 | **klart**, se nedan — fördelningen är en cosinus |
 
 ### Vad mätningarna ändrade i planen
 
@@ -3059,6 +3060,53 @@ lutningar kring ±0,05, och korrelationen −0,573 mättes där.
 "median omkring tio". Det gamla sattes när sjöar var en artefakt av att
 dräneringen inte samlade sig, inte när de var en nisch — och Sverige har omkring
 nio procent sjöyta.
+
+### Riktningsfördelningen är en cosinus, inte ett fält (1013)
+
+Bakgrunden är att representationen av djuren ska bli en fördelning i stället för
+en punkt — uppehållsplats plus sannolikhet för rörelse — eftersom ett tick på
+fjorton timmar är längre än djurets perceptuella horisont och positionen därför
+inte är en punkt utan ett revir. Se `docs/tidens-skalor.md` när det finns.
+
+Argumentet för att det skulle bli billigt var att fördelningen redan finns:
+`_valj_anspravk` utvärderar `styrka · cos(Δ) − vikt · kostnad(b)` i varje
+kandidatbäring och kastar allt utom `argmax`. Patchen sparar uttrycket i
+`Agent._dir_prof` — samma loop, samma aritmetik, bitidentiskt utfall verifierat
+mot orörd HEAD — och mäter det i `--stats`.
+
+**Argumentet höll inte.** Uppmätt på 64x64, 300 tick, frö 1, 5 998 agenttick:
+
+```
+spridning    p10 1,904   median 1,947   p90 1,989     (i styrkeenheter)
+marginal     p10 0,010   median 0,051   p90 0,092
+likvärdiga   1,05 sektorer av 6,0 inom marginalen från toppen
+```
+
+Spridningen ligger på 1,95 av teoretiskt högsta 2,0. **Det är cosinus, inte
+världen.** Sex sektorer spänner hela varvet, så en pekar mot vinnarens bäring
+och en rakt bort; spannet blir `2 · styrka` oavsett vad som finns där ute.
+Kostnadstermen rör den med några procent.
+
+Följden är strukturell och avgör hur 0169 ska byggas: **fördelningen är en
+entoppig lob runt ett `argmax` som redan tagits.** Multimodaliteten förstördes
+uppströms, i `_samla_anspravk`, där varje anspråk kollapsar sina sektorer till
+en bäring innan arbitreringen ser dem. Två goda fläckar i olika riktningar kan
+inte representeras här, hur mycket av uttrycket man än sparar. En
+utnyttjandefördelning måste byggas ur perceptet, inte ur arbitreringen.
+
+Och perceptet bär den informationen: `_W["tvekan"]` mäter att näst bästa
+sektorn i födoperceptet är **97 procent** av bästa i median. Profilen före
+kollapsen är alltså nästan platt — precis den flerkantighet arbitreringen sedan
+kastar.
+
+**Marginalen ger en andra sak.** Medianen 0,051 ligger under `baring_marginal`
+0,15, alltså under hysteresens tröskel. Riktningen avgörs oftare av att den
+redan var vald än av att den är bäst. Det är vad "Bäringen binds" installerade,
+och nu finns talet.
+
+`_dir_prof` har inga läsare i simuleringen och kan därför inte påverka utfallet.
+Läsordningen är bindande: plats 0 är anspråkets egen bäring, plats 1 till och
+med `n_sektor` är sektormitterna, en eventuell bunden bäring ligger sist.
 
 ### Höjdkurvor i viewern (1012)
 

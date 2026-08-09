@@ -2482,6 +2482,19 @@ class Agent:
     # `_drift_system` och konsumerat av `_integrate_motion`.
     _drift_dx: float = field(init=False, default=0.0, repr=False, compare=False)
     _drift_dy: float = field(init=False, default=0.0, repr=False, compare=False)
+    # Riktningsprofilen från senaste arbitrering: `(bäringar, värden, styrka,
+    # n_sektor)`, eller None när sektorerna saknades.
+    #
+    # Uttrycket `styrka · cos(Δ) − vikt · kostnad(b)` **är** en fördelning över
+    # riktningar — attraktion minus kostnad, utvärderad i varje kandidat. Den
+    # räknas redan varje tick i `_valj_anspravk`, och `argmax` kastade resten.
+    # Här sparas den i stället, oförändrad: fältet har inga läsare i
+    # simuleringen och kan inte påverka utfallet.
+    #
+    # De `n_sektor` första bäringarna efter anspråkets egen är sektormitterna,
+    # i den ordning `_acc_dir_ang` ger dem. En eventuell bunden bäring ligger
+    # sist. Ordningen är bindande för varje läsare.
+    _dir_prof: object = field(init=False, default=None, repr=False, compare=False)
     # Bunden bäring: vald riktning, vilket anspråk som valde den, och kursen
     # den mättes mot. Se `baring_marginal`.
     _bunden_baring: object = field(init=False, default=None, repr=False, compare=False)
@@ -3216,6 +3229,11 @@ class Agent:
 
         Returnerar `(turn, thrust, explore_drive, namn)`.
         """
+        # Profilen gäller innevarande tick. Utan nollställningen skulle en
+        # läsare se förra tickens fördelning för ett djur som inte fick något
+        # anspråk alls, och det är ett tyst fel av samma slag som ett fält utan
+        # ägare.
+        self._dir_prof = None
         i, _p = styrning.valj(anskrav, getattr(self, "_sittande", ""))
         if i < 0:
             self._sittande = ""
@@ -3259,8 +3277,13 @@ class Agent:
             vikt = float(self.AP.kostnad_vikt)
             basta = None
             v_bunden = None
+            # Profilen samlas i samma loop som väljer. Att räkna om den efteråt
+            # vore ett andra uttryck för samma sak, och det är just den sortens
+            # dubblering som låtit styrningen och fysiken glida isär förut.
+            prof = []
             for b, k in zip(kand, kost):
                 v = float(_st) * math.cos((b - float(bias)) * math.pi) - vikt * k
+                prof.append(v)
                 if bb is not None and b == bb:
                     v_bunden = v
                 if basta is None or v > basta[0]:
@@ -3278,6 +3301,7 @@ class Agent:
             self._bunden_baring = float(bias)
             self._bunden_namn = namn
             self._bunden_heading = float(self.heading)
+            self._dir_prof = (tuple(kand), tuple(prof), float(_st), int(len(ang)))
         if thrust_min > 0.0:
             thrust = clamp(max(thrust, thrust_min), 0.0, 1.0)
         explore_drive = float(explore_drive) * float(expl_mult)

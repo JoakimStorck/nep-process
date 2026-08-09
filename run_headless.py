@@ -140,6 +140,46 @@ _S: dict = {"tick": 0, "byten": 0, "n_anskrav": 0,
             "vinnare": {}, "styrka": {}, "forra": {}}
 
 
+# ---------------------------------------------------------------------------
+# Riktningsfördelningen.
+#
+# `_valj_anspravk` utvärderar `styrka · cos(Δ) − vikt · kostnad(b)` i varje
+# kandidatbäring. Det är en fördelning över riktningar — attraktion minus
+# kostnad — och den kollapsades till sitt `argmax`. Frågan den här mätningen
+# ska avgöra är **om fördelningen är toppig eller platt**, eftersom det avgör
+# om en representation som bär hela fördelningen ger något utöver toppen.
+#
+# `_W["tvekan"]` mäter något närliggande men inte samma sak: den läser
+# födoperceptet `accB` före kostnaden och före vinnarens bäring. Här mäts det
+# arbitreringen faktiskt jämför.
+#
+# Tre tal, alla i **styrkeenheter** så att de är jämförbara mellan djur och
+# över tid. Att normera per djur mot dess egen min och max vore att radera
+# just den skillnad som ska mätas: ett platt djur skulle se likadant ut som ett
+# toppigt.
+#
+#   **spridning**  (max − min) över de sex sektorerna, delat med styrkan. Noll
+#     betyder att riktningen inte spelar någon roll för djuret just då; två är
+#     det mesta `cos` kan ge, och mer när kostnaden skiljer sektorerna åt.
+#
+#   **marginal**  (bästa − näst bästa) över samtliga kandidater, delat med
+#     styrkan. Det är exakt den storhet `baring_marginal` jämförs mot, så
+#     medianen säger direkt hur ofta hysteresen binder i stället för att välja.
+#
+#   **likvärdiga**  antal sektorer inom `baring_marginal` från toppen. Det är
+#     den skarpaste avläsningen av platt: ligger fem av sex inom marginalen
+#     finns det ingen riktning att tala om, bara en plats.
+#
+# Alla tre läses ur `Agent._dir_prof`, som produktionskoden redan bygger.
+# Ingen grenlogik replikeras här.
+_P: dict = {"tick": 0, "n_sektor": 0, "likvardiga": 0,
+            "spridning": [0] * 20, "marginal": [0] * 20}
+
+# Histogrammens övre gräns, i styrkeenheter. Värden över den hamnar i sista
+# facket; det syns som en klump vid kanten och är avsiktligt inte tyst.
+_P_HI = 2.0
+
+
 # Fönstret är **skilt** från totalerna och nollställs vid avläsning, som
 # `gestation_window()`. Totalerna nollställs per körning, som `_C`.
 _S_W = [0, 0]
@@ -378,6 +418,69 @@ def _hist_median(h, lo: float, hi: float) -> float:
     return hi
 
 
+def _hist_kvantil(h, lo: float, hi: float, q: float) -> float:
+    """
+    Godtycklig kvantil ur samma fack som `_hist_median`.
+
+    Skild funktion i stället för en generalisering av `_hist_median`: den
+    senare har fyra anropare vars tal står i commitmeddelanden, och en
+    omskrivning skulle behöva visa att de är oförändrade för att vara värd
+    något. Medianen ur den här funktionen och ur den andra är samma tal.
+
+    En fördelning kan bara dömas på sina percentiler. Medelvärdet låg åtta
+    gånger över medianen i floran, och det felet är dokumenterat mer än en
+    gång i det här repot.
+    """
+    n = sum(h)
+    if n <= 0:
+        return float("nan")
+    w = (hi - lo) / len(h)
+    mal = q * n
+    acc = 0
+    for i, c in enumerate(h):
+        if c > 0 and acc + c >= mal:
+            return lo + w * (i + (mal - acc) / c)
+        acc += c
+    return hi
+
+
+def _mat_riktning(agent) -> None:
+    """
+    Riktningsfördelningen ur `Agent._dir_prof`, i styrkeenheter.
+
+    Sektorerna ligger på plats 1 till och med `n_sektor`; plats 0 är
+    anspråkets egen bäring och en eventuell bunden bäring ligger sist.
+    Spridningen mäts **bara över sektorerna**, eftersom det är de som utgör
+    fördelningen över riktningar — de två övriga är enskilda kandidater och
+    skulle bredda spannet utan att säga något om formen. Marginalen mäts över
+    samtliga kandidater, eftersom det är dem valet står mellan.
+    """
+    p = getattr(agent, "_dir_prof", None)
+    if p is None:
+        return
+    _kand, varde, styrka, n_sekt = p
+    if styrka <= 0.0 or n_sekt <= 1 or len(varde) < 1 + n_sekt:
+        return
+
+    sekt = varde[1:1 + n_sekt]
+    _P["tick"] += 1
+    _P["n_sektor"] += n_sekt
+
+    spr = (max(sekt) - min(sekt)) / styrka
+    _P["spridning"][min(19, max(0, int(spr / _P_HI * 20.0)))] += 1
+
+    ord_ = sorted(varde, reverse=True)
+    marg = (ord_[0] - ord_[1]) / styrka if len(ord_) > 1 else _P_HI
+    _P["marginal"][min(19, max(0, int(marg / _P_HI * 20.0)))] += 1
+
+    # Likvärdiga sektorer: de som ligger inom `baring_marginal` från den bästa
+    # sektorn. Tröskeln tas ur `AgentParams` och inte som ett eget tal här —
+    # ändras den i modellen ska mätningen följa med.
+    tak = float(agent.AP.baring_marginal) * styrka
+    b = max(sekt)
+    _P["likvardiga"] += sum(1 for v in sekt if b - v <= tak)
+
+
 def instrument_steering() -> None:
     """
     Bokför arbitreringen. Lindar de två metoder som bygger och väljer
@@ -404,6 +507,7 @@ def instrument_steering() -> None:
 
     def wrapped_valj(self, anskrav, *ar, **kw):
         out = orig_valj(self, anskrav, *ar, **kw)
+        _mat_riktning(self)
         namn = out[3]
         if namn:
             e = _S["vinnare"].get(namn, 0)
@@ -1021,6 +1125,21 @@ def print_summary(pop: Population, d0: dict, nb0: dict, unika: int, worst_drift:
                       f"   styrka median {_hist_median(e[2], 0.0, 1.0):.3f}"
                       f"  medel {e[1] / e[0]:.3f}")
 
+    if _P["tick"]:
+        n = _P["tick"]
+        sn = max(1, _P["n_sektor"])
+        print(f"\n  riktning     {n} agenttick, {_P['n_sektor'] / n:.1f} sektorer per tick"
+              f"   (i styrkeenheter)")
+        print(f"    spridning    p10 {_hist_kvantil(_P['spridning'], 0.0, _P_HI, 0.10):.3f}"
+              f"   median {_hist_median(_P['spridning'], 0.0, _P_HI):.3f}"
+              f"   p90 {_hist_kvantil(_P['spridning'], 0.0, _P_HI, 0.90):.3f}")
+        print(f"    marginal     p10 {_hist_kvantil(_P['marginal'], 0.0, _P_HI, 0.10):.3f}"
+              f"   median {_hist_median(_P['marginal'], 0.0, _P_HI):.3f}"
+              f"   p90 {_hist_kvantil(_P['marginal'], 0.0, _P_HI, 0.90):.3f}")
+        print(f"    likvärdiga   {_P['likvardiga'] / n:.2f} sektorer av "
+              f"{_P['n_sektor'] / n:.1f} inom marginalen från toppen"
+              f"   ({100 * _P['likvardiga'] / sn:.1f} %)")
+
     if _W["tick"]:
         n = _W["tick"]
         print(f"\n  sektorer     {n} tick, {_W['n_sektor'] / n:.1f} sektorer per tick")
@@ -1139,6 +1258,11 @@ def run(a: argparse.Namespace, seed: int | None = None) -> int:
     _S["n_anskrav"] = 0
     _S["vinnare"] = {}
     _S["styrka"] = {}
+    _P["tick"] = 0
+    _P["n_sektor"] = 0
+    _P["likvardiga"] = 0
+    _P["spridning"] = [0] * 20
+    _P["marginal"] = [0] * 20
     # In-place: wrappern läser dicten per anrop, men `forra` bär tillstånd
     # mellan världar vid `--seeds` om den ombinds.
     _S["forra"].clear()
