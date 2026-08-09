@@ -172,8 +172,12 @@ _S: dict = {"tick": 0, "byten": 0, "n_anskrav": 0,
 #
 # Alla tre läses ur `Agent._dir_prof`, som produktionskoden redan bygger.
 # Ingen grenlogik replikeras här.
-_P: dict = {"tick": 0, "n_sektor": 0, "likvardiga": 0,
-            "spridning": [0] * 20, "marginal": [0] * 20}
+#   **toppandel**  bästa sektorns andel av **perceptets** summa. Det är den
+#     enda av de fyra som mäter profilen *före* arbitreringens kollaps, och
+#     därmed den enda som kan vara flat på ett informativt sätt. Jämförelsen är
+#     `1/S`: lika stor betyder att riktningen inte bär någon information alls.
+_P: dict = {"tick": 0, "n_sektor": 0, "likvardiga": 0, "n_percept": 0,
+            "spridning": [0] * 20, "marginal": [0] * 20, "toppandel": [0] * 20}
 
 # Histogrammens övre gräns, i styrkeenheter. Värden över den hamnar i sista
 # facket; det syns som en klump vid kanten och är avsiktligt inte tyst.
@@ -479,6 +483,15 @@ def _mat_riktning(agent) -> None:
     tak = float(agent.AP.baring_marginal) * styrka
     b = max(sekt)
     _P["likvardiga"] += sum(1 for v in sekt if b - v <= tak)
+
+    # Perceptet, före kollapsen. Skild räknare eftersom ett djur kan ha en
+    # arbitrering utan att ha sensat.
+    f = getattr(agent, "_dir_food", None)
+    if f is not None and len(f) > 1:
+        tot = float(sum(f))
+        if tot > 0.0:
+            _P["n_percept"] += 1
+            _P["toppandel"][min(19, max(0, int(float(max(f)) / tot * 20.0)))] += 1
 
 
 def instrument_steering() -> None:
@@ -1139,6 +1152,12 @@ def print_summary(pop: Population, d0: dict, nb0: dict, unika: int, worst_drift:
         print(f"    likvärdiga   {_P['likvardiga'] / n:.2f} sektorer av "
               f"{_P['n_sektor'] / n:.1f} inom marginalen från toppen"
               f"   ({100 * _P['likvardiga'] / sn:.1f} %)")
+        if _P["n_percept"]:
+            jamn = n / max(1e-9, _P["n_sektor"] / n) / n
+            print(f"    toppandel    p10 {_hist_kvantil(_P['toppandel'], 0.0, 1.0, 0.10):.3f}"
+                  f"   median {_hist_median(_P['toppandel'], 0.0, 1.0):.3f}"
+                  f"   p90 {_hist_kvantil(_P['toppandel'], 0.0, 1.0, 0.90):.3f}"
+                  f"   (jämn fördelning = {jamn:.3f})")
 
     if _W["tick"]:
         n = _W["tick"]
@@ -1261,8 +1280,10 @@ def run(a: argparse.Namespace, seed: int | None = None) -> int:
     _P["tick"] = 0
     _P["n_sektor"] = 0
     _P["likvardiga"] = 0
+    _P["n_percept"] = 0
     _P["spridning"] = [0] * 20
     _P["marginal"] = [0] * 20
+    _P["toppandel"] = [0] * 20
     # In-place: wrappern läser dicten per anrop, men `forra` bär tillstånd
     # mellan världar vid `--seeds` om den ombinds.
     _S["forra"].clear()

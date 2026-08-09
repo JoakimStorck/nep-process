@@ -96,6 +96,21 @@ och bildrutan bär inte fälten alls. Hav, sjöar och vattendrag ritas ovanpå
 *varje* läge, eftersom en karta i FLORA-läge annars ser ut som om havet vore torr
 mark utan växtlighet.
 
+`D` ritar vad varje djur **ser** åt varje håll: födoperceptet per
+riktningssektor, som kilar kring kroppen. Opaciteten är sektorns andel av
+profilens summa och inte dess värde, så bläcket är bevarat — två djur bär alltid
+lika mycket färg, och det enda som skiljer är hur samlad den är. Ett entoppigt
+djur får en ljus kil, ett platt får sex bleka, och en flock blir sex överlagrade
+moln. Kulören är anspråket som vann arbitreringen, med nödlägena i rött och
+vardagen i grönt och blått, så att en flock som slår om från bete till flykt
+syns som en färgvåg.
+
+Det är perceptet som ritas och inte arbitreringens riktningsuttryck. Det senare
+mättes i 1013 och visade sig vara en cosinus kring en bäring som redan är ett
+`argmax` — spridningen låg på 1,94 av teoretiskt högsta 2,0, oberoende av
+terräng. Profilen före kollapsen bär däremot verklig flerkantighet: näst bästa
+sektorn är 97 procent av bästa i median.
+
 Kör samma commit i båda ändar. Klient och server jämför protokollversion vid
 anslutning och säger ifrån om de skiljer sig.
 
@@ -109,6 +124,7 @@ anslutning och säger ifrån om de skiljer sig.
 | `F` | ytfördelning: vinkelkilar eller stippling |
 | `T` | florans färgaxel |
 | `A` / `H` | djur av och på, HUD av och på |
+| `D` | sektorperceptet som kilar kring varje djur |
 | hjul, `.` / `,` | zooma in och ut |
 | dra, piltangenter | panorera |
 | `0` | visa hela världen igen |

@@ -2570,6 +2570,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~1011~~ | höjden skickas en gång vid handskakningen | bandbredd | **klart**, protokoll 6 |
 | ~~1012~~ | höjdkurvor i viewern, ovanpå vattnet | ögat | **klart**, se nedan |
 | ~~1013~~ | riktningsfördelningen fångas och mäts | 0169, 1014 | **klart**, se nedan — fördelningen är en cosinus |
+| ~~1014~~ | sektorperceptet ritas som kilar; opaciteten är andelen | ögat, 0169 | **klart**, protokoll 7, se nedan — perceptet är nästan platt |
 
 ### Vad mätningarna ändrade i planen
 
@@ -3107,6 +3108,48 @@ och nu finns talet.
 `_dir_prof` har inga läsare i simuleringen och kan därför inte påverka utfallet.
 Läsordningen är bindande: plats 0 är anspråkets egen bäring, plats 1 till och
 med `n_sektor` är sektormitterna, en eventuell bunden bäring ligger sist.
+
+### Perceptet ritas, och det är nästan platt (1014)
+
+`D` ritar födoperceptet per riktningssektor som kilar kring varje djur.
+Opaciteten är sektorns **andel** av profilens summa och inte dess värde, så
+bläcket är bevarat: två djur bär alltid lika mycket färg och det enda som
+skiljer är hur samlad den är. Ett entoppigt djur får en ljus kil, ett platt får
+sex bleka, och en flock blir sex överlagrade moln. Kulören är vinnande anspråk.
+
+Att det är perceptet och inte arbitreringens uttryck följer av 1013.
+
+Profilen produceras i `Agent` med samma dietviktning som `_food_local`, inte
+omräknad i `viewframe` — två exemplar av samma uttryck är hur styrningen och
+fysiken glider isär. Fältet har inga läsare i simuleringen; bitidentitet
+verifierad mot orörd HEAD.
+
+**Och den nya siffran är obekväm.** `toppandel` mäter bästa sektorns andel av
+perceptets summa. Uppmätt på 64x64, 300 tick, frö 1:
+
+```
+toppandel    p10 0,155   median 0,176   p90 0,197   (jämn fördelning = 0,167)
+```
+
+Bästa riktningen bär **17,6 procent mot jämnfördelningens 16,7**. Perceptet är
+alltså inte bara flerkantigt utan i praktiken *isotropt* — riktningen bär nästan
+ingen information alls. Det är samma sak `tvekan` sa med 97 procent, nu som ett
+tal med en teoretisk referens att jämföra mot.
+
+Den troliga orsaken är en skala och inte en bugg: **synvidden är större än
+födofältets fläckstorlek.** Djuret medelvärdesbildar över så stor yta att varje
+sektor ser samma sak. Det är den rumsliga motsvarigheten till att ticket är
+längre än den perceptuella horisonten — samma motsättning, andra axeln — och det
+hör till `docs/tidens-skalor.md`.
+
+Följden för 0169 är hård: en rörelsekärna byggd på det här perceptet blir nästan
+isotrop, alltså diffusion och inte födosök. **Kärnan kan inte rätta det.**
+Kvoten mellan synvidd och fläckstorlek måste mätas först, och det är den kvoten
+som avgör om en fördelningsrepresentation ger något alls.
+
+Talet ska mätas om i en terrängvärld innan slutsatsen dras: `f6-256` har hav,
+sjöar och en näringsgradient på 12x mellan rygg och dal, och där kan fläckigheten
+vara verklig.
 
 ### Höjdkurvor i viewern (1012)
 

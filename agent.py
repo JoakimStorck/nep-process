@@ -2482,6 +2482,12 @@ class Agent:
     # `_drift_system` och konsumerat av `_integrate_motion`.
     _drift_dx: float = field(init=False, default=0.0, repr=False, compare=False)
     _drift_dy: float = field(init=False, default=0.0, repr=False, compare=False)
+    # Sektorperceptet som viewern ritar, dietviktat, i kroppsram. Sektor k
+    # pekar `(k + 0,5)` sektorbredder från nosen, som `_acc_dir_ang`. Plus
+    # namnet på anspråket som vann. Båda är **bara visning** och har inga
+    # läsare i simuleringen.
+    _dir_food: object = field(init=False, default=None, repr=False, compare=False)
+    _dir_vinnare: str = field(init=False, default="", repr=False, compare=False)
     # Riktningsprofilen från senaste arbitrering: `(bäringar, värden, styrka,
     # n_sektor)`, eller None när sektorerna saknades.
     #
@@ -3848,6 +3854,30 @@ class Agent:
         _diet_local = float(getattr(self.pheno, "diet", 0.5))
         _food_local = clamp(float(B0) * ((1.0 - _diet_local) ** 0.7)
                             + float(C0) * (_diet_local ** 0.7), 0.0, 1.0)
+        # Samma uttryck per sektor, för viewern. **Bara visning** — värdet har
+        # ingen läsare i simuleringen.
+        #
+        # Det är den här profilen och inte arbitreringens `styrka · cos(Δ)` som
+        # är en fördelning över riktningar. 1013 mätte att den senare är en
+        # cosinus: spridningen låg på 1,94 av teoretiskt högsta 2,0, oberoende
+        # av terräng, eftersom sex sektorer spänner hela varvet kring en bäring
+        # som redan är ett `argmax`. Profilen före kollapsen bär däremot verklig
+        # flerkantighet — näst bästa sektorn är 97 procent av bästa i median.
+        #
+        # Arrayerna kan vara en tick gamla när sensingen cachats. Det är rätt:
+        # det är på dem djuret faktiskt handlade.
+        _sn = getattr(self, "sensors", None)
+        _aB = getattr(_sn, "_acc_dir_B", None)
+        _aC = getattr(_sn, "_acc_dir_C", None)
+        if _aB is not None and _aC is not None and len(_aB) == len(_aC) and len(_aB) > 1:
+            self._dir_food = np.clip(
+                np.asarray(_aB, dtype=np.float32) * np.float32((1.0 - _diet_local) ** 0.7)
+                + np.asarray(_aC, dtype=np.float32) * np.float32(_diet_local ** 0.7),
+                0.0, 1.0,
+            )
+        else:
+            self._dir_food = None
+        self._dir_vinnare = str(_vinnare)
         explore_drive *= 1.0 - _hunger * _food_local
         if getattr(self, "_mate_search", False):
             explore_drive = max(explore_drive, 1.0 - _hunger)

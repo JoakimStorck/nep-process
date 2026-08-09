@@ -49,7 +49,13 @@ import numpy as np
 # Den är statisk, och att sända om den femton gånger i sekunden var två
 # tredjedelar av det terrängen kostade på tråden. `wet_kind` och `soil01`
 # stannar i bildrutan — sjönivåer och fåror ändras med årstiden.
-PROTOCOL_VERSION = 6
+# 7: bildrutan bär faunans sektorpercept och vinnande anspråk. `fauna_dir_food`
+# är födoprofilen per riktningssektor i kroppsram, dietviktad i `Agent` där
+# uttrycket redan finns — inte omräknad här, eftersom två exemplar av samma
+# uttryck är hur styrningen och fysiken glider isär. 1013 mätte att
+# arbitreringens `styrka · cos(Δ)` är en cosinus och inte ett fält; det är
+# profilen *före* kollapsen som bär världen, och det är den som ritas.
+PROTOCOL_VERSION = 7
 
 # Vattnets topologi per cell. Ordningen är bindande — den är värdet i
 # `ViewFrame.wet_kind`.
@@ -69,6 +75,15 @@ _TRAIT_RANGE = {
     "dispersal": (0.0002, 0.0200),
     "growth": (0.005, 0.050),
 }
+
+# Anspråken faunan kan vinna med. Ordningen är bindande — den är värdet i
+# `ViewFrame.fauna_claim` och den ordning viewern färgar efter. Index 0 är
+# "inget anspråk vann", vilket är ett verkligt utfall och inte en frånvaro.
+FAUNA_CLAIMS: tuple[str, ...] = (
+    "", "flykt", "svält", "nedkylning", "jakt", "parning", "födosök",
+    "termoreglering", "flock",
+)
+_CLAIM_IDX = {namn: i for i, namn in enumerate(FAUNA_CLAIMS)}
 
 TEMP_RANGE = (-10.0, 40.0)
 
@@ -164,6 +179,13 @@ class ViewFrame:
     fauna_predation: np.ndarray = field(default_factory=lambda: np.zeros(0, np.float32))
     fauna_gest_frac: np.ndarray = field(default_factory=lambda: np.zeros(0, np.float32))
     fauna_ready: np.ndarray = field(default_factory=lambda: np.zeros(0, np.bool_))
+
+    # Födoperceptet per riktningssektor, `(n, S)`, i kroppsram och i [0, 1].
+    # Sektor k pekar `(k + 0,5)` sektorbredder från nosen. Tom array när inget
+    # djur hunnit sensa. Kvantiseras till en byte per sektor på tråden.
+    fauna_dir_food: np.ndarray = field(default_factory=lambda: np.zeros((0, 0), np.float32))
+    # Index i `FAUNA_CLAIMS` för anspråket som vann arbitreringen.
+    fauna_claim: np.ndarray = field(default_factory=lambda: np.zeros(0, np.uint8))
 
     # --- HUD ---
     T_band: np.ndarray = field(default_factory=lambda: np.zeros(0, np.float32))
@@ -347,6 +369,17 @@ def _fauna_table(pop) -> dict[str, np.ndarray]:
         for k in ("x", "y", "heading", "energy_frac", "damage_frac", "mass_frac", "predation", "gest_frac")
     }
     out["ready"] = np.zeros(n, dtype=np.bool_)
+    out["claim"] = np.zeros(n, dtype=np.uint8)
+
+    # Sektorantalet tas ur det första djur som har en profil. Alla har samma,
+    # men ett djur som ännu inte sensat har ingen alls.
+    S = 0
+    for a in agents:
+        d = getattr(a, "_dir_food", None)
+        if d is not None:
+            S = int(len(d))
+            break
+    out["dir_food"] = np.zeros((n, S), dtype=np.float32)
 
     AP = getattr(pop, "AP", None)
     D_max = float(getattr(AP, "D_max", 1.0) or 1.0)
@@ -371,6 +404,12 @@ def _fauna_table(pop) -> dict[str, np.ndarray]:
                 out["gest_frac"][i] = min(1.0, float(getattr(b, "gest_M", 0.0)) / tgt)
 
         out["predation"][i] = float(getattr(getattr(a, "pheno", None), "predation", 0.0))
+
+        out["claim"][i] = _CLAIM_IDX.get(str(getattr(a, "_dir_vinnare", "")), 0)
+        if S:
+            d = getattr(a, "_dir_food", None)
+            if d is not None and len(d) == S:
+                out["dir_food"][i] = d
 
         slot = int(getattr(a, "store_slot", -1))
         if slot >= 0 and hasattr(pop, "_ready_to_reproduce_slot"):
@@ -452,6 +491,8 @@ def frame_from_pop(pop, births_total: int = 0, deaths_total: int = 0,
         fauna_damage_frac=fa["damage_frac"],
         fauna_mass_frac=fa["mass_frac"],
         fauna_predation=fa["predation"],
+        fauna_dir_food=fa["dir_food"],
+        fauna_claim=fa["claim"],
         fauna_gest_frac=fa["gest_frac"],
         fauna_ready=fa["ready"],
         # Klimatet är en skalär sedan latituden föll. Fältet behålls som en
@@ -564,6 +605,9 @@ _WIRE_U8: dict[str, tuple[float, float]] = {
     "temperature": TEMP_RANGE,
     "elevation01": (0.0, 1.0),
     "soil01": (0.0, 1.0),
+    # Sex byte per djur i stället för tjugofyra. Profilen ritas som opacitet,
+    # och ögat skiljer inte tvåhundrafemtiosex steg i en genomskinlig kil.
+    "fauna_dir_food": (0.0, 1.0),
 }
 
 # Fält som byter till en smalare heltalstyp utan att tappa något.

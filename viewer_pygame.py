@@ -63,6 +63,19 @@ class ViewerConfig:
 
     show_hud: bool = True
 
+    # Sektorperceptet som kilar kring varje djur: vad djuret ser åt varje håll,
+    # ritat som opacitet. **Bläcket är bevarat** — opaciteten är sektorns andel
+    # av profilens summa, så två djur har alltid lika mycket färg och det enda
+    # som skiljer är hur den är samlad. Ett entoppigt djur får en ljus kil, ett
+    # platt får sex bleka, och en flock blir sex överlagrade moln.
+    #
+    # Det är därför inte arbitreringens uttryck som ritas. 1013 mätte att det är
+    # en cosinus kring ett `argmax` som redan tagits; profilen före kollapsen är
+    # den som bär världen.
+    show_dir: bool = False
+    # Kilarnas längd i pixlar vid en cellbredd. Skalas med zoomen.
+    dir_len_px: int = 22
+
     # Modes:
     #   CB    : RGB=(C,B,0)
     #   B/C   : grayscale single field
@@ -217,6 +230,8 @@ class WorldViewer:
                     self.cfg.flora_fill = "stipple" if self.cfg.flora_fill == "wedge" else "wedge"
                 if ev.key == pygame.K_h:
                     self.cfg.show_hud = not self.cfg.show_hud
+                if ev.key == pygame.K_d:
+                    self.cfg.show_dir = not self.cfg.show_dir
                 if ev.key == pygame.K_t:
                     order = list(FLORA_TRAITS)
                     cur = str(getattr(self.cfg, "flora_color_by", order[0]))
@@ -965,6 +980,64 @@ class WorldViewer:
         idx = np.flatnonzero(vis)
         return [(int(i), int(sx[i]), int(sy[i])) for i in idx]
 
+    # Anspråkens kulörer, i `viewframe.FAUNA_CLAIMS` ordning. Nödlägena ligger
+    # i rött och orange, vardagen i grönt och blått, så att en flock som slår om
+    # från bete till flykt syns som en färgvåg genom molnet i stället för som en
+    # ändrad siffra.
+    _CLAIM_HUE = (0.62, 0.00, 0.08, 0.55, 0.95, 0.83, 0.30, 0.15, 0.45)
+
+    def _draw_dir(self, frame, reps) -> None:
+        """
+        Sektorperceptet som kilar: vad djuret ser åt varje håll.
+
+        Opaciteten är sektorns **andel** av profilens summa, inte dess värde.
+        Det gör bläcket bevarat: två djur bär alltid lika mycket färg, och
+        skillnaden är bara hur samlad den är. Att i stället normera mot varje
+        djurs egen topp vore att radera just den skillnaden — en platt profil
+        skulle ritas som en toppig, vilket är precis vad bilden ska kunna skilja.
+
+        Kilarna ritas **under** djuret och före det, så att kroppen förblir
+        läsbar. Sektor k pekar `(k + 0,5)` sektorbredder från nosen, som
+        `_acc_dir_ang`, och roteras hit med kursen.
+        """
+        pygame = self.pg
+        prof = np.asarray(getattr(frame, "fauna_dir_food", None))
+        if prof.ndim != 2 or prof.shape[0] == 0 or prof.shape[1] < 2:
+            return
+        S = int(prof.shape[1])
+        claim = np.asarray(getattr(frame, "fauna_claim", None))
+
+        R = max(6, int(self.cfg.dir_len_px * float(self._ppu) / max(1.0, float(self.cfg.scale))))
+        halv = math.pi / S
+        surf = pygame.Surface((2 * R + 2, 2 * R + 2), pygame.SRCALPHA)
+
+        for i, px, py in reps:
+            if i >= prof.shape[0]:
+                continue
+            w = prof[i].astype(np.float64)
+            tot = float(w.sum())
+            if tot <= 0.0:
+                continue
+            h = self._CLAIM_HUE[int(claim[i]) % len(self._CLAIM_HUE)] if claim.size > i else 0.30
+            col = _hsv_to_rgb(h, 0.80, 1.0)
+            head = float(frame.fauna_heading[i])
+
+            surf.fill((0, 0, 0, 0))
+            for k in range(S):
+                andel = float(w[k]) / tot
+                # Full opacitet vid att *all* profil ligger i en sektor. En jämn
+                # profil ger 1/S av det per kil, alltså samma summa.
+                alpha = int(round(210.0 * andel))
+                if alpha <= 0:
+                    continue
+                a0 = head + (k + 0.5) * (2.0 * math.pi / S) - halv
+                pts = [(R + 1, R + 1)]
+                for j in range(5):
+                    a = a0 + 2.0 * halv * j / 4.0
+                    pts.append((R + 1 + R * math.cos(a), R + 1 + R * math.sin(a)))
+                pygame.draw.polygon(surf, (col[0], col[1], col[2], alpha), pts)
+            self._screen.blit(surf, (px - R - 1, py - R - 1))
+
     def _draw_agents(self, frame) -> None:
         if not self.cfg.draw_agents:
             return
@@ -974,6 +1047,9 @@ class WorldViewer:
         r0 = int(self.cfg.agent_radius_px)
 
         reps = self._screen_positions(frame.fauna_x, frame.fauna_y)
+
+        if self.cfg.show_dir:
+            self._draw_dir(frame, reps)
 
         for i, px, py in reps:
             dmg = float(frame.fauna_damage_frac[i])
@@ -1036,7 +1112,8 @@ class WorldViewer:
         lines = [
             f"t={frame.t:8.2f}  pop={frame.fauna_n:4d}  born={frame.births_total:6d}  "
             f"dead={frame.deaths_total:6d}  mode={self.cfg.mode.upper()}  "
-            f"gamma={self.cfg.gamma:.2f}  {self._pause_text(frame)}"
+            f"gamma={self.cfg.gamma:.2f}  {'dir ' if self.cfg.show_dir else ''}"
+            f"{self._pause_text(frame)}"
         ]
         if math.isfinite(tmean):
             l2 = f"T(mean/min/max)={tmean:5.1f}/{tmin:5.1f}/{tmax:5.1f}"
