@@ -226,7 +226,7 @@ class PopParams:
     store_growth_min_chunk: int = 256
     store_growth_factor: float = 2.0
     
-    n_traits: int = 42   # +1: _T_FAST_FRAC = 41, snabb mot långsam reserv
+    n_traits: int = 43   # +1: _T_LITTER = 42, kullstorlek
 
     spawn_jitter_r: float = 1.5
 
@@ -1085,6 +1085,20 @@ class Population:
         d = 2.0 * math.pi * (frac - 0.25 - _bp)
         return math.exp(k * (math.cos(d) - 1.0)) >= 0.5
 
+    def _kullstorlek(self, ag) -> int:
+        """
+        Antal ungar i nästa kull, avrundat **stokastiskt** ur `pheno.litter`.
+
+        Genomet bär ett kontinuerligt tal; kullen är ett heltal. Att avrunda
+        till närmaste skulle göra axeln till en trappa där mutationer mellan
+        heltalen inte syns för selektionen. Stokastisk avrundning bevarar
+        väntevärdet — 2,3 ger tvåor sjuttio procent av gångerna och treor
+        trettio — och gör axeln kontinuerlig i det som räknas.
+        """
+        v = max(1.0, float(getattr(ag.pheno, "litter", 1.0)))
+        lo = int(v)
+        return lo + (1 if float(self.rng.random()) < (v - lo) else 0)
+
     def _avsvalning(self, ag) -> float:
         """
         Avsvalningstiden i månader: dräktighet plus laktation.
@@ -1304,7 +1318,7 @@ class Population:
             bearer, partner = agent, best
     
         bearer._mating_partner = partner
-        bearer.start_gestation()
+        bearer.start_gestation(self._kullstorlek(bearer))
         
         b_slot = int(bearer.store_slot)
         p_slot = int(partner.store_slot)
@@ -1327,13 +1341,20 @@ class Population:
         if p_slot >= 0:
             self._write_body_surface_to_store(p_slot, partner)
         
-    def _try_birth(self, parent: Agent, ctx: StepCtx) -> Optional[Agent]:
+    def _try_birth(self, parent: Agent, ctx: StepCtx) -> list:
+        """
+        Föder kullen. Returnerar noll eller flera ungar.
+
+        Var `Optional[Agent]` — en unge per parning, alltså ett hårdkodat
+        livshistorieval och det som satte det demografiska taket. Se
+        `phenotype._T_LITTER`.
+        """
         if not parent.body.alive:
-            return None
+            return []
 
         p_slot = int(parent.store_slot)
         if p_slot < 0:
-            return None
+            return []
         
         store = self.store
         b = parent.body
@@ -1343,11 +1364,14 @@ class Population:
         # en envägscache som uppdateras efter body-passet och efter parning.
         # Grinden nedan läser cachen; själva värdena tas ur Body, som är källan.
         if not bool(store.gestating[p_slot]):
-            return None
+            return []
         if not (float(store.gest_M[p_slot]) >= float(store.gest_M_target[p_slot]) > 0.0):
-            return None
+            return []
         
-        child_M = float(b.gest_M)
+        # Den burna massan delas lika mellan kullens ungar. `child_M` är
+        # totalen; `litter` är delningen.
+        n_kull = max(1, int(getattr(b, "gest_n", 1)))
+        child_M = float(b.gest_M) / n_kull
         
         b.abort_gestation()
         
@@ -1359,9 +1383,13 @@ class Population:
         # --- 1.4: Energi till barnet (dras från föräldern) ---
         # child_E_fast/slow är fraktioner av barnets energikapacitet — en livshistoriestrategi.
         # Barnets Ecap beräknas från dess massa och den delade AP-konstanten.
-        child_Ecap = float(self.AP.E_cap_per_M) * max(child_M, float(self.AP.M_min))
+        child_Ecap = float(self.AP.E_cap_per_M) * max(child_M, float(self.AP.M_birth_min))
         child_E_fast_J = float(parent.pheno.child_E_fast) * child_Ecap
         child_E_slow_J = float(parent.pheno.child_E_slow) * child_Ecap
+        # Startenergin begärs för hela kullen; skalningen nedan fördelar det
+        # föräldern faktiskt hade råd med jämnt över ungarna.
+        child_E_fast_J *= n_kull
+        child_E_slow_J *= n_kull
 
         # Föräldern betalar barnenergin ur sina egna buffrar.
         # pay_repro_cost() anropar body.take_energy() — aldrig mer än vad som finns.
@@ -1374,8 +1402,8 @@ class Population:
             scale = paid_to_child / total_child_E
         else:
             scale = 0.0
-        child_E_fast_J *= scale
-        child_E_slow_J *= scale
+        child_E_fast_J *= scale / n_kull
+        child_E_slow_J *= scale / n_kull
         
         repro_cost_J = float(parent.pheno.repro_cost) * float(parent.body.E_cap())
         parent.pay_repro_cost(repro_cost_J)
@@ -1386,28 +1414,38 @@ class Population:
         # Rensa referensen så den inte hänger kvar
         parent._mating_partner = None
 
-        child = self._spawn_child(
-            parent,
-            ctx,
-            child_M_from_parent=child_M,
-            child_E_fast_J=child_E_fast_J,
-            child_E_slow_J=child_E_slow_J,
-            other_parent=other_parent,
-        )
+        ungar: list = []
+        for _ in range(n_kull):
+            try:
+                child = self._spawn_child(
+                    parent,
+                    ctx,
+                    child_M_from_parent=child_M,
+                    child_E_fast_J=child_E_fast_J,
+                    child_E_slow_J=child_E_slow_J,
+                    other_parent=other_parent,
+                )
+            except RuntimeError:
+                # Store full. Florasspridningen fångar detta sedan länge;
+                # födseln gjorde det inte, och en full store kraschade körningen
+                # i stället för att begränsa kullen.
+                break
+            ungar.append(child)
 
-        # Fostret bars som labil vävnad. Vid födseln får barnet sin egen
-        # strukturandel, och vävnaden binder mindre näring per kilo än
-        # reserven gjorde. Mellanskillnaden utsöndras till moderns cell.
-        s_child = float(getattr(child.pheno, "structure", 0.25))
-        d_nut = float(child_M) * (NUTRIENT_PER_KG_LABILE - nutrient_content(s_child))
-        if d_nut > 0.0:
-            self.world.add_nutrient(int(self.grid.cell_of(float(parent.x), float(parent.y))), d_nut)
+            # Fostret bars som labil vävnad. Vid födseln får barnet sin egen
+            # strukturandel, och vävnaden binder mindre näring per kilo än
+            # reserven gjorde. Mellanskillnaden utsöndras till moderns cell.
+            s_child = float(getattr(child.pheno, "structure", 0.25))
+            d_nut = float(child_M) * (NUTRIENT_PER_KG_LABILE - nutrient_content(s_child))
+            if d_nut > 0.0:
+                self.world.add_nutrient(
+                    int(self.grid.cell_of(float(parent.x), float(parent.y))), d_nut)
+            self._flush_body_outputs(child)
 
         self._flush_body_outputs(parent)
-        self._flush_body_outputs(child)
 
         store.repro_cd[p_slot] = np.float32(self._avsvalning(parent))
-        return child
+        return ungar
 
 
     def _slot_energy_per_kg(self, slot: int) -> float:
@@ -4307,9 +4345,7 @@ class Population:
             if not a.body.alive:
                 continue
     
-            child = self._try_birth(a, ctx)
-            if child is not None:
-                children.append(child)
+            children.extend(self._try_birth(a, ctx))
     
         if children:
             self.agents.extend(children)

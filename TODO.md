@@ -2564,6 +2564,9 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0176~~ | betningen blir tidsstegsinvariant; `h` och `eat_rate` är samma tal | kadensbytet | **klart**, se nedan — intaget skalade som `dt²` |
 | ~~0177~~ | parningen kunde inte vinna, och sökte i fel säsong | reproduktionen | **klart**, se nedan |
 | ~~0178~~ | avsvalningen härleds ur dräktighet och laktation | reproduktionen | **klart**, se nedan |
+| ~~0179~~ | kullstorleken som ärftlig axel; dödströskeln blir relativ | reproduktionen, r/K | **klart**, se nedan |
+| — | `M_waste_frac = 0,075` är bevarad storlek, inte fysiologisk | mortaliteten | **öppen**, se 0179 |
+| — | `child_M` är absolut där den borde vara en andel av `M_target` | livshistorien | **öppen**, se 0179 |
 | — | kullstorleken som ärftlig axel: antal mot storlek | reproduktionen | **öppen**, nästa |
 | — | bäraren väljs på massa, vilket blir en väg ut ur reproduktionens kostnad | selektionen | **öppen**, se 0178 |
 | — | `repro_cooldown_s` bär könsmognad och kullintervall i samma tal | reproduktionen | **öppen**, se 0177 |
@@ -2664,6 +2667,71 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Kullstorleken blir en axel (0179)
+
+Reproduktionen hade bara en sida: en förälder kunde välja hur mycket den
+investerade, aldrig hur investeringen delades. En unge per parning och en
+parning per avsvalning gav två till tre kullar per liv, alltså ett strukturellt
+tak på **en till tre avkommor**, mot 1,0 som krävs bara för att hålla ett
+bestånd.
+
+**`child_M` blir kullens totala massa och `litter` delar den.** Massa per unge är
+`child_M / litter`.
+
+Den andra formen — `child_M` per unge och `litter` som multiplikator — byggdes
+först och **prövades**: den gav en total fetal massa på 1,02 kg i en 1,2-kilos
+kropp, dräktighet på tolv månader och **noll födslar i tre frön av tre**. Med
+delningsformen är totalen oförändrad, så dräktighet, energikostnad och avsvalning
+ligger kvar där 0178 satte dem.
+
+Massan per unge blir 0,095 kg mot en vuxenmassa på 1,93, alltså **4,9 procent** —
+mitt i vad en nyfödd hos ett litet däggdjur väger. Med en unge per kull var den
+16 procent i median och över halva vuxenmassan för åtta procent av populationen.
+
+**Och då dog varenda unge.** Trettionio av trettionio, av svält, vid ålder 0,0
+månader. Orsaken var att `M_min = 0,14` inte bara är ett golv utan **själva
+dödströskeln**: `if float(self.M) <= _M_min`. En unge på 0,095 kg föddes under
+den.
+
+Absolutformen var fel även för vuxna. En kropp med `M_target` 0,20 kg och en med
+4,00 kg dog vid samma 0,14 — den ena vid sjuttio procent av sin vuxenmassa, den
+andra vid tre och en halv.
+
+Att magra ihjäl sig är att väga för lite **mot vad man borde väga**, och den
+storheten finns redan: `_M_expected`, von Bertalanffy-kurvan från `child_M` mot
+`M_target` vid `A_mature`. Tröskeln blir `M_waste_frac · M_expected(ålder)`. En
+nyfödd väger per definition sin förväntade massa och klarar sig.
+
+Uppmätt i `liten6`, 400 tick, tre frön:
+
+```
+          bestånd      födslar   dödsfall
+0178      49 45 45     14  8 10   5  3  5
+0179      63 50 51     29 15 23   6  5 12
+```
+
+**Födslarna fördubblades igen och beståndet växer i samtliga frön.**
+
+**Två poster lämnas öppna, och båda är av samma sort.**
+
+`M_waste_frac = 0,075` är valt så att den vuxna tröskeln blir 0,145 mot den gamla
+0,140 — alltså **bevarad storlek, rättad form**. Sjuttiofem tusendelar av
+förväntad massa är inte fysiologiskt; ett verkligt djur dör vid sextio till
+sjuttio procent. Att sätta det värdet skulle döda beståndet, vilket prövades:
+vid 0,50 föll det till 21/34/25. Hela mortalitetskalibreringen vilar på den gamla
+absoluta 0,14 och måste flyttas som en enhet.
+
+`child_M` är fortfarande **absolut** där den borde vara en andel av `M_target`:
+0,16–0,40 kg oavsett om vuxenmassan är 0,20 eller 4,00. Åtta procent av
+populationen investerade mer än halva sin egen vuxenmassa i en kull. Med
+delningen är följden mildare än förut men axeln är fortfarande skev.
+
+**Och en risk att mäta över lång tid.** Dödsfallen steg bara måttligt, alltså är
+en unge på 0,095 kg fortfarande livskraftig. Motvikten mot stora kullar är därmed
+svag, och `litter` kan pinna i taket. Följ dess median tillsammans med `child_M`
+och `M_target` — tre axlar som frigjorts samtidigt kan driva åt håll ingen
+förutser.
 
 ### Avsvalningen härleds ur dräktighet och laktation (0178)
 

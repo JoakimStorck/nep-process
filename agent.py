@@ -388,7 +388,42 @@ class AgentParams:
     # Starvation / weakness dynamics
     # ------------------------
     M_crit: float = 0.50   # under detta försvagas rörelseförmågan
-    M_min: float = 0.14    # absolut minimum — lite under child_M_min för buffert
+    # **Dödströskeln vid avmagring**, som andel av vad kroppen *borde* väga för
+    # sin ålder.
+    #
+    # Villkoret var `M <= M_min` med `M_min = 0.14` — en absolut massa. Det
+    # fungerade så länge en kull var en unge och `child_M` alltid låg över den.
+    # Med `litter` delas investeringen och en unge kan födas på 0,095 kg, alltså
+    # **under dödströskeln**: uppmätt dog trettionio av trettionio ungar av
+    # svält vid ålder 0,0 månader.
+    #
+    # Absolutformen var dessutom fel även för vuxna. En kropp med `M_target`
+    # 0,20 kg och en med 4,00 kg dog vid samma 0,14 — den ena vid sjuttio
+    # procent av sin vuxenmassa, den andra vid tre och en halv.
+    #
+    # Att magra ihjäl sig är att väga för lite **mot vad man borde väga**, och
+    # den storheten finns redan: `_M_expected`, von Bertalanffy-kurvan från
+    # `child_M` mot `M_target` vid `A_mature`. En nyfödd väger per definition
+    # sin förväntade massa och klarar sig; en vuxen som brutit ner halva sin
+    # kropp gör det inte, oavsett hur stor den var från början.
+    M_waste_frac: float = 0.075
+    # Absolut golv, bara för att en massa mot noll inte är en kropp.
+    M_min: float = 0.01
+
+    # **Nyföddas livskraftsgolv**, skilt från `M_min` ovan.
+    #
+    # `M_min` bar två roller: golv för tillväxtkurvan och för en levande kropp,
+    # och samtidigt golv för en nyfödd. Så länge en kull var en unge sammanföll
+    # de, eftersom `child_M` var hela investeringen. Med `litter` delas
+    # investeringen och massan per unge kan bli 0,027 kg — och `M_min` klämde
+    # då upp den till 0,14, vilket **skapade massa ur ingenting** och samtidigt
+    # dolde hela avvägningen: stora kullar hade blivit gratis.
+    #
+    # Golvet här är därför lågt och finns bara för att en massa på noll inte är
+    # en kropp. Vad som faktiskt är livskraftigt avgörs av fysiologin — en liten
+    # unge har högre massspecifik ämnesomsättning, mindre reserv och längre väg
+    # till vuxenmassa — och inte av en gräns.
+    M_birth_min: float = 0.02
     v_weak_min: float = 0.25
     rep_weak_min: float = 0.20
     starve_stress_gain: float = 1.0
@@ -1000,7 +1035,8 @@ class Body:
 
     # --- gestation buffer (netto-delta method) ---
     gestating: bool = False
-    gest_M: float = 0.0          # accumulated fetal mass (M-units)
+    gest_n: int = 1              # antal ungar i den pågående kullen
+    gest_M: float = 0.0          # ackumulerad fetal massa för HELA kullen
     gest_E_J: float = 0.0        # accumulated fetal energy in J (weighted space)
     # Varför individen dog. Sätts vid varje dödsväg och läses av death_record.
     # Utan den går de fem vägarna inte att skilja åt i efterhand, och vi har
@@ -1319,13 +1355,15 @@ class Body:
 
         return float(take_kg * e_lab)
         
-    def start_gestation(self, M_target: float) -> bool:
+    def start_gestation(self, M_target: float, n: int = 1) -> bool:
+        """`M_target` är kullens totala fetala massa, `n` antalet ungar."""
         Mt = max(0.0, float(M_target))
         if Mt <= 0.0:
             return False
         if self.gestating:
             return False
         self.gestating = True
+        self.gest_n = max(1, int(n))
         self.gest_M = 0.0
         self.gest_E_J = 0.0
         self.gest_M_target = Mt
@@ -1334,6 +1372,7 @@ class Body:
     def abort_gestation(self) -> None:
         # Nothing to refund because buffers were taken from net deltas (already removed from parent)
         self.gestating = False
+        self.gest_n = 1
         self.gest_M = 0.0
         self.gest_E_J = 0.0
         self.gest_M_target = 0.0
@@ -1392,7 +1431,7 @@ class Body:
         av åldern, i `(3B)` som momentan hastighet. Ändras den ena måste den
         andra följa med.
         """
-        child_M = max(float(self.AP.M_min), float(getattr(pheno, "child_M", self.AP.M_min)))
+        child_M = max(float(self.AP.M_birth_min), float(getattr(pheno, "child_M", self.AP.M_birth_min)))
         M_target = max(child_M, float(getattr(pheno, "M_target", float(self.AP.M0))))
         A_mature = max(1e-9, float(getattr(pheno, "A_mature", 1.0)))
         return growth_curve_mass(child_M, M_target, A_mature, float(age_s))
@@ -1998,7 +2037,12 @@ class Body:
         # den kan inte göra ogjort att skadan under ticken översteg vad
         # kroppen bär. Att pröva mot self.D vore att låta klampen bestämma
         # över biologin.
-        if float(D_raw) >= _D_max or float(self.M) <= _M_min:
+        # Avmagringsdöden mäts mot förväntad massa för åldern; se
+        # `AgentParams.M_waste_frac`. Faller `_M_expected` bort — den skrivs i
+        # tillväxtsteget — används golvet ensamt.
+        _M_exp_now = float(getattr(self, "_M_expected", 0.0))
+        _M_dod = max(_M_min, float(self.AP.M_waste_frac) * _M_exp_now) if _M_exp_now > 0.0 else _M_min
+        if float(D_raw) >= _D_max or float(self.M) <= _M_dod:
             self.death_cause = "damage" if float(D_raw) >= _D_max else "starvation"
             self.alive = False
             return
@@ -4260,10 +4304,10 @@ class Agent:
         
     # --- reproduction hooks (Population uses these) ---
     
-    def start_gestation(self) -> bool:
-        # child mass target from phenotype (absolute units)
+    def start_gestation(self, n: int = 1) -> bool:
+        # `child_M` är kullens **totala** massa; `n` är hur den delas.
         M_target = float(getattr(self.pheno, "child_M", 0.0))
-        return bool(self.body.start_gestation(M_target))
+        return bool(self.body.start_gestation(M_target, n))
     
     def pay_repro_cost(self, cost_E_J: float, *, transfer: bool = False) -> float:
         """
@@ -4300,7 +4344,7 @@ class Agent:
         else:
             child_M = float(getattr(parent_pheno, "child_M", float(self.AP.M0) * 0.5))
     
-        child_M = max(float(self.AP.M_min), child_M)
+        child_M = max(float(self.AP.M_birth_min), child_M)
         self.body.M = float(child_M)
     
         # ---- Energy (J -> internal units via WF/WS) ----
