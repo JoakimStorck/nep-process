@@ -537,6 +537,32 @@ class AgentParams:
     # Andel av underhållet som måste betalas ur egen vävnad för att djuret ska
     # räknas vara i energiunderskott. Se `Body._i_underskott_last_step`.
     underskott_min: float = 0.01
+    # Vikten på rörelsekostnaden när riktningen väljs.
+    #
+    # Härledd, inte trimmad. Uttrycket är `styrka · cos(Δ) − vikt · kostnad`,
+    # och kravet är att ett **maximalt** anspråk ska kunna gå i vattnet medan
+    # ett **typiskt** inte gör det: ett jagat djur väljer mellan två faror, ett
+    # betande gör det inte. En riktning med full vattenkostnad mot en torr med
+    # halva projektionen vinner om `vikt < styrka/2`. Med flyktens styrka nära
+    # 1 och födosökets median 0,3 ligger gränsen mellan 0,15 och 0,50.
+    kostnad_vikt: float = 0.40
+
+    # Hur långt kostnaden integreras, i cellbredder, och med hur många prov.
+    #
+    # **Integration, inte punktprov.** Ett tidigare försök samplade två celler
+    # fram och fick max-kostnaden 0,114 i median vid vatten i sikte — mot vikten
+    # 0,40 blev avdraget 0,046, alltså under två procent av beslutet, och
+    # djuren gick rakt i havet utan att väja. Skälet är att strandzonen är
+    # grund: djupet där är 0,025 mot `water_drag_depth_ref` 0,20, och ett enda
+    # prov ser strandkanten i stället för havet bakom.
+    #
+    # Integrationen skiljer också en flod från ett hav utan att någon celltyp
+    # kodas: en flod är ett smalt band kostnad med mat bortom, havet är kostnad
+    # hela vägen. Ett landdjur kan därför korsa en flod för att komma åt bete
+    # på andra sidan men simmar inte ut i havet.
+    kostnad_rackvidd: float = 6.0
+    kostnad_prov: int = 6
+
     prey_search_radius: float = 6.0
     mate_search_radius: float = 5.0
     flee_radius: float = 6.0
@@ -3158,11 +3184,78 @@ class Agent:
             return 0.0, thrust, explore_drive, ""
         namn, _niva, _st, bias, thrust_min, expl_mult = anskrav[i]
         self._sittande = namn
+
+        # Vinnaren bestämmer *målet*. Vägen dit väljs mot rörelsekostnaden:
+        #
+        #     b = argmax över kandidater av  styrka · cos(Δ) − vikt · kostnad(b)
+        #
+        # Kandidaterna är anspråkets egna bäring plus sektorernas mitt. Den
+        # egna bäringen är alltid med, så är vägen fri vinner den av sig själv
+        # och ingen precision går förlorad — ett tidigare försök lät sektorns
+        # mitt bli bäringen och kvantiserade riktningen till sex värden, vilket
+        # gjorde utfallet sämre än ingen mekanism alls.
+        #
+        # Strandföljning är ingen regel utan lösningen till uttrycket längs en
+        # kustlinje: projektionen av "dit maten finns" på det som är torrt.
+        ang = getattr(getattr(self, "sensors", None), "_acc_dir_ang", None)
+        if ang is not None and len(ang) > 1:
+            kand = [float(bias)]
+            for a in ang:
+                b = ((float(a) + math.pi) % (2.0 * math.pi) - math.pi) / math.pi
+                kand.append(b)
+            kost = self._kostnad_vag(kand)
+            vikt = float(self.AP.kostnad_vikt)
+            basta = None
+            for b, k in zip(kand, kost):
+                v = float(_st) * math.cos((b - float(bias)) * math.pi) - vikt * k
+                if basta is None or v > basta[0]:
+                    basta = (v, b)
+            bias = basta[1]
         if thrust_min > 0.0:
             thrust = clamp(max(thrust, thrust_min), 0.0, 1.0)
         explore_drive = float(explore_drive) * float(expl_mult)
         return clamp(float(bias), -1.0, 1.0), thrust, explore_drive, namn
 
+
+    def _kostnad_vag(self, baringar):
+        """
+        Rörelsekostnaden längs varje bäring, i [0, 1] — **integrerad**, inte
+        samplad i en punkt.
+
+        Medelvärdet av vattnets hinder över `kostnad_prov` punkter ut till
+        `kostnad_rackvidd`. Ett enda prov nära djuret ser strandzonens grunda
+        vatten; medelvärdet ser hur mycket vatten som ligger i vägen hela
+        sträckan.
+
+        Hindret är samma uttryck som `_water_factor` läser — djup mättat mot
+        `water_drag_depth_ref`, viktat med `1 − buoyancy` — så styrningen och
+        fysiken kan inte glida isär. Ett djur med hög flytförmåga ser vattnet
+        som billigt och simmar rakt; ett tungt landdjur följer kanten. Ingen
+        artgräns behöver kodas.
+        """
+        n = len(baringar)
+        world = getattr(self, "world", None)
+        if world is None or getattr(world, "drainage", None) is None:
+            return [0.0] * n
+        ref = max(1e-9, float(self.AP.water_drag_depth_ref))
+        hind = 1.0 - float(getattr(self.pheno, "buoyancy", 0.0))
+        R = float(self.AP.kostnad_rackvidd)
+        np_prov = max(1, int(self.AP.kostnad_prov))
+        h = float(self.heading)
+        ut = []
+        for b in baringar:
+            a = h + float(b) * math.pi
+            ca, sa = math.cos(a), math.sin(a)
+            acc = 0.0
+            for j in range(np_prov):
+                r = R * (j + 1) / np_prov
+                c = world.grid.cell_of(float(self.x) + r * ca,
+                                       float(self.y) + r * sa)
+                d = float(world.water[c])
+                if d > float(world.WP.submerged_threshold):
+                    acc += min(1.0, d / ref) * hind
+            ut.append(acc / np_prov)
+        return ut
 
     def _water_factor(self) -> float:
         """
