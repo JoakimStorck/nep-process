@@ -182,6 +182,13 @@ _S: dict = {"tick": 0, "byten": 0, "n_anskrav": 0,
 #     inte världen". Ett djur med tre sektorer mot land och tre mot hav kan inte
 #     ha en jämn profil; får det ändå det är felet i perceptet och inte i
 #     världen.
+# Driftens census. Kroppsdjupet är modellens enda djupskala sedan 7023, och de
+# tre talen nedan är vad den gjorde med driften: hur ofta den fyrar, hur djupt
+# vattnet var när den gjorde det, och hur långt steget blev.
+_D: dict = {"agenttick": 0, "vata": 0, "flytande": 0,
+            "steg": [0] * 20, "steg_max": 0.0, "v_max": 0.0}
+_D_HI = 24.0
+
 _P: dict = {"tick": 0, "n_sektor": 0, "likvardiga": 0, "n_percept": 0,
             "n_kust": 0,
             "spridning": [0] * 20, "marginal": [0] * 20, "toppandel": [0] * 20,
@@ -248,7 +255,7 @@ def _s_hist(d: dict, namn: str, v: float) -> None:
 #
 # Vattnet samplas ett par cellbredder ut längs varje sektor, inte i cellen
 # djuret står i: framåtblick är hela poängen. Uppslaget går via samma
-# `world.water` och `water_drag_depth_ref` som `_water_factor` läser, så
+# `world.water` och samma kroppsdjup som `_water_factor` läser, så
 # mätningen och fysiken kan inte glida isär.
 _W: dict = {"tick": 0, "vat_topp": 0, "billigare": 0, "vat_sektor": 0,
             "n_sektor": 0, "tvekan": [0] * 20, "vatandel": [0] * 20}
@@ -269,7 +276,7 @@ def _vat_kostnad(agent, world, ang_kropp):
         return 0.0
     if d <= float(world.WP.submerged_threshold):
         return 0.0
-    ref = max(1e-9, float(agent.AP.water_drag_depth_ref))
+    ref = agent._body_depth()
     return min(1.0, d / ref) * (1.0 - float(getattr(agent.pheno, "buoyancy", 0.0)))
 
 
@@ -504,6 +511,56 @@ def _mat_riktning(agent) -> None:
             if float(getattr(agent, "_dir_vatten", 0.0)) > 0.0:
                 _P["n_kust"] += 1
                 _P["toppandel_kust"][b] += 1
+
+
+_INSTRUMENTED_DRIFT = False
+
+
+def instrument_drift() -> None:
+    """
+    Bokför driften. Lindar `_drift_system`, som inte ändras.
+
+    Talen läses ur bidragen passet lämnar — `_drift_dx`, `_drift_dy` — och inte
+    ur en egen beräkning, så mätningen kan inte glida isär från mekanismen.
+    """
+    global _INSTRUMENTED_DRIFT
+    if _INSTRUMENTED_DRIFT:
+        return
+    _INSTRUMENTED_DRIFT = True
+
+    from population import Population
+    import numpy as _np
+
+    orig = Population._drift_system
+
+    def wrapped(self, *ar, **kw):
+        ut = orig(self, *ar, **kw)
+        alive = [a for a in self.agents if a.body.alive]
+        w = getattr(self, "world", None)
+        dr = getattr(w, "drainage", None)
+        if dr is None or not alive:
+            return ut
+        _D["agenttick"] += len(alive)
+        thr = float(w.WP.submerged_threshold)
+        for a in alive:
+            try:
+                c = self.grid.cell_of(float(a.x), float(a.y))
+                d = float(w.water[c])
+            except Exception:
+                continue
+            if d > thr:
+                _D["vata"] += 1
+            dx = float(getattr(a, "_drift_dx", 0.0))
+            dy = float(getattr(a, "_drift_dy", 0.0))
+            if dx or dy:
+                st = float(_np.hypot(dx, dy))
+                _D["flytande"] += 1
+                _D["steg"][min(19, max(0, int(st / _D_HI * 20.0)))] += 1
+                if st > _D["steg_max"]:
+                    _D["steg_max"] = st
+        return ut
+
+    Population._drift_system = wrapped
 
 
 def instrument_steering() -> None:
@@ -1150,6 +1207,17 @@ def print_summary(pop: Population, d0: dict, nb0: dict, unika: int, worst_drift:
                       f"   styrka median {_hist_median(e[2], 0.0, 1.0):.3f}"
                       f"  medel {e[1] / e[0]:.3f}")
 
+    if _D["agenttick"]:
+        n = _D["agenttick"]
+        print(f"\n  drift        {n} agenttick, {100 * _D['vata'] / n:.2f} % i vatten,"
+              f" {100 * _D['flytande'] / n:.3f} % flytande")
+        if _D["flytande"]:
+            print(f"    steg         median {_hist_median(_D['steg'], 0.0, _D_HI):.2f}"
+                  f"   p90 {_hist_kvantil(_D['steg'], 0.0, _D_HI, 0.90):.2f}"
+                  f"   max {_D['steg_max']:.2f} cellbredder")
+        else:
+            print("    steg         ingen drift alls — kroppsdjupet grindade bort den")
+
     if _P["tick"]:
         n = _P["tick"]
         sn = max(1, _P["n_sektor"])
@@ -1253,6 +1321,7 @@ def run(a: argparse.Namespace, seed: int | None = None) -> int:
         instrument_steering()
         instrument_reserv()
         instrument_vatten()
+        instrument_drift()
         for k in _R:
             _R[k] = 0
 
@@ -1295,6 +1364,11 @@ def run(a: argparse.Namespace, seed: int | None = None) -> int:
     _S["n_anskrav"] = 0
     _S["vinnare"] = {}
     _S["styrka"] = {}
+    _D["agenttick"] = 0
+    _D["vata"] = 0
+    _D["flytande"] = 0
+    _D["steg"] = [0] * 20
+    _D["steg_max"] = 0.0
     _P["tick"] = 0
     _P["n_sektor"] = 0
     _P["likvardiga"] = 0

@@ -3127,7 +3127,24 @@ class Population:
         cells = grid.cell_of_many(xs, ys).astype(np.int64, copy=False)
 
         depth = np.asarray(world.water, dtype=np.float64)[cells]
-        wet = depth > float(world.WP.submerged_threshold)
+        # **Grinden är flytkraft, inte väta.** Den stod på
+        # `submerged_threshold`, alltså 1e-6 längdenheter — en mikrometer
+        # vatten svepte bort ett tvåkilos djur. Samtidigt krävdes två meter
+        # innan draget var fullt. Samma kropp mötte vattnet på två skalor som
+        # skilde tvåhundratusen gånger.
+        #
+        # Nu gäller kroppens eget djup: under det står djuret på botten och
+        # vadar, vilket `wade_cost` redan prissätter, och strömmen har inget
+        # att bära. Över det är kroppen täckt och förs med.
+        #
+        # Det tar bort sjökantens singularitet **vid källan** i stället för att
+        # klippa den. En strandcell har per definition djup mot noll, och
+        # `q/djup` gav där uppmätt 51 106 cellbredder per tick. En cell så grund
+        # kan nu inte drifta alls, och divisorns golv är en fysisk storhet i
+        # stället för ett epsilon.
+        kroppsdjup = np.fromiter((a._body_depth() for a in alive),
+                                 dtype=np.float64, count=len(alive))
+        wet = depth > kroppsdjup
         if not wet.any():
             return 0.0
 
@@ -3156,7 +3173,7 @@ class Population:
         # Ett mellanliggande försök skalade med lutningen i stället. Det gav
         # rätt kvalitativt utfall men ersatte en bevarandelag med en
         # heuristik, och dolde samtidigt att `dt` räknades två gånger.
-        speed = q / np.maximum(depth[idx], float(world.WP.submerged_threshold))
+        speed = q / np.maximum(depth[idx], kroppsdjup[idx])
         np.minimum(speed, float(self.AP.drift_max), out=speed)
         step = speed * buoy * float(self.AP.drift_gain)
 

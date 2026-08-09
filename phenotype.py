@@ -685,6 +685,43 @@ def buoyancy_from_structure(structure):
     return np.clip(1.0 - np.abs(rho - 1.0) / DENSITY_DEV_REF, 0.0, 1.0)
 
 
+# --- Kroppens djupmått -----------------------------------------------------
+#
+# Längdenheten i meter. En cell har arean 100 m² enligt
+# `docs/varldens-skala.md`, alltså är längdenheten 10 m och centrumavståndet
+# 10,746. Talet har funnits som text i dokumentet och som underförstådd
+# omräkning i kommentarer; här får det ett namn, eftersom en storhet utan enhet
+# inte är en fysisk storhet.
+LENGTH_UNIT_M = 10.0
+
+# Vattnets täthet i kg/m³. `body_density` är relativ mot den.
+WATER_DENSITY = 1000.0
+
+
+def body_depth(mass, structure):
+    """
+    Kroppens karaktäristiska djup, i längdenheter.
+
+    Ett djur står i vattnet med sin egen kropp som måttstock: `L = (M/ρ)^(1/3)`
+    är den linjära skalan hos en kropp med massan M och tätheten ρ. Vid den
+    djupleken är kroppen täckt, under den vadar den.
+
+    Det är den enda djupskala i modellen som inte är vald. Den följer ur massa
+    och täthet, som båda redan finns, och den skalar rätt: ett åtta gånger
+    tyngre djur behöver dubbelt så djupt vatten.
+
+    Uppmätt för modellens median — 2 kg vid strukturandel 0,567, alltså relativ
+    täthet 1,177 — blir djupet 0,0119 längdenheter, eller tolv centimeter. Det
+    kan jämföras med vad `water_drag_depth_ref` stod på: 0,20, alltså **två
+    meter**, vilket är den djuplek där en tvåkilos organism först skulle räknas
+    som helt nedsänkt. Skillnaden är sjutton gånger, och den är skälet att
+    vattnet aldrig kostade något: fårorna är sjutton centimeter djupa.
+    """
+    rho = body_density(structure) * WATER_DENSITY
+    m = max(1e-9, float(mass))
+    return float((m / rho) ** (1.0 / 3.0) / LENGTH_UNIT_M)
+
+
 DECAY_MIN_SCALE = 0.15
 
 # Matsmältningens verkningsgrad som funktion av substratets strukturandel.

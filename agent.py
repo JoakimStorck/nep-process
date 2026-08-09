@@ -18,6 +18,7 @@ from phenotype import (
     assimilated_fraction,
     nutrient_content,
     direction_tau,
+    body_depth,
     NUTRIENT_PER_KG_LABILE,
 )
 
@@ -277,7 +278,7 @@ class AgentParams:
     # --- Vattnet som medium --------------------------------------------------
     #
     # Draget i vatten multipliceras med `1 + water_drag_gain · (1 − buoyancy) ·
-    # min(1, djup / water_drag_depth_ref)`. En kropp med neutral täthet möter
+    # min(1, djup / kroppens djup)`. En kropp med neutral täthet möter
     # alltså inget extra motstånd; en tät kropp som måste hålla sig uppe möter
     # mycket.
     #
@@ -285,7 +286,17 @@ class AgentParams:
     # vattenaxeln ärver `structure`s befintliga avvägning i stället för att
     # behöva en påhittad kostnad. Se phenotype.body_density.
     water_drag_gain: float = 6.0
-    water_drag_depth_ref: float = 0.20
+    # Djupreferensen är **inte längre en parameter**. Den var 0,20, alltså två
+    # meter — den djuplek där en tvåkilos organism först räknades som helt
+    # nedsänkt. Fårorna i modellen är sjutton centimeter djupa, så mättnaden
+    # nåddes aldrig och vattnet kostade i praktiken ingenting: styrningens
+    # kostnadsterm flyttade riktningsfördelningen 0,5 procent (1013), och
+    # kustkontrollen rörde toppandelen en halv procentenhet (1015).
+    #
+    # Referensen är nu kroppens eget djup, `phenotype.body_depth`, härlett ur
+    # massa och täthet. Se `Agent._body_depth`. Talet är kvar som **golv** för
+    # numerisk säkerhet och inte som skala.
+    water_depth_floor: float = 1e-4
     # Termisk kostnad vid nedsänkning. Vatten leder värme omkring tjugofem
     # gånger snabbare än luft, och det är det verkliga skälet att nedsänkning
     # är farligt för en jämnvarm organism — inte drunkning. Multiplikator på
@@ -582,7 +593,7 @@ class AgentParams:
     # fram och fick max-kostnaden 0,114 i median vid vatten i sikte — mot vikten
     # 0,40 blev avdraget 0,046, alltså under två procent av beslutet, och
     # djuren gick rakt i havet utan att väja. Skälet är att strandzonen är
-    # grund: djupet där är 0,025 mot `water_drag_depth_ref` 0,20, och ett enda
+    # grund: djupet där är 0,025 mot kroppens djup 0,012, och ett enda
     # prov ser strandkanten i stället för havet bakom.
     #
     # Integrationen skiljer också en flod från ett hav utan att någon celltyp
@@ -3336,7 +3347,7 @@ class Agent:
         torra delen av vägen.
 
         Hindret är samma uttryck som `_water_factor` läser — djup mättat mot
-        `water_drag_depth_ref`, viktat med `1 − buoyancy` — så styrningen och
+        kroppens eget djup, viktat med `1 − buoyancy` — så styrningen och
         fysiken kan inte glida isär. Ett djur med hög flytförmåga ser vattnet
         som billigt och simmar rakt; ett tungt landdjur följer kanten. Ingen
         artgräns behöver kodas.
@@ -3345,7 +3356,7 @@ class Agent:
         world = getattr(self, "world", None)
         if world is None or getattr(world, "drainage", None) is None:
             return [0.0] * n
-        ref = max(1e-9, float(self.AP.water_drag_depth_ref))
+        ref = self._body_depth()
         hind = 1.0 - float(getattr(self.pheno, "buoyancy", 0.0))
         R = float(self.AP.kostnad_rackvidd)
         np_prov = max(1, int(self.AP.kostnad_prov))
@@ -3379,12 +3390,33 @@ class Agent:
             ut.append(varst)
         return ut
 
+    def _body_depth(self) -> float:
+        """
+        Kroppens eget djup i längdenheter — modellens enda djupskala.
+
+        Ett djur står i vattnet med sin egen kropp som måttstock: vid den här
+        djupleken är det täckt, under den vadar det. Skalan är härledd ur massa
+        och täthet och inte vald, och den skalar rätt — ett åtta gånger tyngre
+        djur behöver dubbelt så djupt vatten.
+
+        Tre läsare delar den, och det är hela poängen med patchen: draget och
+        värmeledningen i `_water_factor`, styrningens kostnadsterm i
+        `_kostnad_vag`, och driftens flytkraftsgrind i
+        `Population._drift_system`. Innan detta mötte samma kropp vattnet på
+        två skalor som skilde tvåhundratusen gånger — en mikrometer räckte för
+        att strömmen skulle svepa bort den, men två meter krävdes innan draget
+        var fullt.
+        """
+        return max(float(self.AP.water_depth_floor),
+                   body_depth(float(self.body.M),
+                              float(getattr(self.pheno, "structure", 0.25))))
+
     def _water_factor(self) -> float:
         """
         Hur mycket vattnet hindrar just den här kroppen, i [0, 1].
 
         Produkten av två ting: hur djupt cellen står under vatten, mättat mot
-        `water_drag_depth_ref`, och hur långt kroppens täthet ligger från
+        kroppens eget djup, och hur långt kroppens täthet ligger från
         vattnets. Noll på torr mark och noll för en neutral kropp.
 
         `buoyancy` är härledd ur strukturandelen och skriven vid födsel, så
@@ -3397,7 +3429,7 @@ class Agent:
         d = float(world.water[world.grid.cell_of(float(self.x), float(self.y))])
         if d <= float(world.WP.submerged_threshold):
             return 0.0
-        ref = max(1e-9, float(self.AP.water_drag_depth_ref))
+        ref = self._body_depth()
         depth = d / ref
         if depth > 1.0:
             depth = 1.0

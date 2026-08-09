@@ -2553,6 +2553,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~7009~~ | täthet härledd ur strukturandel; `buoyancy` får skrivare och läsare; drag i vatten | faunans rörelse | **klart, men läsaren fyrar aldrig — se nedan** |
 | ~~7009b~~ | lutningen som framkomlighet: uppför kostar, nedför är billigt | faunans rörelse | **klart**, fart 55 nedför mot 20 uppför |
 | ~~7009c~~ | vadandet kostar, värmeledning vid nedsänkning, passiv drift ur kontinuitet | faunan möter vattnet | **klart** |
+| ~~7023~~ | kroppen får ett djupmått; tre läsare delar det | draget, styrningen, driften | **klart**, se nedan |
 | 7010 | vattendjupet som fjärde världskanal och fri MLP-ingång | selektionen | öppen |
 | ~~7010~~ | ~~vattenaxeln som nisch~~ | | **slås ihop med 7009** |
 | ~~7011~~ | ~~glesning av hydro~~ | | **utgår**, se nedan |
@@ -2586,6 +2587,56 @@ I stället gjordes 7008 till partikulär transport av förna, eftersom mätninge
 **`sediment_rate` är ett reglage mellan land och vatten, inte en fri parameter.** Näringsförlusten motsvarar exakt sedimentexporten: sjöarna behåller sitt, men floderna är ett avlopp till havet. Vid 0,5 kostar det 16 procent av näringsstocken och en tredjedel av floran att göra vattnet rikare per cell än landet.
 
 **Glesning av hydro utgår.** Motivet var att ett tätt grannflöde skulle bli för dyrt. Jämviktslösningen kostar 0,216 ms per tick vid 16 384 celler och 4,1 vid 262 144 — mindre än den täta laplacianen i `transport_pass`. Görs bara om en mätning på en stor värld motiverar den.
+
+### Kroppen får ett djupmått (7023)
+
+`water_drag_depth_ref` stod på 0,20 längdenheter, alltså **två meter** — den
+djuplek där en tvåkilos organism först räknades som helt nedsänkt. Fårorna i
+modellen är sjutton centimeter djupa, så mättnaden nåddes aldrig. Samtidigt
+grindade driften på `submerged_threshold`, 1e-6, alltså en mikrometer. **Samma
+kropp mötte vattnet på två skalor som skilde tvåhundratusen gånger.**
+
+Skalan är nu härledd och inte vald: `phenotype.body_depth` ger `L = (M/ρ)^(1/3)`
+ur massa och täthet, som båda redan fanns. För modellens median — 2 kg vid
+strukturandel 0,567, relativ täthet 1,177 — blir djupet 0,0119 längdenheter,
+alltså **tolv centimeter**. Det skalar rätt: ett åtta gånger tyngre djur behöver
+dubbelt så djupt vatten. `LENGTH_UNIT_M = 10.0` får samtidigt ett namn; talet har
+funnits som text i `docs/varldens-skala.md` och som underförstådd omräkning i
+kommentarer.
+
+Tre läsare delar måttet, och det är patchens hela innehåll: draget och
+värmeledningen i `_water_factor`, styrningens kostnadsterm i `_kostnad_vag`, och
+driftens flytkraftsgrind i `_drift_system`.
+
+**Sjökantens singularitet är borta vid källan.** En strandcell har per definition
+djup mot noll, och `q/djup` gav där uppmätt 51 106 cellbredder per tick. En cell
+grundare än kroppen kan nu inte drifta alls, och divisorns golv är en fysisk
+storhet i stället för ett epsilon.
+
+Uppmätt i `liten6`, 400 tick, samma frön före och efter:
+
+```
+frö   flytande        steg median      bestånd
+      före  efter     före  efter      före      efter
+ 1    0,802 0,435     6,0   23,0       40 -> 35  40 -> 30
+ 2    0,914 0,381     9,6   22,9       40 -> 36  40 -> 38
+ 3    0,972 0,277     3,8   13,5       40 -> 30  40 -> 38
+```
+
+**Driften halveras till en tredjedel.** Andelen agenttick med drift faller från
+0,80–0,97 procent till 0,28–0,44.
+
+**Men medianen på steget stiger, och det är komposition och inte försämring.**
+De händelser grinden tar bort är de grunda, och grunt vatten i den här världen är
+sjöar där genomströmningen är noll — alltså små steg. Kvar står fårorna, där `q`
+är stort. Maxsteget är oförändrat 143 cellbredder, eftersom taket binder både
+före och efter. **7023 gör driften sällsyntare, inte mindre.** Magnituden hör till
+uppehållstidspatchen och är orörd här.
+
+Beståndet är inte avgjort: 35→30, 36→38, 30→38 över tre frön. Vattnet blir
+genuint farligt när mättnaden nås sjutton gånger tidigare, och `liten6` kollapsar
+dessutom av egen kraft. Talet ska tas i `f6-256` över flera frön innan något
+påstås.
 
 ### 7009 fungerar men har inget att verka på
 
