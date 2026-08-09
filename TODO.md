@@ -2572,6 +2572,8 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~1013~~ | riktningsfördelningen fångas och mäts | 0169, 1014 | **klart**, se nedan — fördelningen är en cosinus |
 | ~~1014~~ | sektorperceptet ritas som kilar; opaciteten är andelen | ögat, 0169 | **klart**, protokoll 7, se nedan — perceptet är nästan platt |
 | ~~1015~~ | radien bär fördelningen, opaciteten mängden; kusten som kontroll | ögat, 0169 | **klart**, protokoll 8, se nedan — marken är sluten överallt |
+| ~~1016~~ | kanalerna får var sitt läge; uppehållsfördelningen och visaren | ögat, 0169 | **klart**, protokoll 9, se nedan |
+| 1017 | vattnet som kanal i bilden | ögat | **väntar på 7010** |
 
 ### Vad mätningarna ändrade i planen
 
@@ -3109,6 +3111,63 @@ och nu finns talet.
 `_dir_prof` har inga läsare i simuleringen och kan därför inte påverka utfallet.
 Läsordningen är bindande: plats 0 är anspråkets egen bäring, plats 1 till och
 med `n_sektor` är sektormitterna, en eventuell bunden bäring ligger sist.
+
+### Kanalerna får var sitt läge, och uppehållsfördelningen finns redan (1016)
+
+`D` stegar i stället för att slå av och på, och **kulören bär kanalen och inte
+anspråket**. Alla sex kilarna på ett djur fick förut samma färg, vilket lät
+bilden se ut som om den kodade riktning när den kodade individ. Anspråket flyttar
+till visaren, där det är ett attribut hos valet.
+
+**Objektet är återställt.** Samtalet började i att djuret ska bäras som en
+fördelning över var det uppehåller sig. 1014 och 1015 ritade perceptet — en
+indata — med en grammatik motiverad av utdatan. `UPPEHALL` ritar nu det som
+faktiskt efterfrågades: övergångsfördelningen över celler.
+
+**Och den var inte för liten att se.** Ett tidigare påstående i det här arbetet
+var att fördelningen är degenererad vid dagens tick. Det gällde utsträckningen i
+planet men inte övergången mellan celler. Steget är 0,5 cellbredder mot
+hexagonens inradie 0,537 — djuret kommer knappt halvvägs till granncellens
+centrum, vilket är långt från noll. Uppmätt i `liten6` efter 40 tick:
+
+```
+stannar i egen cell:     p10 0,00   median 0,21   p90 1,00
+celler med massa:        median 2   max 5
+brusets vidd:            median 0,24 rad
+```
+
+Varken "stannar alltid" eller "lämnar alltid" — den enda regim där en
+cellfördelning bär information. Objektet finns alltså vid dagens tick, och
+0169 behöver inte vänta på 7027 för att ha något att representera.
+
+**Två kanaler visas för första gången, och den ena är tom.** `_temp_sectors` och
+`_soc_sectors` har beräknats varje tick utan att någonsin ha lästs för visning.
+Uppmätt spann i `liten6`:
+
+```
+fauna_dir_temp     min 0,5666   max 0,5767      över alla djur och sektorer
+fauna_dir_flock    min 0,0000   max 0,1624
+```
+
+Temperaturkanalen spänner **en hundradel** av sin normerade skala över hela
+populationen. Den bär ingen riktningsinformation alls, vilket är väntat i en värld
+med försumbar höjdgradient — men det betyder att `nedkylning` får sin bäring ur
+ett fält som är konstant, och att anspråkets riktning därmed är brus. Det hör
+ihop med samma fynd som `toppandel`: världen har nästan inga rumsliga gradienter
+för djuren att navigera efter.
+
+Fördelningen räknas i viewern och inte i `viewframe`: talen skickas råa —
+steglängd, medelriktning före brusdraget, brusets vidd — eftersom en omräkning i
+sändaränden vore ett andra exemplar av rörelselagen. Kvadraturen är
+deterministisk och inte dragen, så bilden står still mellan bildrutor.
+
+Cellerna ritas som skivor och inte som hexagoner. **Viewern känner inte
+hexagonens hörn och ska inte göra det** — `Grid` exponerar cellcentrum, inte
+hörn, och att konstruera hörnen i ritkoden vore precis den geometriläcka
+manifestet förbjuder. Arean bär sannolikheten, samma grammatik som kilarna.
+
+Klienten fick en `erfinv` i stället för ett beroende till scipy;
+`requirements-viewer.txt` är fyra filer och två paket och ska förbli det.
 
 ### Kilarna får form, och floran täcker allt (1015)
 

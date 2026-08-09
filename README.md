@@ -96,29 +96,36 @@ och bildrutan bär inte fälten alls. Hav, sjöar och vattendrag ritas ovanpå
 *varje* läge, eftersom en karta i FLORA-läge annars ser ut som om havet vore torr
 mark utan växtlighet.
 
-`D` ritar vad varje djur **ser** åt varje håll: födoperceptet per
-riktningssektor, som kilar kring kroppen. **Radien bär fördelningen, opaciteten
-mängden.** Kilens area är proportionell mot sektorns andel, `r = R·sqrt(andel·S)`,
-så den totala arean är densamma oavsett form: en jämn profil blir en cirkel, en
-toppig en lob som sticker ut. Opaciteten säger i stället hur mycket föda som
-finns runt djuret över huvud taget. Ringen är djurets synhorisont, så kilarna går
-att lägga mot terrängen och läsa av vad djuret faktiskt ser.
+`D` stegar mellan kanaler kring varje djur. **Kulören bär kanalen, inte
+anspråket** — ett anspråk är en bäring och hörde aldrig hemma i ett fält.
+
+`UPPEHALL` är förstahandsläget: övergångsfördelningen över celler, alltså vart
+djuret tar vägen under ticket. Kursen efter styrningen men före brusdraget är
+medelriktningen, brusets vidd dess spridning, `dt · v` dess längd. Sannolikheten
+ritas som area — en skiva per cell, full cell vid säker övergång. Fördelningen
+räknas med deterministisk kvadratur och inte med dragningar, så bilden står
+still mellan bildrutor.
+
+`FODA`, `TEMP`, `FLOCK` och `BESLUT` är dess indata, ritade som kilar: radien bär
+fördelningen, opaciteten mängden, `r = R·sqrt(andel·S)` så att arean är bevarad.
+En jämn profil blir en cirkel, en toppig en lob. Ringen är djurets synhorisont.
+`TEMP` och `FLOCK` har beräknats per sektor sedan länge utan att någonsin ha
+visats; `BESLUT` är arbitreringens eget uttryck, och att se den bredvid `FODA` är
+att se kollapsen hända — flerkantig profil in, en lob ut.
+
+`RACKVIDD` ritar synhorisonten mot steget. Kvoten är tjugofyra, och det är
+modellens öppna skalfråga i ett enda glyf.
+
+**Visaren ritas i varje läge.** Den är det faktiska valet: riktningen djuret tog,
+med längden `dt · v` och kulören efter vunnet anspråk — nödlägena i den röda
+bågen, vardagen i grönt och blått. Att den är kortare än cellen den står i är
+inte ett ritfel.
 
 Ett första försök lade all information i opaciteten. Det såg jämnt blekt ut
 oavsett vad djuret stod på, och skälet är aritmetiskt: med sex sektorer får en
 jämn profil en sjättedel av skalan var, alltså allt i den blekaste sjättedelen.
 Regeln som skulle bevara bläcket komprimerade bort dynamiken. Bläcket är
 fortfarande bevarat, men i geometrin i stället för i alfakanalen.
-
-Kulören är anspråket som vann arbitreringen, efter angelägenhetsgrad: nödlägena i
-den röda bågen, vardagen i grönt och blått, så att en flock som slår om från bete
-till flykt syns som en färgvåg.
-
-Det är perceptet som ritas och inte arbitreringens riktningsuttryck. Det senare
-mättes i 1013 och visade sig vara en cosinus kring en bäring som redan är ett
-`argmax` — spridningen låg på 1,94 av teoretiskt högsta 2,0, oberoende av
-terräng. Profilen före kollapsen bär däremot verklig flerkantighet: näst bästa
-sektorn är 97 procent av bästa i median.
 
 Kör samma commit i båda ändar. Klient och server jämför protokollversion vid
 anslutning och säger ifrån om de skiljer sig.
@@ -133,7 +140,7 @@ anslutning och säger ifrån om de skiljer sig.
 | `F` | ytfördelning: vinkelkilar eller stippling |
 | `T` | florans färgaxel |
 | `A` / `H` | djur av och på, HUD av och på |
-| `D` | sektorperceptet som kilar kring varje djur |
+| `D` | stegar: uppehållsfördelning, föda, temp, flock, beslut, räckvidd |
 | hjul, `.` / `,` | zooma in och ut |
 | dra, piltangenter | panorera |
 | `0` | visa hela världen igen |

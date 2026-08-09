@@ -2491,6 +2491,13 @@ class Agent:
     # Andel av sektorerna som pekar mot vatten två cellbredder fram. Bara
     # mätning; se `plan_action`.
     _dir_vatten: float = field(init=False, default=0.0, repr=False, compare=False)
+    # Övergångsfördelningens tre tal: steglängd, medelriktning och brusets vidd.
+    # Bara visning; se `_integrate_motion`. Ett djur som inte rörde sig under
+    # ticket bär förra tickets värden, vilket är rätt — det är den senaste
+    # övergång som faktiskt räknades.
+    _mv_step: float = field(init=False, default=0.0, repr=False, compare=False)
+    _mv_dir: float = field(init=False, default=0.0, repr=False, compare=False)
+    _mv_sd: float = field(init=False, default=0.0, repr=False, compare=False)
     # Riktningsprofilen från senaste arbitrering: `(bäringar, värden, styrka,
     # n_sektor)`, eller None när sektorerna saknades.
     #
@@ -3591,6 +3598,21 @@ class Agent:
 
         tau_dir = tau_local + (tau_run - tau_local) * e
 
+        # Övergångsfördelningens tre tal, fångade innan kursen skrivs över.
+        # **Bara visning** — de har inga läsare i simuleringen.
+        #
+        # Kursen *efter* styrningen men *före* brusdraget är fördelningens
+        # medelriktning; bruset är dess vidd; `dt · v` dess längd. Den
+        # realiserade kursen är ett drag ur den fördelningen, och det är därför
+        # visaren kan avvika från molnets tyngdpunkt — den ska kunna det.
+        #
+        # Talen skickas råa och sätts inte ihop till en sjucellsfördelning här.
+        # Att räkna om den i `viewframe` vore ett andra exemplar av
+        # rörelselagen, och det är så styrningen och fysiken glider isär.
+        # Viewern får ingredienserna och gör geometrin, vilket är dess arbete.
+        self._mv_dir = self._signed_angle(float(self.heading) + d_steer)
+        self._mv_sd = math.sqrt(2.0 * dt / tau_dir)
+
         d_noise = math.sqrt(2.0 * dt / tau_dir) * float(ctx.rng.normal(0.0, 1.0))
 
         self.heading = self._signed_angle(float(self.heading) + d_steer + d_noise)
@@ -3602,6 +3624,7 @@ class Agent:
         # Bansträcka och nettoförflyttning ackumuleras utan torusvikning, så att
         # kvoten mellan dem går att läsa i life-loggen. Den kvoten är Del 1:s
         # enda mätpunkt: 0,034 före den här ändringen.
+        self._mv_step = abs(float(dt) * float(speed))
         self.path_len += abs(dt * speed)
         self.disp_x += step_x
         self.disp_y += step_y

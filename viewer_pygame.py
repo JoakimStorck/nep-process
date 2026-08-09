@@ -27,6 +27,22 @@ def _as_u8_rgb(img01: np.ndarray) -> np.ndarray:
 
 
 
+def _erfinv(y):
+    """
+    Invers felfunktion, Winitzkis approximation.
+
+    Klienten har bara numpy och pygame — `requirements-viewer.txt` är fyra
+    filer och två paket, och det ska den förbli. Felet är under 2e-3 relativt
+    över hela intervallet, vilket är två tiopotenser under vad en kvadratur
+    över nittiosex punkter kan upplösa.
+    """
+    y = np.clip(np.asarray(y, dtype=np.float64), -0.999999, 0.999999)
+    a = 0.147
+    ln = np.log(1.0 - y * y)
+    t = 2.0 / (math.pi * a) + 0.5 * ln
+    return np.sign(y) * np.sqrt(np.sqrt(t * t - ln / a) - t)
+
+
 def _hsv_to_rgb(h: float, s: float, v: float) -> Tuple[int, int, int]:
     """HSV (0-1 each) → RGB tuple (0-255 each)."""
     if s == 0.0:
@@ -63,35 +79,29 @@ class ViewerConfig:
 
     show_hud: bool = True
 
-    # Sektorperceptet som kilar kring varje djur: vad djuret ser åt varje håll.
+    # Vad som ritas kring varje djur. `D` stegar mellan lägena.
     #
-    # **Två kanaler, inte en.** 1014 lade hela informationen i opaciteten, och
-    # det var fel: med sex sektorer får en jämn profil en sjättedel av skalan
-    # var, alltså allt i den blekaste sjättedelen, och en måttligt toppig profil
-    # skiljer sig med några få steg av 255. Regeln som skulle bevara bläcket
-    # komprimerade bort dynamiken. Skärmbilderna visade det direkt — sex jämnt
-    # bleka kilar oavsett vad djuret stod på.
+    # **Kulören bär kanalen, inte anspråket.** Ett anspråk är en bäring och
+    # hörde aldrig hemma i ett fält: alla sex kilarna på ett djur fick samma
+    # färg, vilket lät bilden se ut som om den kodade riktning när den kodade
+    # individ. Anspråket flyttar till visaren, där det är ett attribut hos
+    # valet.
     #
-    # Nu bär **radien** fördelningen och **opaciteten** mängden:
+    # UPPEHALL är förstahandsläget och de övriga är dess indata. Fördelningen
+    # över celler är vad ett tidssteg faktiskt lämnar av ett djurs position:
+    # steget är 0,5 cellbredder mot hexagonens inradie 0,537, alltså varken
+    # "stannar alltid" eller "lämnar alltid" — den enda regim där en
+    # cellfördelning bär information.
     #
-    #   `r_k = R · sqrt(andel_k · S)` ger arean proportionell mot andelen, så
-    #   den totala arean är `π R²` oavsett form. Bläcket är fortfarande bevarat,
-    #   men i geometrin i stället för i alfakanalen — och en form läses av ögat
-    #   på en tiondels sekund där fyra procents alfaskillnad inte läses alls.
-    #   En jämn profil blir en cirkel, en toppig en lob.
-    #
-    #   Opaciteten bär profilens medelvärde, alltså hur mycket föda som finns
-    #   runt djuret över huvud taget. Den informationen fanns inte i bilden
-    #   tidigare, och den är precis vad man vill se bredvid riktningen.
-    #
-    # `R` är djurets **verkliga synvidd**, inte ett pixeltal. En halo som inte
-    # går att lägga mot terrängen säger bara att djuret ser något.
-    #
-    # Det är perceptet som ritas och inte arbitreringens uttryck. 1013 mätte att
-    # det senare är en cosinus kring ett `argmax` som redan tagits.
-    show_dir: bool = False
+    # RACKVIDD ritar synhorisonten mot steget. Kvoten är tjugofyra, och det är
+    # modellens öppna skalfråga i ett enda glyf.
+    dir_modes: tuple = ("AV", "UPPEHALL", "FODA", "TEMP", "FLOCK", "BESLUT", "RACKVIDD")
+    dir_mode: int = 0
     # Synhorisonten som tunn ring, så att kilarnas skala går att läsa av.
     dir_ring: bool = True
+    # Antal kvadraturpunkter i övergångsfördelningen. Deterministiskt, inte
+    # dragna: en bild som flimrar mellan bildrutor går inte att läsa.
+    dir_quad: int = 96
 
     # Modes:
     #   CB    : RGB=(C,B,0)
@@ -248,7 +258,7 @@ class WorldViewer:
                 if ev.key == pygame.K_h:
                     self.cfg.show_hud = not self.cfg.show_hud
                 if ev.key == pygame.K_d:
-                    self.cfg.show_dir = not self.cfg.show_dir
+                    self.cfg.dir_mode = (self.cfg.dir_mode + 1) % len(self.cfg.dir_modes)
                 if ev.key == pygame.K_t:
                     order = list(FLORA_TRAITS)
                     cur = str(getattr(self.cfg, "flora_color_by", order[0]))
@@ -997,81 +1007,192 @@ class WorldViewer:
         idx = np.flatnonzero(vis)
         return [(int(i), int(sx[i]), int(sy[i])) for i in idx]
 
-    # Anspråkens kulörer, i `viewframe.FAUNA_CLAIMS` ordning, och grammatiken är
-    # **angelägenhetsgrad**: nödlägena i den röda bågen, vardagen i den gröna och
-    # blå. Nivåerna i behovstrappan går 1 (flykt) till 6 (vardag), och kulören
-    # följer dem, så att en flock som slår om från bete till flykt syns som en
-    # färgvåg genom molnet.
-    #
-    # 1014 satte `nedkylning` i blått, vilket är semantiskt lockande — kallt är
-    # blått — men bryter grammatiken: den ligger på nivå 3 och är ett nödläge.
-    # Blått är vardagens flock. Rättat.
-    #
-    # Index 0 är "inget anspråk vann", vilket är ett verkligt utfall. Det ritas
-    # omättat i stället för i en egen kulör, eftersom en kulör hade sagt att det
-    # var ett anspråk bland de andra.
+    # Anspråkens kulörer, i `viewframe.FAUNA_CLAIMS` ordning, efter
+    # angelägenhetsgrad: nödlägena i den röda bågen, vardagen i grönt och blått.
+    # De bär numera **visaren** och inte kilarna.
     _CLAIM_HUE = (0.00, 0.00, 0.05, 0.10, 0.93, 0.85, 0.30, 0.45, 0.58)
     _CLAIM_SAT = (0.00, 0.85, 0.85, 0.85, 0.85, 0.85, 0.80, 0.80, 0.80)
 
+    # En kulör per kanal, så att läget går att se utan att läsa HUD:en.
+    _KANAL_HUE = {"UPPEHALL": 0.14, "FODA": 0.30, "TEMP": 0.02,
+                  "FLOCK": 0.58, "BESLUT": 0.78, "RACKVIDD": 0.45}
+
+    def _dir_channel(self, frame, mode: str):
+        """
+        Sektorkanalen för ett läge, som `(n, S)` i icke-negativ form.
+
+        Varje kanal har sin egen modellägda skala och görs här jämförbar med de
+        andra: andelar över sektorerna. För FODA och FLOCK är det bokstavligt —
+        de är mängder. För TEMP och BESLUT betyder andelen *relativt mellan
+        riktningar* och inte absolut, eftersom ett fält inte har en summa.
+        BESLUT är dessutom tecknad och skiftas med sitt minimum, så att andelen
+        läses som "hur mycket bättre än den sämsta riktningen".
+        """
+        if mode == "FODA":
+            return np.asarray(getattr(frame, "fauna_dir_food", None))
+        if mode == "TEMP":
+            return np.asarray(getattr(frame, "fauna_dir_temp", None))
+        if mode == "FLOCK":
+            return np.asarray(getattr(frame, "fauna_dir_flock", None))
+        if mode == "BESLUT":
+            a = np.asarray(getattr(frame, "fauna_dir_beslut", None))
+            if a.ndim == 2 and a.size:
+                a = a - a.min(axis=1, keepdims=True)
+            return a
+        return None
+
     def _draw_dir(self, frame, reps) -> None:
         """
-        Sektorperceptet som kilar: vad djuret ser åt varje håll.
+        Vad djuret ser, och vart det är på väg.
 
-        Radien bär fördelningen, opaciteten mängden. Se `ViewerConfig.show_dir`
-        för varför det är två kanaler och inte en.
+        Kilarna bär en kanal i taget: radien fördelningen, opaciteten mängden,
+        `r_k = R·sqrt(andel·S)` så att arean är bevarad. UPPEHALL ritar i
+        stället övergångsfördelningen över celler, och RACKVIDD synhorisonten
+        mot steget.
 
-        Kilarna ritas **under** djuret och före det, så att kroppen förblir
-        läsbar. Sektor k pekar `(k + 0,5)` sektorbredder från nosen, som
-        `_acc_dir_ang`, och roteras hit med kursen.
+        **Visaren ritas i varje läge.** Den är det faktiska valet: längden är
+        `dt · v`, alltså den verkliga förflyttningen, och kulören det anspråk
+        som vann. Att den är kortare än cellen den står i är inte ett ritfel
+        utan modellens öppna skalfråga.
         """
         pygame = self.pg
-        prof = np.asarray(getattr(frame, "fauna_dir_food", None))
-        if prof.ndim != 2 or prof.shape[0] == 0 or prof.shape[1] < 2:
-            return
-        S = int(prof.shape[1])
-        claim = np.asarray(getattr(frame, "fauna_claim", None))
+        mode = self.cfg.dir_modes[self.cfg.dir_mode]
         senser = np.asarray(getattr(frame, "fauna_sense_r", None))
+        steg = np.asarray(getattr(frame, "fauna_step", None))
         ppu = float(self._ppu)
-        halv = math.pi / S
-        # En sektor som bär allt når `sqrt(S)` gånger synvidden. Ytan är
-        # bevarad, så loben *ska* sticka utanför ringen — det är hur en toppig
-        # profil ser toppig ut.
-        maxr = math.sqrt(float(S))
+
+        if mode == "UPPEHALL":
+            self._draw_uppehall(frame, reps)
+        elif mode == "RACKVIDD":
+            for i, px, py in reps:
+                R = float(senser[i]) * ppu if senser.size > i else 0.0
+                r = float(steg[i]) * ppu if steg.size > i else 0.0
+                if R < 3.0:
+                    continue
+                surf = pygame.Surface((2 * int(R) + 4, 2 * int(R) + 4), pygame.SRCALPHA)
+                c = (int(R) + 2, int(R) + 2)
+                pygame.draw.circle(surf, (120, 200, 255, 90), c, int(R), 1)
+                pygame.draw.circle(surf, (255, 210, 90, 110), c, max(1, int(r)))
+                self._screen.blit(surf, (px - int(R) - 2, py - int(R) - 2))
+        else:
+            prof = self._dir_channel(frame, mode)
+            if prof is None or prof.ndim != 2 or prof.shape[0] == 0 or prof.shape[1] < 2:
+                self._draw_visare(frame, reps)
+                return
+            S = int(prof.shape[1])
+            halv = math.pi / S
+            maxr = math.sqrt(float(S))
+            hue = self._KANAL_HUE.get(mode, 0.30)
+            col = _hsv_to_rgb(hue, 0.80, 1.0)
+
+            for i, px, py in reps:
+                if i >= prof.shape[0]:
+                    continue
+                w = prof[i].astype(np.float64)
+                tot = float(w.sum())
+                if tot <= 0.0:
+                    continue
+                R = float(senser[i]) * ppu if senser.size > i else 0.0
+                if R < 3.0:
+                    continue
+                alpha = int(round(35.0 + 145.0 * min(1.0, tot / S)))
+                head = float(frame.fauna_heading[i])
+                RR = int(R * maxr) + 2
+                surf = pygame.Surface((2 * RR + 2, 2 * RR + 2), pygame.SRCALPHA)
+                for k in range(S):
+                    rk = R * math.sqrt(float(w[k]) / tot * S)
+                    if rk < 1.0:
+                        continue
+                    a0 = head + (k + 0.5) * (2.0 * math.pi / S) - halv
+                    pts = [(RR + 1, RR + 1)]
+                    for j in range(7):
+                        a = a0 + 2.0 * halv * j / 6.0
+                        pts.append((RR + 1 + rk * math.cos(a), RR + 1 + rk * math.sin(a)))
+                    pygame.draw.polygon(surf, (col[0], col[1], col[2], alpha), pts)
+                if self.cfg.dir_ring and R >= 6.0:
+                    pygame.draw.circle(surf, (col[0], col[1], col[2], 70),
+                                       (RR + 1, RR + 1), int(R), 1)
+                self._screen.blit(surf, (px - RR - 1, py - RR - 1))
+
+        self._draw_visare(frame, reps)
+
+    def _draw_uppehall(self, frame, reps) -> None:
+        """
+        Övergångsfördelningen över celler.
+
+        Kursen efter styrning men före brusdrag är medelriktningen, brusets
+        standardavvikelse dess vidd, `dt · v` dess längd. Fördelningen räknas
+        med deterministisk kvadratur och inte med dragningar: en bild som
+        flimrar mellan bildrutor går inte att läsa.
+
+        Sannolikheten ritas som **area**, samma grammatik som kilarna, med en
+        skiva vid varje cellcentrum. Cellerna ritas inte som hexagoner: viewern
+        känner inte hexagonens hörn och ska inte göra det. Geometrin ägs av
+        `Grid`, och `Grid` exponerar cellcentrum — inte hörn.
+        """
+        pygame = self.pg
+        g = getattr(self, "_grid", None)
+        if g is None:
+            return
+        steg = np.asarray(getattr(frame, "fauna_step", None))
+        mdir = np.asarray(getattr(frame, "fauna_dir_mean", None))
+        msd = np.asarray(getattr(frame, "fauna_dir_sd", None))
+        if steg.size == 0 or mdir.size != steg.size:
+            return
+        ppu = float(self._ppu)
+        cx = np.asarray(g.cell_center_x, dtype=np.float64)
+        cy = np.asarray(g.cell_center_y, dtype=np.float64)
+
+        nq = max(16, int(self.cfg.dir_quad))
+        # Jämnt fördelade kvantiler ur normalfördelningen ger lika vikt per
+        # punkt, alltså ingen viktsumma att normera och inget svansfel som
+        # varierar med vidden.
+        u = (np.arange(nq, dtype=np.float64) + 0.5) / nq
+        z = np.sqrt(2.0) * _erfinv(2.0 * u - 1.0)
 
         for i, px, py in reps:
-            if i >= prof.shape[0]:
+            if i >= steg.size:
                 continue
-            w = prof[i].astype(np.float64)
-            tot = float(w.sum())
-            if tot <= 0.0:
+            L = float(steg[i])
+            if L <= 0.0:
                 continue
-            R = float(senser[i]) * ppu if senser.size > i else 0.0
-            if R < 3.0:
+            ang = float(mdir[i]) + float(msd[i]) * z
+            ex = float(frame.fauna_x[i]) + L * np.cos(ang)
+            ey = float(frame.fauna_y[i]) + L * np.sin(ang)
+            cells = np.asarray(g.cell_of_many(ex, ey))
+            vals, cnt = np.unique(cells, return_counts=True)
+            p = cnt.astype(np.float64) / float(nq)
+
+            # Radien vid full sannolikhet är en halv cellbredd, så en säker
+            # övergång fyller cellen och en delad fyller dess andel.
+            for c, pk in zip(vals, p):
+                dx, dy = g.torus_delta_pos(float(frame.fauna_x[i]), float(frame.fauna_y[i]),
+                                           cx[int(c)], cy[int(c)])
+                sx = int(px + dx * ppu)
+                sy = int(py + dy * ppu)
+                r = int(0.5 * ppu * math.sqrt(pk))
+                if r < 1:
+                    continue
+                surf = pygame.Surface((2 * r + 2, 2 * r + 2), pygame.SRCALPHA)
+                pygame.draw.circle(surf, (255, 200, 80, 110), (r + 1, r + 1), r)
+                self._screen.blit(surf, (sx - r - 1, sy - r - 1))
+
+    def _draw_visare(self, frame, reps) -> None:
+        """Det faktiska valet: riktning, längd `dt · v`, kulör = vunnet anspråk."""
+        pygame = self.pg
+        steg = np.asarray(getattr(frame, "fauna_step", None))
+        claim = np.asarray(getattr(frame, "fauna_claim", None))
+        ppu = float(self._ppu)
+        for i, px, py in reps:
+            L = (float(steg[i]) * ppu) if steg.size > i else 0.0
+            if L < 1.0:
                 continue
             ci = int(claim[i]) % len(self._CLAIM_HUE) if claim.size > i else 0
             col = _hsv_to_rgb(self._CLAIM_HUE[ci], self._CLAIM_SAT[ci], 1.0)
-            # Mängden: profilens medelvärde i [0, 1]. Ett djur på bar mark blir
-            # nästan osynligt, ett i tät växtlighet solitt.
-            alpha = int(round(35.0 + 145.0 * min(1.0, tot / S)))
-            head = float(frame.fauna_heading[i])
-
-            RR = int(R * maxr) + 2
-            surf = pygame.Surface((2 * RR + 2, 2 * RR + 2), pygame.SRCALPHA)
-            for k in range(S):
-                # Arean proportionell mot andelen ger radien som roten ur den.
-                rk = R * math.sqrt(float(w[k]) / tot * S)
-                if rk < 1.0:
-                    continue
-                a0 = head + (k + 0.5) * (2.0 * math.pi / S) - halv
-                pts = [(RR + 1, RR + 1)]
-                for j in range(7):
-                    a = a0 + 2.0 * halv * j / 6.0
-                    pts.append((RR + 1 + rk * math.cos(a), RR + 1 + rk * math.sin(a)))
-                pygame.draw.polygon(surf, (col[0], col[1], col[2], alpha), pts)
-            if self.cfg.dir_ring and R >= 6.0:
-                pygame.draw.circle(surf, (col[0], col[1], col[2], 70),
-                                   (RR + 1, RR + 1), int(R), 1)
-            self._screen.blit(surf, (px - RR - 1, py - RR - 1))
+            h = float(frame.fauna_heading[i])
+            pygame.draw.line(self._screen, col, (px, py),
+                             (int(px + L * math.cos(h)), int(py + L * math.sin(h))),
+                             max(1, int(ppu / 8)))
 
     def _draw_agents(self, frame) -> None:
         if not self.cfg.draw_agents:
@@ -1083,7 +1204,7 @@ class WorldViewer:
 
         reps = self._screen_positions(frame.fauna_x, frame.fauna_y)
 
-        if self.cfg.show_dir:
+        if self.cfg.dir_mode:
             self._draw_dir(frame, reps)
 
         for i, px, py in reps:
@@ -1147,7 +1268,8 @@ class WorldViewer:
         lines = [
             f"t={frame.t:8.2f}  pop={frame.fauna_n:4d}  born={frame.births_total:6d}  "
             f"dead={frame.deaths_total:6d}  mode={self.cfg.mode.upper()}  "
-            f"gamma={self.cfg.gamma:.2f}  {'dir ' if self.cfg.show_dir else ''}"
+            f"gamma={self.cfg.gamma:.2f}  "
+            f"{'D=' + self.cfg.dir_modes[self.cfg.dir_mode] + '  ' if self.cfg.dir_mode else ''}"
             f"{self._pause_text(frame)}"
         ]
         if math.isfinite(tmean):

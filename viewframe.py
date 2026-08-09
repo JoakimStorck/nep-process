@@ -58,7 +58,18 @@ import numpy as np
 # 8: bildrutan bär faunans synvidd. Utan den kan viewern inte rita kilarna i
 # den skala djuret faktiskt ser, och en halo som inte går att lägga mot
 # terrängen säger inte vad djuret ser — bara att det ser något.
-PROTOCOL_VERSION = 8
+# 9: bildrutan bär de tre återstående sektorkanalerna och övergångens tre tal.
+#
+# Temperatur och artfränder har beräknats per sektor sedan länge och aldrig
+# visats; beslutsprofilen sedan 1013. Med dem kan viewern stega mellan kanaler i
+# stället för att ha en, och kulören kan bära **vilken kanal** i stället för
+# vilket anspråk — ett anspråk är en bäring och hörde aldrig hemma i ett fält.
+#
+# `fauna_step`, `fauna_dir_mean` och `fauna_dir_sd` är övergångsfördelningens
+# ingredienser: steglängd, medelriktning före brusdraget, och brusets vidd.
+# Fördelningen över celler räknas i viewern och inte här — den är geometri, och
+# geometrin ägs av `Grid` i mottagaränden lika mycket som i sändaränden.
+PROTOCOL_VERSION = 9
 
 # Vattnets topologi per cell. Ordningen är bindande — den är värdet i
 # `ViewFrame.wet_kind`.
@@ -192,6 +203,22 @@ class ViewFrame:
     # Synellipsens långa halva i cellbredder, per djur. Sensingnivån gör den
     # olika mellan individer, så den kan inte vara en skalär.
     fauna_sense_r: np.ndarray = field(default_factory=lambda: np.zeros(0, np.float32))
+
+    # Övriga sektorkanaler, samma form som `fauna_dir_food`: `(n, S)` i
+    # kroppsram. `temp` är normerad mot `TEMP_RANGE` här, eftersom skalan är en
+    # modellkonstant och en mottagare inte ska behöva känna den. `flock` är
+    # antal artfränder per sektor, rått. `beslut` är arbitreringens
+    # `styrka · cos(Δ) − vikt · kostnad` per sektor, i styrkeenheter och
+    # därmed tecknad.
+    fauna_dir_temp: np.ndarray = field(default_factory=lambda: np.zeros((0, 0), np.float32))
+    fauna_dir_flock: np.ndarray = field(default_factory=lambda: np.zeros((0, 0), np.float32))
+    fauna_dir_beslut: np.ndarray = field(default_factory=lambda: np.zeros((0, 0), np.float32))
+
+    # Övergångsfördelningen: steglängd i cellbredder, medelriktning i radianer
+    # före brusdraget, och brusets standardavvikelse i radianer.
+    fauna_step: np.ndarray = field(default_factory=lambda: np.zeros(0, np.float32))
+    fauna_dir_mean: np.ndarray = field(default_factory=lambda: np.zeros(0, np.float32))
+    fauna_dir_sd: np.ndarray = field(default_factory=lambda: np.zeros(0, np.float32))
 
     # --- HUD ---
     T_band: np.ndarray = field(default_factory=lambda: np.zeros(0, np.float32))
@@ -387,6 +414,11 @@ def _fauna_table(pop) -> dict[str, np.ndarray]:
             S = int(len(d))
             break
     out["dir_food"] = np.zeros((n, S), dtype=np.float32)
+    out["dir_temp"] = np.zeros((n, S), dtype=np.float32)
+    out["dir_flock"] = np.zeros((n, S), dtype=np.float32)
+    out["dir_beslut"] = np.zeros((n, S), dtype=np.float32)
+    for k in ("step", "dir_mean", "dir_sd"):
+        out[k] = np.zeros(n, dtype=np.float32)
 
     AP = getattr(pop, "AP", None)
     D_max = float(getattr(AP, "D_max", 1.0) or 1.0)
@@ -414,10 +446,26 @@ def _fauna_table(pop) -> dict[str, np.ndarray]:
 
         out["claim"][i] = _CLAIM_IDX.get(str(getattr(a, "_dir_vinnare", "")), 0)
         out["sense_r"][i] = float(getattr(getattr(a, "AP", None), "ray_len_front", 0.0))
+        out["step"][i] = float(getattr(a, "_mv_step", 0.0))
+        out["dir_mean"][i] = float(getattr(a, "_mv_dir", 0.0))
+        out["dir_sd"][i] = float(getattr(a, "_mv_sd", 0.0))
+
         if S:
             d = getattr(a, "_dir_food", None)
             if d is not None and len(d) == S:
                 out["dir_food"][i] = d
+            t = getattr(a, "_temp_sectors", None)
+            if t is not None and len(t) == S:
+                out["dir_temp"][i] = _norm(np.asarray(t, dtype=np.float64),
+                                           TEMP_RANGE[0], TEMP_RANGE[1])
+            sc = getattr(a, "_soc_sectors", None)
+            if sc is not None and len(sc) and len(sc[0]) == S:
+                out["dir_flock"][i] = np.asarray(sc[0], dtype=np.float32)
+            # Beslutsprofilen: plats 1..S i `_dir_prof` är sektormitterna.
+            pr = getattr(a, "_dir_prof", None)
+            if pr is not None and len(pr[1]) >= 1 + S and float(pr[2]) > 0.0:
+                out["dir_beslut"][i] = (np.asarray(pr[1][1:1 + S], dtype=np.float64)
+                                        / float(pr[2])).astype(np.float32)
 
         slot = int(getattr(a, "store_slot", -1))
         if slot >= 0 and hasattr(pop, "_ready_to_reproduce_slot"):
@@ -502,6 +550,12 @@ def frame_from_pop(pop, births_total: int = 0, deaths_total: int = 0,
         fauna_dir_food=fa["dir_food"],
         fauna_claim=fa["claim"],
         fauna_sense_r=fa["sense_r"],
+        fauna_dir_temp=fa["dir_temp"],
+        fauna_dir_flock=fa["dir_flock"],
+        fauna_dir_beslut=fa["dir_beslut"],
+        fauna_step=fa["step"],
+        fauna_dir_mean=fa["dir_mean"],
+        fauna_dir_sd=fa["dir_sd"],
         fauna_gest_frac=fa["gest_frac"],
         fauna_ready=fa["ready"],
         # Klimatet är en skalär sedan latituden föll. Fältet behålls som en
@@ -617,6 +671,7 @@ _WIRE_U8: dict[str, tuple[float, float]] = {
     # Sex byte per djur i stället för tjugofyra. Profilen ritas som opacitet,
     # och ögat skiljer inte tvåhundrafemtiosex steg i en genomskinlig kil.
     "fauna_dir_food": (0.0, 1.0),
+    "fauna_dir_temp": (0.0, 1.0),
 }
 
 # Fält som byter till en smalare heltalstyp utan att tappa något.
