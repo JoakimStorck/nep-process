@@ -2560,6 +2560,8 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0171~~ | betesgrannskapet är en rumslig räckvidd, inte en väg | betningen | **klart**, se nedan — 40/40/40 |
 | ~~0172~~ | betesytan blir bansträcka gånger kroppens räckvidd | kadensbytet | **klart**, se nedan — neutral, men skalar med `dt` |
 | ~~0174~~ | rörelsen kostar transport, inte dragdissipation | budgeten, kadensen | **klart**, se nedan — uppför var billigare än platt |
+| ~~0175~~ | assimilationen straffade segheten två gånger | födobudgeten | **klart**, se nedan — 16 → 21 % |
+| — | reserven behöver en strukturandel innan magen får komma åt segt material | Steg 6 | **öppen**, se 0175 |
 | ~~0173~~ | `docs/scenariers-anatomi.md` | scenarioformen | **klart**, se nedan |
 | — | `dt` skrivs ut i varje scenario | kadensbytet | **öppen**, se dokumentet |
 | — | kalibreringsblock i scenariofilen | svep utan kodredigering | **öppen**, se dokumentet |
@@ -2654,6 +2656,60 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Assimilationen straffade segheten två gånger (0175)
+
+`assimilated_fraction` var `(1 − s) · digestion_efficiency(s) · d`. Den första
+faktorn har redan tagit bort strukturmaterialet; att sedan sänka verkningsgraden
+på det som återstår *därför att substratet var segt* är samma påstående en gång
+till. De två sade dessutom oförenliga saker om samma material: `(1 − s)` att
+strukturmaterial ger noll, `digestion_efficiency(s)` att rent strukturmaterial
+ger 0,45.
+
+```
+s        (1−s)·dig(s)   (1−s)·0,80
+0,000       0,800         0,800
+0,500       0,313         0,400
+0,567       0,260         0,346      <- florans uppmätta median
+0,750       0,134         0,200
+```
+
+En herbivor tillgodogjorde sig **16 procent** av det den åt, mot 45–70 procent
+för ett verkligt betesdjur på gräs. Det gjorde behovet till 0,54 kg per tick,
+alltså sjuttiotre procent av kroppsvikten per dygn — och **hela födobudgeten är
+kalibrerad mot det talet**: aptiten, den funktionella responsen, betesytan.
+
+Rättat blir andelen 0,213 och behovet 0,40 kg per tick, alltså 55 procent av
+kroppsvikten per dygn. Fortfarande högt, men det som återstår ligger i aptiten
+och i den funktionella responsen, inte i magen.
+
+Uppmätt i `liten6`, 400 tick, tre frön:
+
+```
+                bestånd        massa per individ     svält vinner
+0174            34 37 41       1,28 1,24 1,30        16,7 12,2 12,9 %
+0175            37 40 37       1,36 1,30 1,49        12,0  9,1  9,9 %
+```
+
+**Svälten faller med en fjärdedel till en tredjedel** och konditionen stiger.
+
+**Och den fullständigare formen kunde inte tas i bruk.** `digestion_efficiency(s)`
+är i själva verket redan tvåpoolsblandningen — `0,80·(1−s) + 0,45·s` är exakt
+"av det labila tas 80 procent, av det strukturella 45" — och den ger 0,371, alltså
+ett behov på 32 procent av kroppsvikten per dygn, mitt i det rimliga.
+
+Den provades och föll på en premiss någon annanstans: **reserven är modellerad
+som ren labil massa** och bokförs med `NUTRIENT_PER_KG_LABILE` per kilo. Så snart
+upptaget innehåller strukturmaterial stämmer det inte, och näringsbalansen drev
+2,1e-03 relativt mot invariantens 1e-06. Dessutom bygger `_excrete` på att allt
+strukturmaterial passerar orört, vilket bara gäller när upptaget aldrig kan
+överstiga den labila andelen — vid `s = 0,75` tar en generalist annars upp 0,331
+av massan medan bara 0,25 är labil, och strukturmassa försvinner ur bokföringen.
+
+Att låta magen komma åt segt material kräver alltså att reserven får en
+strukturandel. Det hör till Steg 6, där matsmältningen blir en kapacitet med egen
+underhållskostnad — och först då blir specialisering på segt material ett verkligt
+val i stället för en universell nackdel.
 
 ### Rörelsen kostar transport, inte dragdissipation (0174)
 

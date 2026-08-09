@@ -737,7 +737,14 @@ DIGEST_EFF_STRUCT = 0.45
 
 
 def digestion_efficiency(structure: float) -> float:
-    """Andel av substratets energi som konsumenten faktiskt tillgodogör sig."""
+    """
+    Hela substratets smältbarhet: `0,80·(1−s) + 0,45·s`.
+
+    Den fullständigare formen, och den som ska ersätta `assimilated_fraction`
+    när reserven fått en strukturandel. Läs den där innan den används här — den
+    kan inte tas i bruk förrän upptaget får innehålla strukturmaterial utan att
+    näringsbalansen driver.
+    """
     s = min(1.0, max(0.0, float(structure)))
     return DIGEST_EFF_LABILE - (DIGEST_EFF_LABILE - DIGEST_EFF_STRUCT) * s
 
@@ -765,16 +772,48 @@ def assimilated_fraction(structure: float, diet_eff: float) -> float:
     Andel av ingesterad massa som passerar tarmväggen.
 
     Tre faktorer, alla på massan: strukturmaterialet passerar orört, av det
-    labila tas bara matsmältningens andel upp, och kostpreferensen avgör hur
-    väl konsumenten är rustad för just det substratet.
+    labila tas matsmältningens andel upp, och kostpreferensen avgör hur väl
+    konsumenten är rustad för just det substratet.
 
-    Detta är den enda definitionen. Att låta kostpreferensen sitta som en
-    separat multiplikator på energin och inte på massan lät skillnaden
-    försvinna ur bokföringen: massan var varken kropp eller exkrement.
+    **Mellanfaktorn var `digestion_efficiency(s)` och straffade segheten två
+    gånger.** `(1 − s)` har redan tagit bort strukturmaterialet; att sedan sänka
+    verkningsgraden på det som återstår *därför att substratet var segt* är samma
+    påstående en gång till. De två sade dessutom oförenliga saker om samma
+    material: `(1 − s)` att strukturmaterial ger noll, `digestion_efficiency(s)`
+    att rent strukturmaterial ger 0,45.
+
+        s        (1−s)·dig(s)   (1−s)·0,80
+        0,000       0,800         0,800
+        0,500       0,313         0,400
+        0,567       0,260         0,346      <- florans uppmätta median
+        0,750       0,134         0,200
+
+    Följden var att en herbivor tillgodogjorde sig **16 procent** av det den åt,
+    mot 45–70 procent för ett verkligt betesdjur på gräs. Behovet blev 0,54 kg
+    per tick, alltså sjuttiotre procent av kroppsvikten per dygn, och hela
+    födobudgeten — aptit, funktionell respons, betesyta — kalibrerades mot det.
+
+    Det som återstår är det labila materialets verkningsgrad, en konstant. Den
+    beror inte på hur segt det *omgivande* materialet var.
+
+    **Varför inte hela blandningen.** `digestion_efficiency(s)` är i själva
+    verket redan tvåpoolsformen — `0,80·(1−s) + 0,45·s` är exakt "av det labila
+    tas 80 procent, av det strukturella 45" — och den vore den fullständigare
+    modellen. Den kan inte användas här, och skälet är en premiss någon
+    annanstans: **reserven är modellerad som ren labil massa** och bokförs med
+    `NUTRIENT_PER_KG_LABILE` per kilo. Så snart upptaget får innehålla
+    strukturmaterial stämmer inte det, och näringsbalansen driver — uppmätt
+    2,1e-03 relativt mot invariantens 1e-06. Att låta magen komma åt segt
+    material kräver att reserven får en strukturandel, och det hör till Steg 6
+    där matsmältningen blir en kapacitet med egen underhållskostnad.
+
+    Att kostpreferensen sitter på massan och inte på energin är oförändrat: som
+    separat multiplikator på energin försvann skillnaden ur bokföringen — massan
+    var varken kropp eller exkrement.
     """
     s = min(1.0, max(0.0, float(structure)))
     d = min(1.0, max(0.0, float(diet_eff)))
-    return (1.0 - s) * digestion_efficiency(s) * d
+    return (1.0 - s) * DIGEST_EFF_LABILE * d
 
 
 # Initieringsintervall för strukturlocus, i logit-rymdens enhetsskala.
