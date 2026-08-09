@@ -63,18 +63,35 @@ class ViewerConfig:
 
     show_hud: bool = True
 
-    # Sektorperceptet som kilar kring varje djur: vad djuret ser åt varje håll,
-    # ritat som opacitet. **Bläcket är bevarat** — opaciteten är sektorns andel
-    # av profilens summa, så två djur har alltid lika mycket färg och det enda
-    # som skiljer är hur den är samlad. Ett entoppigt djur får en ljus kil, ett
-    # platt får sex bleka, och en flock blir sex överlagrade moln.
+    # Sektorperceptet som kilar kring varje djur: vad djuret ser åt varje håll.
     #
-    # Det är därför inte arbitreringens uttryck som ritas. 1013 mätte att det är
-    # en cosinus kring ett `argmax` som redan tagits; profilen före kollapsen är
-    # den som bär världen.
+    # **Två kanaler, inte en.** 1014 lade hela informationen i opaciteten, och
+    # det var fel: med sex sektorer får en jämn profil en sjättedel av skalan
+    # var, alltså allt i den blekaste sjättedelen, och en måttligt toppig profil
+    # skiljer sig med några få steg av 255. Regeln som skulle bevara bläcket
+    # komprimerade bort dynamiken. Skärmbilderna visade det direkt — sex jämnt
+    # bleka kilar oavsett vad djuret stod på.
+    #
+    # Nu bär **radien** fördelningen och **opaciteten** mängden:
+    #
+    #   `r_k = R · sqrt(andel_k · S)` ger arean proportionell mot andelen, så
+    #   den totala arean är `π R²` oavsett form. Bläcket är fortfarande bevarat,
+    #   men i geometrin i stället för i alfakanalen — och en form läses av ögat
+    #   på en tiondels sekund där fyra procents alfaskillnad inte läses alls.
+    #   En jämn profil blir en cirkel, en toppig en lob.
+    #
+    #   Opaciteten bär profilens medelvärde, alltså hur mycket föda som finns
+    #   runt djuret över huvud taget. Den informationen fanns inte i bilden
+    #   tidigare, och den är precis vad man vill se bredvid riktningen.
+    #
+    # `R` är djurets **verkliga synvidd**, inte ett pixeltal. En halo som inte
+    # går att lägga mot terrängen säger bara att djuret ser något.
+    #
+    # Det är perceptet som ritas och inte arbitreringens uttryck. 1013 mätte att
+    # det senare är en cosinus kring ett `argmax` som redan tagits.
     show_dir: bool = False
-    # Kilarnas längd i pixlar vid en cellbredd. Skalas med zoomen.
-    dir_len_px: int = 22
+    # Synhorisonten som tunn ring, så att kilarnas skala går att läsa av.
+    dir_ring: bool = True
 
     # Modes:
     #   CB    : RGB=(C,B,0)
@@ -980,21 +997,28 @@ class WorldViewer:
         idx = np.flatnonzero(vis)
         return [(int(i), int(sx[i]), int(sy[i])) for i in idx]
 
-    # Anspråkens kulörer, i `viewframe.FAUNA_CLAIMS` ordning. Nödlägena ligger
-    # i rött och orange, vardagen i grönt och blått, så att en flock som slår om
-    # från bete till flykt syns som en färgvåg genom molnet i stället för som en
-    # ändrad siffra.
-    _CLAIM_HUE = (0.62, 0.00, 0.08, 0.55, 0.95, 0.83, 0.30, 0.15, 0.45)
+    # Anspråkens kulörer, i `viewframe.FAUNA_CLAIMS` ordning, och grammatiken är
+    # **angelägenhetsgrad**: nödlägena i den röda bågen, vardagen i den gröna och
+    # blå. Nivåerna i behovstrappan går 1 (flykt) till 6 (vardag), och kulören
+    # följer dem, så att en flock som slår om från bete till flykt syns som en
+    # färgvåg genom molnet.
+    #
+    # 1014 satte `nedkylning` i blått, vilket är semantiskt lockande — kallt är
+    # blått — men bryter grammatiken: den ligger på nivå 3 och är ett nödläge.
+    # Blått är vardagens flock. Rättat.
+    #
+    # Index 0 är "inget anspråk vann", vilket är ett verkligt utfall. Det ritas
+    # omättat i stället för i en egen kulör, eftersom en kulör hade sagt att det
+    # var ett anspråk bland de andra.
+    _CLAIM_HUE = (0.00, 0.00, 0.05, 0.10, 0.93, 0.85, 0.30, 0.45, 0.58)
+    _CLAIM_SAT = (0.00, 0.85, 0.85, 0.85, 0.85, 0.85, 0.80, 0.80, 0.80)
 
     def _draw_dir(self, frame, reps) -> None:
         """
         Sektorperceptet som kilar: vad djuret ser åt varje håll.
 
-        Opaciteten är sektorns **andel** av profilens summa, inte dess värde.
-        Det gör bläcket bevarat: två djur bär alltid lika mycket färg, och
-        skillnaden är bara hur samlad den är. Att i stället normera mot varje
-        djurs egen topp vore att radera just den skillnaden — en platt profil
-        skulle ritas som en toppig, vilket är precis vad bilden ska kunna skilja.
+        Radien bär fördelningen, opaciteten mängden. Se `ViewerConfig.show_dir`
+        för varför det är två kanaler och inte en.
 
         Kilarna ritas **under** djuret och före det, så att kroppen förblir
         läsbar. Sektor k pekar `(k + 0,5)` sektorbredder från nosen, som
@@ -1006,10 +1030,13 @@ class WorldViewer:
             return
         S = int(prof.shape[1])
         claim = np.asarray(getattr(frame, "fauna_claim", None))
-
-        R = max(6, int(self.cfg.dir_len_px * float(self._ppu) / max(1.0, float(self.cfg.scale))))
+        senser = np.asarray(getattr(frame, "fauna_sense_r", None))
+        ppu = float(self._ppu)
         halv = math.pi / S
-        surf = pygame.Surface((2 * R + 2, 2 * R + 2), pygame.SRCALPHA)
+        # En sektor som bär allt når `sqrt(S)` gånger synvidden. Ytan är
+        # bevarad, så loben *ska* sticka utanför ringen — det är hur en toppig
+        # profil ser toppig ut.
+        maxr = math.sqrt(float(S))
 
         for i, px, py in reps:
             if i >= prof.shape[0]:
@@ -1018,25 +1045,33 @@ class WorldViewer:
             tot = float(w.sum())
             if tot <= 0.0:
                 continue
-            h = self._CLAIM_HUE[int(claim[i]) % len(self._CLAIM_HUE)] if claim.size > i else 0.30
-            col = _hsv_to_rgb(h, 0.80, 1.0)
+            R = float(senser[i]) * ppu if senser.size > i else 0.0
+            if R < 3.0:
+                continue
+            ci = int(claim[i]) % len(self._CLAIM_HUE) if claim.size > i else 0
+            col = _hsv_to_rgb(self._CLAIM_HUE[ci], self._CLAIM_SAT[ci], 1.0)
+            # Mängden: profilens medelvärde i [0, 1]. Ett djur på bar mark blir
+            # nästan osynligt, ett i tät växtlighet solitt.
+            alpha = int(round(35.0 + 145.0 * min(1.0, tot / S)))
             head = float(frame.fauna_heading[i])
 
-            surf.fill((0, 0, 0, 0))
+            RR = int(R * maxr) + 2
+            surf = pygame.Surface((2 * RR + 2, 2 * RR + 2), pygame.SRCALPHA)
             for k in range(S):
-                andel = float(w[k]) / tot
-                # Full opacitet vid att *all* profil ligger i en sektor. En jämn
-                # profil ger 1/S av det per kil, alltså samma summa.
-                alpha = int(round(210.0 * andel))
-                if alpha <= 0:
+                # Arean proportionell mot andelen ger radien som roten ur den.
+                rk = R * math.sqrt(float(w[k]) / tot * S)
+                if rk < 1.0:
                     continue
                 a0 = head + (k + 0.5) * (2.0 * math.pi / S) - halv
-                pts = [(R + 1, R + 1)]
-                for j in range(5):
-                    a = a0 + 2.0 * halv * j / 4.0
-                    pts.append((R + 1 + R * math.cos(a), R + 1 + R * math.sin(a)))
+                pts = [(RR + 1, RR + 1)]
+                for j in range(7):
+                    a = a0 + 2.0 * halv * j / 6.0
+                    pts.append((RR + 1 + rk * math.cos(a), RR + 1 + rk * math.sin(a)))
                 pygame.draw.polygon(surf, (col[0], col[1], col[2], alpha), pts)
-            self._screen.blit(surf, (px - R - 1, py - R - 1))
+            if self.cfg.dir_ring and R >= 6.0:
+                pygame.draw.circle(surf, (col[0], col[1], col[2], 70),
+                                   (RR + 1, RR + 1), int(R), 1)
+            self._screen.blit(surf, (px - RR - 1, py - RR - 1))
 
     def _draw_agents(self, frame) -> None:
         if not self.cfg.draw_agents:

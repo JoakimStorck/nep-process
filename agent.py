@@ -2488,6 +2488,9 @@ class Agent:
     # läsare i simuleringen.
     _dir_food: object = field(init=False, default=None, repr=False, compare=False)
     _dir_vinnare: str = field(init=False, default="", repr=False, compare=False)
+    # Andel av sektorerna som pekar mot vatten två cellbredder fram. Bara
+    # mätning; se `plan_action`.
+    _dir_vatten: float = field(init=False, default=0.0, repr=False, compare=False)
     # Riktningsprofilen från senaste arbitrering: `(bäringar, värden, styrka,
     # n_sektor)`, eller None när sektorerna saknades.
     #
@@ -3878,6 +3881,31 @@ class Agent:
         else:
             self._dir_food = None
         self._dir_vinnare = str(_vinnare)
+
+        # Andelen sektorer som pekar mot vatten två cellbredder fram. **Bara
+        # mätning.** Kustlinjen är den enda skarpa kanten i en värld där marken
+        # är sluten överallt, och den är därför det enda stället där perceptet
+        # *måste* vara riktat: tre sektorer mot land och tre mot hav kan inte ge
+        # en jämn profil. Talet gör den kontrollen möjlig genom att skilja
+        # kustdjuren från de inne i landet.
+        #
+        # Uppslaget går via samma `world.water` och `submerged_threshold` som
+        # hydro skriver, i samma punkt som `_kostnad_vag` provar.
+        self._dir_vatten = 0.0
+        if self._dir_food is not None:
+            try:
+                _S6 = int(len(self._dir_food))
+                _thr = float(world.WP.submerged_threshold)
+                _nv = 0
+                for _k in range(_S6):
+                    _a = float(self.heading) + (_k + 0.5) * (2.0 * math.pi / _S6)
+                    _cx = float(self.x) + 2.0 * math.cos(_a)
+                    _cy = float(self.y) + 2.0 * math.sin(_a)
+                    if float(world.water[self.grid.cell_of(_cx, _cy)]) > _thr:
+                        _nv += 1
+                self._dir_vatten = _nv / max(1, _S6)
+            except Exception:
+                self._dir_vatten = 0.0
         explore_drive *= 1.0 - _hunger * _food_local
         if getattr(self, "_mate_search", False):
             explore_drive = max(explore_drive, 1.0 - _hunger)

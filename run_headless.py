@@ -176,8 +176,16 @@ _S: dict = {"tick": 0, "byten": 0, "n_anskrav": 0,
 #     enda av de fyra som mäter profilen *före* arbitreringens kollaps, och
 #     därmed den enda som kan vara flat på ett informativt sätt. Jämförelsen är
 #     `1/S`: lika stor betyder att riktningen inte bär någon information alls.
+#     Talet delas på **kust** och **inland**. Kustlinjen är den enda skarpa
+#     kanten i en värld där marken är sluten överallt, och den är därför den
+#     enda kontrollen som kan skilja "profilen är platt" från "profilen läser
+#     inte världen". Ett djur med tre sektorer mot land och tre mot hav kan inte
+#     ha en jämn profil; får det ändå det är felet i perceptet och inte i
+#     världen.
 _P: dict = {"tick": 0, "n_sektor": 0, "likvardiga": 0, "n_percept": 0,
-            "spridning": [0] * 20, "marginal": [0] * 20, "toppandel": [0] * 20}
+            "n_kust": 0,
+            "spridning": [0] * 20, "marginal": [0] * 20, "toppandel": [0] * 20,
+            "toppandel_kust": [0] * 20}
 
 # Histogrammens övre gräns, i styrkeenheter. Värden över den hamnar i sista
 # facket; det syns som en klump vid kanten och är avsiktligt inte tyst.
@@ -490,8 +498,12 @@ def _mat_riktning(agent) -> None:
     if f is not None and len(f) > 1:
         tot = float(sum(f))
         if tot > 0.0:
+            b = min(19, max(0, int(float(max(f)) / tot * 20.0)))
             _P["n_percept"] += 1
-            _P["toppandel"][min(19, max(0, int(float(max(f)) / tot * 20.0)))] += 1
+            _P["toppandel"][b] += 1
+            if float(getattr(agent, "_dir_vatten", 0.0)) > 0.0:
+                _P["n_kust"] += 1
+                _P["toppandel_kust"][b] += 1
 
 
 def instrument_steering() -> None:
@@ -1158,6 +1170,12 @@ def print_summary(pop: Population, d0: dict, nb0: dict, unika: int, worst_drift:
                   f"   median {_hist_median(_P['toppandel'], 0.0, 1.0):.3f}"
                   f"   p90 {_hist_kvantil(_P['toppandel'], 0.0, 1.0, 0.90):.3f}"
                   f"   (jämn fördelning = {jamn:.3f})")
+            if _P["n_kust"]:
+                print(f"      vid kust   median {_hist_median(_P['toppandel_kust'], 0.0, 1.0):.3f}"
+                      f"   av {100 * _P['n_kust'] / _P['n_percept']:.1f} % av tickarna"
+                      f"   — tre sektorer mot hav kan inte ge en jämn profil")
+            else:
+                print("      vid kust   inga tick med vatten inom två cellbredder")
 
     if _W["tick"]:
         n = _W["tick"]
@@ -1281,9 +1299,11 @@ def run(a: argparse.Namespace, seed: int | None = None) -> int:
     _P["n_sektor"] = 0
     _P["likvardiga"] = 0
     _P["n_percept"] = 0
+    _P["n_kust"] = 0
     _P["spridning"] = [0] * 20
     _P["marginal"] = [0] * 20
     _P["toppandel"] = [0] * 20
+    _P["toppandel_kust"] = [0] * 20
     # In-place: wrappern läser dicten per anrop, men `forra` bär tillstånd
     # mellan världar vid `--seeds` om den ombinds.
     _S["forra"].clear()

@@ -97,13 +97,22 @@ och bildrutan bär inte fälten alls. Hav, sjöar och vattendrag ritas ovanpå
 mark utan växtlighet.
 
 `D` ritar vad varje djur **ser** åt varje håll: födoperceptet per
-riktningssektor, som kilar kring kroppen. Opaciteten är sektorns andel av
-profilens summa och inte dess värde, så bläcket är bevarat — två djur bär alltid
-lika mycket färg, och det enda som skiljer är hur samlad den är. Ett entoppigt
-djur får en ljus kil, ett platt får sex bleka, och en flock blir sex överlagrade
-moln. Kulören är anspråket som vann arbitreringen, med nödlägena i rött och
-vardagen i grönt och blått, så att en flock som slår om från bete till flykt
-syns som en färgvåg.
+riktningssektor, som kilar kring kroppen. **Radien bär fördelningen, opaciteten
+mängden.** Kilens area är proportionell mot sektorns andel, `r = R·sqrt(andel·S)`,
+så den totala arean är densamma oavsett form: en jämn profil blir en cirkel, en
+toppig en lob som sticker ut. Opaciteten säger i stället hur mycket föda som
+finns runt djuret över huvud taget. Ringen är djurets synhorisont, så kilarna går
+att lägga mot terrängen och läsa av vad djuret faktiskt ser.
+
+Ett första försök lade all information i opaciteten. Det såg jämnt blekt ut
+oavsett vad djuret stod på, och skälet är aritmetiskt: med sex sektorer får en
+jämn profil en sjättedel av skalan var, alltså allt i den blekaste sjättedelen.
+Regeln som skulle bevara bläcket komprimerade bort dynamiken. Bläcket är
+fortfarande bevarat, men i geometrin i stället för i alfakanalen.
+
+Kulören är anspråket som vann arbitreringen, efter angelägenhetsgrad: nödlägena i
+den röda bågen, vardagen i grönt och blått, så att en flock som slår om från bete
+till flykt syns som en färgvåg.
 
 Det är perceptet som ritas och inte arbitreringens riktningsuttryck. Det senare
 mättes i 1013 och visade sig vara en cosinus kring en bäring som redan är ett

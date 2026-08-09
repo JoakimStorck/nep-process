@@ -2571,6 +2571,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~1012~~ | höjdkurvor i viewern, ovanpå vattnet | ögat | **klart**, se nedan |
 | ~~1013~~ | riktningsfördelningen fångas och mäts | 0169, 1014 | **klart**, se nedan — fördelningen är en cosinus |
 | ~~1014~~ | sektorperceptet ritas som kilar; opaciteten är andelen | ögat, 0169 | **klart**, protokoll 7, se nedan — perceptet är nästan platt |
+| ~~1015~~ | radien bär fördelningen, opaciteten mängden; kusten som kontroll | ögat, 0169 | **klart**, protokoll 8, se nedan — marken är sluten överallt |
 
 ### Vad mätningarna ändrade i planen
 
@@ -3108,6 +3109,57 @@ och nu finns talet.
 `_dir_prof` har inga läsare i simuleringen och kan därför inte påverka utfallet.
 Läsordningen är bindande: plats 0 är anspråkets egen bäring, plats 1 till och
 med `n_sektor` är sektormitterna, en eventuell bunden bäring ligger sist.
+
+### Kilarna får form, och floran täcker allt (1015)
+
+1014:s bild såg jämnt blek ut oavsett vad djuret stod på. Skälet var
+aritmetiskt och mitt: med sex sektorer får en jämn profil en sjättedel av
+alfaskalan var, alltså allt i den blekaste sjättedelen, och en måttligt toppig
+profil skiljer sig med några få steg av 255. **Regeln som skulle bevara bläcket
+komprimerade bort dynamiken.**
+
+Nu bär **radien** fördelningen och **opaciteten** mängden. `r_k = R·sqrt(andel·S)`
+ger arean proportionell mot andelen, så totalarean är `π R²` oavsett form —
+bläcket är bevarat i geometrin i stället för i alfakanalen. Verifierat exakt:
+summan av `r²/S` är 1,000000 per djur. Uppmätt radiespann i `liten6` 0,75–1,19
+av synvidden mot jämnfördelningens 1,00, alltså ±20 procent i form där 1014 gav
+±4 procent i alfa.
+
+`R` är djurets **verkliga synvidd**, skickad per djur i protokoll 8 eftersom
+sensingnivån gör den olika mellan individer (7, 8, 10 eller 12 cellbredder). En
+halo som inte går att lägga mot terrängen säger bara att djuret ser något.
+
+Kulörerna följer nu behovstrappans nivå: nödlägena i den röda bågen, vardagen i
+grönt och blått. 1014 satte `nedkylning` i blått, vilket är semantiskt lockande
+men bryter grammatiken — den ligger på nivå 3.
+
+**Kustkontrollen faller, och det avgör frågan.** Ett djur med tre sektorer mot
+land och tre mot hav kan inte ha en jämn profil. Uppmätt i `liten6`, 400 tick,
+frö 1, med 36,7 procent av tickarna inom två cellbredder från vatten:
+
+```
+toppandel    median 0,181     (jämn fördelning = 0,167)
+  vid kust   median 0,186
+```
+
+Kusten flyttar toppandelen med **en halv procentenhet**. Perceptet reagerar
+alltså knappt ens på världens skarpaste kant.
+
+Skärmbilderna visar varför, och det står i HUD:en: `bar=20,1 %` mot
+`hav=20,0 %`. **Den bara marken är havet.** Varje landcell är sluten, 873 814
+plantor på 52 429 landceller är sjutton per cell, och landet är en jämn matta
+ända ut till strandlinjen. Femtioåtta djur kan inte göra hål i en gräsmatta som
+växer igen fortare än de betar.
+
+Min tidigare gissning — att synvidden är större än fläckstorleken — var alltså
+fel. **Det finns inga fläckar.** Det är B4:s monotona floratillväxt igen, nu med
+ett näringstak som finns men som vid `bördighet 4.0` ligger över vad som krävs
+för sluten mark överallt.
+
+Följden för 0169 är att frågan inte är hur rörelsekärnan byggs. Den är **om
+världen har någon struktur att röra sig mot.** En kärna i en sluten matta ger
+diffusion hur väl den än är byggd, och det är billigare att pröva en lägre
+bördighet i ett scenario än att bygga kärnan och upptäcka det efteråt.
 
 ### Perceptet ritas, och det är nästan platt (1014)
 

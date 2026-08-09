@@ -55,7 +55,10 @@ import numpy as np
 # uttryck är hur styrningen och fysiken glider isär. 1013 mätte att
 # arbitreringens `styrka · cos(Δ)` är en cosinus och inte ett fält; det är
 # profilen *före* kollapsen som bär världen, och det är den som ritas.
-PROTOCOL_VERSION = 7
+# 8: bildrutan bär faunans synvidd. Utan den kan viewern inte rita kilarna i
+# den skala djuret faktiskt ser, och en halo som inte går att lägga mot
+# terrängen säger inte vad djuret ser — bara att det ser något.
+PROTOCOL_VERSION = 8
 
 # Vattnets topologi per cell. Ordningen är bindande — den är värdet i
 # `ViewFrame.wet_kind`.
@@ -186,6 +189,9 @@ class ViewFrame:
     fauna_dir_food: np.ndarray = field(default_factory=lambda: np.zeros((0, 0), np.float32))
     # Index i `FAUNA_CLAIMS` för anspråket som vann arbitreringen.
     fauna_claim: np.ndarray = field(default_factory=lambda: np.zeros(0, np.uint8))
+    # Synellipsens långa halva i cellbredder, per djur. Sensingnivån gör den
+    # olika mellan individer, så den kan inte vara en skalär.
+    fauna_sense_r: np.ndarray = field(default_factory=lambda: np.zeros(0, np.float32))
 
     # --- HUD ---
     T_band: np.ndarray = field(default_factory=lambda: np.zeros(0, np.float32))
@@ -370,6 +376,7 @@ def _fauna_table(pop) -> dict[str, np.ndarray]:
     }
     out["ready"] = np.zeros(n, dtype=np.bool_)
     out["claim"] = np.zeros(n, dtype=np.uint8)
+    out["sense_r"] = np.zeros(n, dtype=np.float32)
 
     # Sektorantalet tas ur det första djur som har en profil. Alla har samma,
     # men ett djur som ännu inte sensat har ingen alls.
@@ -406,6 +413,7 @@ def _fauna_table(pop) -> dict[str, np.ndarray]:
         out["predation"][i] = float(getattr(getattr(a, "pheno", None), "predation", 0.0))
 
         out["claim"][i] = _CLAIM_IDX.get(str(getattr(a, "_dir_vinnare", "")), 0)
+        out["sense_r"][i] = float(getattr(getattr(a, "AP", None), "ray_len_front", 0.0))
         if S:
             d = getattr(a, "_dir_food", None)
             if d is not None and len(d) == S:
@@ -493,6 +501,7 @@ def frame_from_pop(pop, births_total: int = 0, deaths_total: int = 0,
         fauna_predation=fa["predation"],
         fauna_dir_food=fa["dir_food"],
         fauna_claim=fa["claim"],
+        fauna_sense_r=fa["sense_r"],
         fauna_gest_frac=fa["gest_frac"],
         fauna_ready=fa["ready"],
         # Klimatet är en skalär sedan latituden föll. Fältet behålls som en
