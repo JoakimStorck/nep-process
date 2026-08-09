@@ -2554,6 +2554,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~7009b~~ | lutningen som framkomlighet: uppför kostar, nedför är billigt | faunans rörelse | **klart**, fart 55 nedför mot 20 uppför |
 | ~~7009c~~ | vadandet kostar, värmeledning vid nedsänkning, passiv drift ur kontinuitet | faunan möter vattnet | **klart** |
 | ~~7023~~ | kroppen får ett djupmått; tre läsare delar det | draget, styrningen, driften | **klart**, se nedan |
+| ~~7024~~ | driften blir uppehållstid längs nätet; `drift_max` utgår | styrningen | **klart**, se nedan — max 143 → 13 utan tak |
 | 7010 | vattendjupet som fjärde världskanal och fri MLP-ingång | selektionen | öppen |
 | ~~7010~~ | ~~vattenaxeln som nisch~~ | | **slås ihop med 7009** |
 | ~~7011~~ | ~~glesning av hydro~~ | | **utgår**, se nedan |
@@ -2587,6 +2588,57 @@ I stället gjordes 7008 till partikulär transport av förna, eftersom mätninge
 **`sediment_rate` är ett reglage mellan land och vatten, inte en fri parameter.** Näringsförlusten motsvarar exakt sedimentexporten: sjöarna behåller sitt, men floderna är ett avlopp till havet. Vid 0,5 kostar det 16 procent av näringsstocken och en tredjedel av floran att göra vattnet rikare per cell än landet.
 
 **Glesning av hydro utgår.** Motivet var att ett tätt grannflöde skulle bli för dyrt. Jämviktslösningen kostar 0,216 ms per tick vid 16 384 celler och 4,1 vid 262 144 — mindre än den täta laplacianen i `transport_pass`. Görs bara om en mätning på en stor värld motiverar den.
+
+### Driften blir en uppehållstid (7024)
+
+Farten `Q/djup` hade tre fel som följde av varandra: den är obegränsad när
+djupet går mot noll, den kräver därför ett tak, och taket är inte en parameter
+utan en förbindelse. Uppmätt band taket i **varje** fårhändelse — formeln bidrog
+med ingenting utom sin mättnad.
+
+Värre var att steget lades ut som ett **rakt streck** mot nedströmscellens
+centrum. Riktningen gäller en cell, längden gällde hundra. Det är den
+kombinationen som slängde djuren rakt ut i havet flera celler från land: havet är
+aldrig med i flödesgrafen — `flow_to` är -1 där, verifierat 13 107 av 13 107
+havsceller — så de hamnade utanför nätet i en riktning nätet inte pekade. Den
+tidigare diagnosen "havet behandlas som en fortsättning på fåran" var alltså
+fel; havet var redan en sänka, och felet låg i geometrin hos steget.
+
+Storheten är nu cellens **uppehållstid**, `τ = V/Q` med `V = djup · area` och
+cellarean 1. `discharge` är en volym per tick, så τ är ett antal tick och
+behöver ingen omräkning. Kroppen får en tidsbudget skalad med `buoyancy` och
+vandrar längs `flow_to` medan budgeten räcker.
+
+Uppmätt i `liten6`, 400 tick, tre frön, jämfört med samma instrument:
+
+```
+                   steg max      slutade
+frö   före  7023   7024      hav  strand  lugn  budget    bestånd
+ 1    142,8 142,8  12,9     10,0   28,5   23,5   38,0     40 -> 41
+ 2    143,1 143,1  16,1      5,1   37,0   23,9   34,1     40 -> 39
+ 3    141,2 138,9   6,9      3,9   37,9   26,2   32,0     40 -> 38
+```
+
+**Maxsteget faller från 143 till 13 cellbredder utan att något tak finns kvar.**
+`drift_max` är borttagen och `drift_gain` är en dimensionslös etta i stället för
+en felaktig enhetsomräkning. Längsta vandring 11–18 celler mot skyddsnätets
+4 096; nätet är acykliskt och gränsen nåddes aldrig.
+
+**Tre fysiska utfall uppstår utan att kodas.** Ungefär en tredjedel av
+vandringarna **strandar** — fåran blir grundare än kroppen nedströms och den
+lämnas där, alltså sköljs i land utan en regel om det. En fjärdedel slutar i
+**lugnvatten**, som är sjöarna: stort magasin mot måttligt genomflöde ger lång τ
+och budgeten tar slut nästan direkt. Fyra till tio procent når **havet**, och då
+vid mynningen, eftersom vandringen bryter där nätet gör det.
+
+Beståndet gick 41, 39, 38 mot 7023:s 30, 38, 38 och utgångsläget 35, 36, 30. Tre
+frön räcker inte för en slutsats, men riktningen är åtminstone inte fel, och
+`liten6` kollapsar av egen kraft.
+
+**Det som inte är gjort.** Vandringen är deterministisk och använder
+uppehållstiden som väntevärde snarare än att dra ur `p = 1 − exp(−r·dt)`.
+Skillnaden syns först om spridningen mellan individer i samma fåra ska betyda
+något. Formen är den samma och bytet är lokalt.
 
 ### Kroppen får ett djupmått (7023)
 

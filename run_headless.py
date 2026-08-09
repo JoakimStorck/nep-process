@@ -1217,6 +1217,16 @@ def print_summary(pop: Population, d0: dict, nb0: dict, unika: int, worst_drift:
                   f"   max {_D['steg_max']:.2f} cellbredder")
         else:
             print("    steg         ingen drift alls — kroppsdjupet grindade bort den")
+        sl = getattr(pop, "_drift_slut", None)
+        if sl:
+            tot = max(1, sum(v for k, v in sl.items() if k != "max_celler"))
+            print(f"    slutade      hav {100 * sl.get('hav', 0) / tot:5.1f} %"
+                  f"   strand {100 * sl.get('strand', 0) / tot:5.1f} %"
+                  f"   lugnvatten {100 * sl.get('lugn', 0) / tot:5.1f} %"
+                  f"   budget {100 * sl.get('budget', 0) / tot:5.1f} %")
+            if sl.get("tak", 0):
+                print(f"    VARNING      {sl['tak']} vandringar nådde cellskyddet")
+            print(f"    vägen        längst {sl.get('max_celler', 0)} celler")
 
     if _P["tick"]:
         n = _P["tick"]

@@ -307,6 +307,10 @@ _TORR_FORSOK = 8
 
 @dataclass
 class Population:
+    # Skyddsnät för vandringen längs dräneringsnätet. Nätet är acykliskt, så
+    # gränsen kan bara nås om budgeten räcker längre än världen är stor.
+    _DRIFT_MAX_CELLER = 4096
+
     WP: WorldParams
     AP: AgentParams
     PP: PopParams
@@ -406,6 +410,14 @@ class Population:
         self._deaths_without_cause = 0
 
         self._flora_summary_cache = None
+
+        # Driftens utfall, kumulativt över körningen. Hur en drift **slutade**
+        # är det som skiljer uppehållstidsformen från den gamla farten: en
+        # vandring som bryter i havsmynningen, på en strand eller i lugnvatten
+        # är tre olika fysiska utfall, och alla tre var osynliga när steget var
+        # ett rakt streck med ett tak.
+        self._drift_slut = {"hav": 0, "strand": 0, "lugn": 0,
+                            "budget": 0, "tak": 0, "max_celler": 0}
 
         # ensure MC uses PP.n_traits (single source of truth for this run)
         if int(self.MC.n_traits) != int(self.PP.n_traits):
@@ -3095,21 +3107,54 @@ class Population:
     # -----------------------------
     def _drift_system(self) -> float:
         """
-        Passiv drift: flytande organismer förs med strömmen.
+        Passiv drift: flytande organismer förs med strömmen längs
+        dräneringsnätet.
 
         Direkt efter hydro och **före** sensing och beslut, som manifestet
-        kräver. Det håller isär rörelse som fysik från rörelse som beteende:
-        ett djur som drivit en bit ska fatta sitt nästa beslut från den plats
-        strömmen lämnade det på, inte tvärtom.
+        kräver. Det håller isär rörelse som fysik från rörelse som beteende.
 
-        Riktningen kommer från `flow_to`, alltså samma nät som vattnet självt
-        följer, och styrkan ur genomströmningen. Att drivas är proportionellt
-        mot flytförmågan: en tät kropp står emot, en lätt förs med.
+        **Uppehållstid i stället för hastighet.** Tidigare räknades en fart
+        `Q/djup` och multiplicerades med ett tidssteg. Den formen har tre fel
+        som alla följer av varandra: den är obegränsad när djupet går mot noll,
+        den kräver därför ett tak, och taket är inte en parameter utan en
+        förbindelse. Uppmätt gav den 51 106 cellbredder per tick vid en
+        sjökant, och taket band i *varje* fårhändelse — formeln bidrog med
+        ingenting utom sin mättnad.
 
-        **Det är den flytande ändens nedsida, och den behöver inte uppfinnas.**
-        Strömmen går till havet, och havet ligger i polarbältet vid noll
-        grader. En kropp som flyter bra men inte tar sig någonstans hamnar där
-        det inte går att leva.
+        Värre var att steget lades ut som ett **rakt streck** mot nedströms-
+        cellens centrum. Riktningen gäller en cell, längden gällde hundra, och
+        det är den kombinationen som slängde djuren rakt ut i havet flera celler
+        från land. Havet var aldrig med i flödesgrafen — `flow_to` är -1 där —
+        så de hamnade utanför nätet i en riktning nätet inte pekade.
+
+        Här är storheten i stället cellens **uppehållstid**, `τ = V/Q`, med
+        `V = djup · area` och cellarean 1. `discharge` är en volym per tick, så
+        τ är ett antal tick och behöver ingen omräkning. Kroppen tilldelas en
+        tidsbudget och vandrar längs `flow_to` medan budgeten räcker:
+
+          * en **fåra** har litet djup mot stort genomflöde, alltså kort τ, och
+            kroppen passerar många celler
+          * en **sjö** har stort magasin mot måttligt genomflöde, alltså lång
+            τ, och budgeten tar slut nästan direkt — lugnvatten utan att kodas
+          * en **sjökant** kan inte längre bli en singularitet: går djupet mot
+            noll flyter kroppen inte där, och driften upphör i stället för att
+            växa
+
+        Tre saker faller ut och behöver inte längre finnas:
+
+          * **`drift_max` är borta.** Det finns ingen obegränsad storhet kvar
+            att hålla tillbaka. Vandringen slutar där strömmen slutar, och "till
+            vägens ände" är inte en magnitud.
+          * **Slutpunkten ligger på flödesvägen.** En kropp som når havet gör det
+            vid mynningen, inte trettio celler ut, eftersom vandringen bryter
+            när `flow_to` är -1.
+          * **Strandning uppstår av sig själv.** Blir fåran grundare än kroppen
+            nedströms slutar den flyta och lämnas där. En kropp sköljs i land
+            utan att en regel om det skrivs.
+
+        `buoyancy` skalar budgeten och inte farten: en kropp med halv flytförmåga
+        följer med halva vägen. `drift_gain` är kvar som dimensionslös skala —
+        1,0 är fysisk, 0 stänger av — och inte längre som enhetsomräkning.
 
         Returnerar summan av tillryggalagd sträcka, som diagnostik.
         """
@@ -3126,95 +3171,99 @@ class Population:
         ys = np.fromiter((a.y for a in alive), dtype=np.float64, count=len(alive))
         cells = grid.cell_of_many(xs, ys).astype(np.int64, copy=False)
 
-        depth = np.asarray(world.water, dtype=np.float64)[cells]
-        # **Grinden är flytkraft, inte väta.** Den stod på
-        # `submerged_threshold`, alltså 1e-6 längdenheter — en mikrometer
-        # vatten svepte bort ett tvåkilos djur. Samtidigt krävdes två meter
-        # innan draget var fullt. Samma kropp mötte vattnet på två skalor som
-        # skilde tvåhundratusen gånger.
-        #
-        # Nu gäller kroppens eget djup: under det står djuret på botten och
-        # vadar, vilket `wade_cost` redan prissätter, och strömmen har inget
-        # att bära. Över det är kroppen täckt och förs med.
-        #
-        # Det tar bort sjökantens singularitet **vid källan** i stället för att
-        # klippa den. En strandcell har per definition djup mot noll, och
-        # `q/djup` gav där uppmätt 51 106 cellbredder per tick. En cell så grund
-        # kan nu inte drifta alls, och divisorns golv är en fysisk storhet i
-        # stället för ett epsilon.
+        vatten = np.asarray(world.water, dtype=np.float64)
+        depth = vatten[cells]
+        # **Grinden är flytkraft, inte väta.** Under kroppens eget djup står
+        # djuret på botten och vadar, vilket `wade_cost` prissätter, och
+        # strömmen har inget att bära. Se 7023.
         kroppsdjup = np.fromiter((a._body_depth() for a in alive),
                                  dtype=np.float64, count=len(alive))
         wet = depth > kroppsdjup
         if not wet.any():
+            for a in alive:
+                a._drift_dx = 0.0
+                a._drift_dy = 0.0
             return 0.0
 
-        to = np.asarray(dr.flow_to)[cells]
+        flow_to = np.asarray(dr.flow_to)
+        to = flow_to[cells]
         ok = wet & (to >= 0)
-        if not ok.any():
-            return 0.0
 
-        # Riktningen mot nedströmscellens centrum, på torusen.
-        cx = np.asarray(grid.cell_center_x, dtype=np.float64)
-        cy = np.asarray(grid.cell_center_y, dtype=np.float64)
-        idx = np.flatnonzero(ok)
-        moved = 0.0
-        buoy = np.fromiter((float(alive[i].pheno.buoyancy) for i in idx),
-                           dtype=np.float64, count=idx.size)
-        q = np.asarray(world.discharge, dtype=np.float64)[cells[idx]]
-        # Strömhastigheten ur kontinuitetsvillkoret: `Q = A · v`. Cellarean är
-        # 1, så tvärsnittet är vattendjupet och hastigheten blir `Q / djup`,
-        # uttryckt i cellbredder per **tick** — `discharge` är redan en
-        # volym per tick, så ingen `dt` ska in en gång till.
-        #
-        # Sjöar blir lugnvatten av sig själva: ett magasin har stort djup mot
-        # måttligt genomflöde, alltså lång uppehållstid och låg hastighet. En
-        # fåra har det omvända. Ingendera behöver kodas.
-        #
-        # Ett mellanliggande försök skalade med lutningen i stället. Det gav
-        # rätt kvalitativt utfall men ersatte en bevarandelag med en
-        # heuristik, och dolde samtidigt att `dt` räknades två gånger.
-        speed = q / np.maximum(depth[idx], kroppsdjup[idx])
-        np.minimum(speed, float(self.AP.drift_max), out=speed)
-        step = speed * buoy * float(self.AP.drift_gain)
-
-        # **Passet flyttar inte.** Det lämnar ett förskjutningsbidrag som
-        # `_integrate_motion` adderar till sitt eget innan positionen skrivs.
-        #
-        # Två pass som var för sig utförde en förflyttning på samma tick gjorde
-        # relativhastigheten omöjlig att uttrycka: ett djur som simmar mot
-        # strömmen kunde inte motverka den, eftersom det andra passet redan
-        # hade flyttat det. Enda återstående bromsen blev `drift_max`, ett
-        # godtyckligt tak — satt tjugo gånger för högt mot vad dess egen
-        # kommentar påstod. Uppmätt flyttades djuren 11,08 cellbredder på ett
-        # enda tick i medel mot en egen förflyttning på 0,52, och driften stod
-        # för en fjärdedel av all rörelse i världen fastän den bara berör en
-        # procent av agenttickarna.
-        #
-        # Med bidrag i stället för förflyttning faller relativhastigheten ut av
-        # sig själv: den som simmar mot strömmen får summan nära noll, den som
-        # simmar med får dubbelt, och ingen resultant behöver härledas.
-        #
-        # Manifestets uppdelning står kvar. *Passiv drift hanteras i
-        # Hydro-passet, inte i Locomotion* handlar om vem som **äger flödet** —
-        # hydro räknar strömmen, biologin uttrycker bara `buoyancy`. Att hydro
-        # dessutom utförde förflyttningen var en implementationsdetalj, och det
-        # var den som gjorde taket nödvändigt.
         for a in alive:
             a._drift_dx = 0.0
             a._drift_dy = 0.0
-        for k, i in enumerate(idx):
-            if step[k] <= 0.0:
-                continue
+        if not ok.any():
+            return 0.0
+
+        q_all = np.asarray(world.discharge, dtype=np.float64)
+        cx = np.asarray(grid.cell_center_x, dtype=np.float64)
+        cy = np.asarray(grid.cell_center_y, dtype=np.float64)
+        slut = self._drift_slut
+        moved = 0.0
+
+        for i in np.flatnonzero(ok):
             a = alive[i]
-            c = int(cells[i])
-            t = int(to[i])
-            dx, dy = grid.torus_delta_pos(cx[c], cy[c], cx[t], cy[t])
-            n = math.hypot(dx, dy)
-            if n <= 1e-12:
+            budget = float(self.AP.drift_gain) * float(a.pheno.buoyancy)
+            if budget <= 0.0:
                 continue
-            a._drift_dx = step[k] * dx / n
-            a._drift_dy = step[k] * dy / n
-            moved += float(step[k])
+            djup_kropp = float(kroppsdjup[i])
+            px, py = float(a.x), float(a.y)
+            c = int(cells[i])
+            dx = dy = 0.0
+            steg_celler = 0
+            varfor = "budget"
+
+            while True:
+                q = q_all[c]
+                d = vatten[c]
+                if q <= 0.0:
+                    # Stillastående vatten. Uppehållstiden är oändlig och
+                    # kroppen stannar; sjöar hamnar här av sig själva.
+                    varfor = "lugn"
+                    break
+                tau = d / q
+                t = int(flow_to[c])
+                if t < 0:
+                    # Havet är hydrologins sänka och nätets ände. Kroppen når
+                    # mynningen och inte längre.
+                    varfor = "hav"
+                    break
+                if budget < tau:
+                    # Budgeten tar slut inne i cellen: en andel av vägen mot
+                    # nästa centrum.
+                    f = budget / tau
+                    ex, ey = grid.torus_delta_pos(px, py, cx[t], cy[t])
+                    dx += f * ex
+                    dy += f * ey
+                    break
+                budget -= tau
+                if vatten[t] <= djup_kropp:
+                    # Nedströms är grundare än kroppen. Den strandar här.
+                    varfor = "strand"
+                    break
+                ex, ey = grid.torus_delta_pos(px, py, cx[t], cy[t])
+                dx += ex
+                dy += ey
+                px, py = cx[t], cy[t]
+                c = t
+                steg_celler += 1
+                if steg_celler > self._DRIFT_MAX_CELLER:
+                    # Nätet är acykliskt, så det här kan bara inträffa om
+                    # budgeten räcker längre än världen är stor. Räknaren är ett
+                    # skyddsnät och inte en fysisk gräns; slår den ofta är det
+                    # ett fynd och inte en detalj.
+                    varfor = "tak"
+                    break
+
+            if dx == 0.0 and dy == 0.0:
+                slut[varfor] = slut.get(varfor, 0) + 1
+                continue
+            a._drift_dx = dx
+            a._drift_dy = dy
+            moved += math.hypot(dx, dy)
+            slut[varfor] = slut.get(varfor, 0) + 1
+            if steg_celler > slut["max_celler"]:
+                slut["max_celler"] = steg_celler
         return moved
 
     def _step_world_and_flora(self) -> tuple[float, int, float]:

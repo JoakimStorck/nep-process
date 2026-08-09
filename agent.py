@@ -323,11 +323,20 @@ class AgentParams:
     # jämförbart med att springa i full fart på land.
     wade_cost: float = 3.0e4
 
-    # Passiv drift. `drift_gain` skalar genomströmningen per vattendjup till en
-    # fart i cellbredder per månad; `drift_max` är taket, satt under faunans
-    # egen fart så att strömmen kan flytta men aldrig kasta.
-    drift_gain: float = 12.0
-    drift_max: float = 12.0
+    # Passiv drift. `drift_gain` är en **dimensionslös** skala på den tidsbudget
+    # en flytande kropp har för att följa strömmen: 1,0 är fysisk, 0 stänger av.
+    #
+    # Den var 12,0 och skulle enligt sin egen kommentar räkna om cellbredder per
+    # månad till per tick — en omräkning som inte behövdes, eftersom
+    # `discharge` redan är en volym per tick. Tillsammans med `drift_max`,
+    # också 12,0, gav den upp till 144 cellbredder på ett tidssteg mot en egen
+    # förflyttning på 0,5.
+    #
+    # **`drift_max` är borttagen.** Den höll tillbaka en singularitet, och ett
+    # tak som gör det är inte en parameter utan en förbindelse. Sedan driften
+    # räknas som uppehållstid finns ingen obegränsad storhet kvar: vandringen
+    # slutar där strömmen slutar. Se `Population._drift_system`.
+    drift_gain: float = 1.0
 
     climb_gain: float = 1.5
     descend_gain: float = 0.5
