@@ -2486,6 +2486,38 @@ Provisoriskt, och ska mätas om när floran är lagad:
 - nivåernas inbördes ordning i botten, särskilt födosök mot flock
 - varje mättnadsvärde som skulle ha lästs ur en fördelning
 
+### Synvidd, fart och ticklängd är samma fråga
+
+Tre tal som var för sig ser rimliga ut och tillsammans inte går ihop:
+
+```
+tick        0,02 månader = 14,6 timmar
+fart        0,52 cellbredder per tick = 100 m  ->  2,4 km/dygn, rimligt
+syn         6 cellbredder = 600 m              ->  sex dygn dit, orimligt
+```
+
+Farten är den enda som stämmer. Att ett djur ser sexhundra meter men behöver
+sex dygn för att nå dit betyder att synvidden inte är kalibrerad mot rörelsen.
+
+Två utvägar som utesluter varandra. **Synvidden är för lång** — ett par
+cellbredder är vad ett djur i den storleken urskiljer, och då nås målet på en
+till två tick. Det skulle också göra sensing billigare, vilket är faunapassets
+tyngsta post. **Eller farten är för låg**, vilket `varldens-skala.md` redan
+hävdar: tvåhundra gånger under det realistiska. Då nås sexhundra meter på en
+halv tick, och problemet blir det motsatta — djuret hoppar över det det ser.
+
+Den andra vägen kräver kortare tidssteg, och där sitter låsningen: en timmes
+tick ger fjorton gånger körtiden, alltså fyra timmar per körning i stället för
+sjutton minuter. Utvägen är **delad kadens** — världen och floran på 0,02
+månader, faunans rörelse och sensing i understeg inom samma tick. Faunapassen
+är en bråkdel av tickens arbete (150 djur mot 300 000 plantor), så tio
+understeg av bara dem kanske dubblar körtiden i stället för att fjortondubbla
+den. `docs/varldens-kadensmodell.md` finns redan och tänker i de termerna.
+
+Ingen av vägarna behöver väljas förrän farten ska höjas mot det realistiska.
+Med omedelbar riktning hinner djuret sex tick genom sin egen synvidd och kan
+väja under vilket som helst av dem, vilket räcker för nuvarande fart.
+
 ## Steg 6b — Fauna store-first
 
 *Störst risk, störst utdelning.*

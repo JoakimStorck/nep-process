@@ -3422,20 +3422,32 @@ class Agent:
             E_move += (dt * float(self.AP.wade_cost) * u * w_fac
                        * (M_pre ** float(self.AP.force_mass_exp))) / eta
 
-        # --- 2. riktning: relaxation med tak, plus persistent brus ------------
-        # Centripetalvillkoret: en snabb organism svänger trögt. Vid låg fart
-        # binder i stället det absoluta taket, så att uttrycket inte divergerar
-        # när farten går mot noll.
-        w_max = min(
-            float(self.AP.turn_rate_max),
-            float(self.AP.lat_accel_max) / max(speed, 1e-6),
-        )
-
-        # Analytisk relaxation mot den önskade riktningen. `turn` tolkas som ett
-        # riktningsanspråk i (−π, π) relativt nuvarande kurs; andelen som tas ut
-        # per tick ligger alltid i (0, 1) och kan därför aldrig slå över.
-        frac = 1.0 - math.exp(-float(self.AP.turn_gain) * dt)
-        d_steer = frac * clamp(float(allow_move) * float(turn), -1.0, 1.0) * math.pi
+        # --- 2. riktning: omedelbar, plus persistent brus ---------------------
+        #
+        # **Riktningen relaxerar inte.** En tick är 0,02 månader, alltså knappt
+        # femton timmar. Relaxationen `frac = 1 − exp(−turn_gain · dt)` gav
+        # 0,113 per tick och en tidskonstant på 8,8 tick — fem och ett halvt
+        # dygn för att vända om. Taket `w_max` band aldrig, men det var inte
+        # bättre: 19,8 grader per tick är 19,8 grader per halvdygn.
+        #
+        # Det var ett kategorifel. Svängtröghet är ett förlopp på sekunder för
+        # en organism som väger ett par kilo, och kan inte modelleras i ett
+        # tidssteg som är femtiotusen gånger längre. På halvdygnsskala är kursen
+        # inte ett tillstånd som strävar mot ett mål — den *är* beslutet. Ett
+        # djur som under fjorton timmar bestämmer sig för att gå åt ett annat
+        # håll går åt det hållet.
+        #
+        # Följden var mätbar och dödlig. Kostnadsfunktionen ser vatten sex
+        # cellbredder fram och arbitreringen väljer bort det, men djuret hann
+        # 4,6 cellbredder medan det vred sig. I viewern syntes det som djur som
+        # försöker vända ute i vattnet när det redan är för sent, och `f6-256`
+        # dog ut på 2 400 tick med svält som dödsorsak mitt i 800 000 plantor.
+        #
+        # `turn_gain`, `turn_rate_max` och `lat_accel_max` är därmed obrukade.
+        # De står kvar i `AgentParams` tills det är avgjort om tidssteget ska
+        # kortas — se `TODO.md` om synvidd, fart och ticklängd, som är samma
+        # fråga sedd från tre håll.
+        d_steer = clamp(float(allow_move) * float(turn), -1.0, 1.0) * math.pi
 
         # Rotationsdiffusion uttryckt som persistenstid. σ = √(2·D·dt) med
         # D = 1/τ gör diffusionen oberoende av tidssteget.
@@ -3445,6 +3457,10 @@ class Agent:
         # när organismen står på föda den vill ha och hög annars. Den är därmed
         # rätt signal för regimvalet — men den användes tvärtom: mer utforskning
         # gav mer brus och därmed *sämre* förflyttning.
+        #
+        # Bruset är kvar och blir viktigare, inte mindre: när riktningen är
+        # omedelbar är persistensen det enda som skiljer att beta i en ruta från
+        # att vandra.
         tau_local = max(1e-6, float(self.AP.dir_tau_local))
         tau_run = max(tau_local, float(self.pheno_dir_tau()))
         e = clamp(float(explore_drive), 0.0, 1.0)
@@ -3452,9 +3468,6 @@ class Agent:
         # Ett djur som följer flocken irrar inte. `tau_dir` interpolerar redan
         # mot `explore_drive` — låg utforskning ger rakare färd — och att följa
         # en granne är lika mycket "har ett mål" som att stå på föda.
-        #
-        # Utan det raderas alignment av bruset mellan två observationer: 19
-        # grader per tick mot en korrigering på två.
         _soc = getattr(self, "_soc_sectors", None)
         if _soc is not None and float(getattr(self.pheno, "sociability", 0.0)) > 0.5:
             _F = _soc[0]
@@ -3465,8 +3478,7 @@ class Agent:
 
         d_noise = math.sqrt(2.0 * dt / tau_dir) * float(ctx.rng.normal(0.0, 1.0))
 
-        d_theta = clamp(d_steer + d_noise, -w_max * dt, w_max * dt)
-        self.heading = self._signed_angle(float(self.heading) + d_theta)
+        self.heading = self._signed_angle(float(self.heading) + d_steer + d_noise)
 
         # --- 3. förflyttning och mätning -------------------------------------
         step_x = dt * speed * math.cos(self.heading)
