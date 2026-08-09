@@ -2558,6 +2558,8 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0169~~ | perceptets halvmättnad; `C_sense_K` var en halv gram | perceptet, 0170 | **klart**, se nedan — havet 0,60 → 0,003 |
 | ~~0170~~ | betningen följer vägen i stället för en cirkel | florans fläckighet | **klart**, se nedan — **återtagen i 0171** |
 | ~~0171~~ | betesgrannskapet är en rumslig räckvidd, inte en väg | betningen | **klart**, se nedan — 40/40/40 |
+| ~~0172~~ | betesytan blir bansträcka gånger kroppens räckvidd | kadensbytet | **klart**, se nedan — neutral, men skalar med `dt` |
+| — | `E_move` prissätts på förflyttningen, inte på banan | budgeten | **öppen**, uppmätt 10,9 % av underhållet |
 | 7010 | vattendjupet som fjärde världskanal och fri MLP-ingång | selektionen | öppen |
 | ~~7010~~ | ~~vattenaxeln som nisch~~ | | **slås ihop med 7009** |
 | ~~7011~~ | ~~glesning av hydro~~ | | **utgår**, se nedan |
@@ -2648,6 +2650,58 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Betesytan blir bansträcka gånger räckvidd (0172)
+
+0171 satte betesgrannskapet till en cellradie. Det mätte bäst men var fortfarande
+ett cellantal, alltså ett tal utan enhet som måste sättas om vid varje
+geometri- eller kadensändring. 0172 ger det en enhet.
+
+**Bansträcka och nettoförflyttning är olika storheter.** Ett betesdjur går ett
+par kilometer på ett dygn och hamnar några hundra meter bort. Modellen känner
+bara förflyttningen: `path_len` summerar per-tick-steg, så rakheten *inom* ett
+tick är 1,0 per konstruktion medan den uppmätta över ett liv är 0,069. Allt som
+skalar med sträcka var därför underprissatt — betesytan, mötesfrekvensen,
+rörelsearbetet — och allt som skalar med förflyttning var rätt. Det är därför
+felet kunnat sitta osynligt: halva modellen är korrekt.
+
+Betesytan blir nu en kapsel:
+
+```
+A = 2 · r · L  +  π · r²
+r = graze_reach_k · body_depth(M, struktur)      kroppsskalad, 40 cm vid 1,2 kg
+L = forage_path_rate · dt                        868 m per tick = 1,4 km/dygn
+```
+
+och tillgången blir **täthet gånger yta** i stället för en summa över en
+cellmängd. Grannskapet finns kvar men bara som fönstret tätheten skattas ur.
+
+Talet är valt så att `A` blir 7,0 cellareor för den uppmätta medianmassan
+1,2 kg, alltså 0171:s regim. Uppmätt i `liten6`, 400 tick, tre frön: 37, 42, 37
+mot 40, 40, 40, med massa per individ 1,17, 1,17, 1,37 mot 1,30, 1,26, 1,29.
+**Neutralt inom vad tre frön upplöser**, marginellt på den låga sidan.
+
+Det som vunnits är inte beteende utan att ytan nu **följer av `dt`**: ett
+dygnstick ger 1,64 gånger längre bana och därmed 1,64 gånger ytan, utan att någon
+konstant sätts om. Dessutom en allometrisk axel som saknats — ytan växer som
+`M^⅓` medan behovet växer som `M^¾`, vilket är varför stora betare behöver större
+hemområden.
+
+**Rörelsearbetet fick inte samma behandling, och det är patchens viktigaste
+fynd.** `E_move = dt · F_prop · speed / η` är förflyttningens arbete. Uppmätt är
+det redan **10,9 procent av underhållet** vid 0,476 cellbredders förflyttning per
+tick. Skalat med bansträckans faktor 154 blir det tiodubbla hela budgeten och
+allt dör.
+
+Formen är alltså fel men storleken ligger rätt: fem till tjugofem procent på
+rörelse är vad ett aktivt födosökande djur lägger. **Rätt storlek, fel form.**
+Kommentaren om vadandet tio rader längre ner säger redan exakt detta — *"den
+metabola kostnaden för rörelse sätts av muskelarbetet, inte av sträckan man
+faktiskt tillryggalägger"* — men bara om korrektionstermen, inte om grundtermen.
+
+Att rätta formen kräver att dragets konstanter prövas mot en verklig
+transportkostnad; en tvåkilos kropp som går fem meter borde kosta omkring 60 J
+och kostar 34 450. Det är ett eget arbete och står som öppen post.
 
 ### Betesgrannskapet är en räckvidd och inte en väg (0171)
 

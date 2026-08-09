@@ -450,37 +450,65 @@ class AgentParams:
     graze_handle_h: float = 0.0111   # månader per kg
     graze_search_a: float = 4.5      # 1 / (h · B_halv)
 
-    # Betesgrannskapets radie i celler: hur långt **ut** organismen når för att
-    # beta, inte hur långt den går. Ett betande djur sträcker sig efter födan;
-    # det äter inte bara det det trampar på.
-    #
-    # Radien var `ceil(fart · dt)`, alltså härledd ur vägen. 0170 tog det
-    # steget fullt ut och lät betningen följa banan — en till två celler mot
-    # skivans sju. Det såg mer korrekt ut och var det inte. Mätt över tre frön:
-    #
-    #     variant                        bestånd      massa per individ
-    #     skiva, radie ceil(fart·dt)     41 39 38     1,24 1,39 1,33
-    #     vägen (0170)                   37 37 38     1,05 1,07 1,24
-    #     svept yta ur beteräckvidd      28 37 38     0,94 1,01 1,14
-    #     skiva, radie 1 (detta)         40 40 40     1,30 1,26 1,29
-    #
-    # Två hypoteser prövades och föll. Att höja `graze_search_a` sexfaldigt —
-    # så att halvmättnaden hamnade rätt i vägens geometri — gav **ingen**
-    # ändring i kondition: Hollings tak var inte det bindande. Och att räkna
-    # tillgången som täthet gånger svept kapselyta gjorde det sämre, eftersom
-    # tätheten då vägs mot den egna cellen, som är den mest utarmade av alla.
-    #
-    # Det skivan bar var alltså inte en tidsräckvidd utan en **rumslig**: den
-    # mindre utarmade grannringen. Uppmätt ligger den egna cellen på 0,54 av
-    # landets median och ringen på 0,63 — organismen betar ner sig själv och
-    # lever på det den når utanför. Tas ringen bort finns ingen marginal kvar.
-    #
-    # Radien är därför en egen storhet och inte en följd av farten. Att den är
-    # ett heltal i celler är en approximation som hör ihop med att `Grid` inte
-    # exponerar delceller; den fysiska räckvidden för en tvåkilos kropp är långt
-    # under en cellbredd, och att den ändå måste vara en hel cell är
-    # rörelsedeficitet uttryckt i födobudgeten. Se `docs/varldens-skala.md`.
+    # Betesgrannskapets radie i celler: fönstret som **tätheten** skattas ur.
+    # Den säger var organismen är, inte hur mycket den hinner beta av — det
+    # senare är den svepta ytan nedan. Radie 1 mätte bäst i 0171 och är
+    # oförändrad.
     graze_reach_cells: int = 1
+
+    # Beteräckvidden som andel av kroppens linjära skala, `phenotype.body_depth`.
+    # Fyra kroppslängder ger 48 cm för en tvåkilos kropp — så långt den sträcker
+    # sig ut från sin ståplats för att nypa av.
+    #
+    # Dimensionslös och kroppsskalad av samma skäl som djupmåttet i 7023: ett
+    # större djur når längre, och det ska följa av massan i stället för av ett
+    # tal. Det ger också en allometrisk axel som saknats — betesytan växer som
+    # `M^⅓` medan behovet växer som `M^¾`, vilket är varför stora betare behöver
+    # större hemområden.
+    graze_reach_k: float = 4.0
+
+    # **Bansträckan under födosök**, i längdenheter per månad.
+    #
+    # Det här är den storhet 0170 saknade och som hela den utredningen ledde
+    # fram till. Bansträcka och nettoförflyttning är olika saker: ett betesdjur
+    # går ett par kilometer på ett dygn och hamnar några hundra meter bort.
+    # Modellen känner bara förflyttningen — `path_len` summerar per-tick-steg,
+    # så rakheten inom ett tick är 1,0 per konstruktion medan den uppmätta över
+    # ett liv är 0,069.
+    #
+    # Allt som skalar med **sträcka** var därför underprissatt: betesytan,
+    # mötesfrekvensen, och rörelsearbetet. Allt som skalar med **förflyttning**
+    # var rätt: positionen, hemområdet, spridningen. Det är därför felet kunnat
+    # sitta osynligt — halva modellen är korrekt.
+    #
+    # 4 340 längdenheter per månad är 868 m per tick, alltså **1,4 km per
+    # dygn** — mitt i vad ett litet betesdjur faktiskt går. Talet är valt så att
+    # den svepta ytan blir 7,0 cellareor för den **uppmätta medianmassan
+    # 1,2 kg**, och därmed reproducerar 0171:s regim; det som ändras är att ytan
+    # nu **följer av `dt`** i stället för att vara ett cellantal. Vid ett
+    # dygnstick växer den av sig själv.
+    #
+    # Att kalibrera mot 1,2 kg och inte mot startmassan 2,0 kg är avsiktligt:
+    # ytan är kroppsskalad, så det är den massa populationen faktiskt bär som
+    # avgör om regimen bevaras. Mot 2,0 kg blev ytan 5,9 för medianindividen.
+    #
+    # Den implicerade rakheten blir 0,0055, alltså en riktningspersistens på
+    # knappt en sekund under betandet. Det är en rimlig storhet för ett djur som
+    # tar ett tugg och flyttar nosen. Notera att `direction_tau` är 1,5–15
+    # *månader* — det är färdregimens persistens mellan tick och en helt annan
+    # sak. Två persistenstider på två skalor: vart man går väljs sällan, vart
+    # man sätter nosen ofta.
+    #
+    # **Rörelsearbetet får inte samma behandling, och det är avsiktligt.**
+    # Uppmätt är `E_move` redan 10,9 % av underhållet vid en förflyttning på
+    # 0,476 cellbredder per tick. Skalat med bansträckans faktor 154 skulle det
+    # bli tiodubbla hela budgeten. Formen är alltså fel — `dt · F_prop · speed`
+    # är förflyttningens arbete — men storleken ligger rätt för ett aktivt
+    # födosökande djur, som lägger fem till tjugofem procent av sin budget på
+    # rörelse. Rätt storlek, fel form. Att rätta formen kräver att dragets
+    # konstanter prövas mot en verklig transportkostnad, och det är ett eget
+    # arbete. Se `docs/tidens-skalor.md`.
+    forage_path_rate: float = 4340.0
 
     wear_a0: float = 0.12
     wear_aE: float = 0.0
@@ -3747,6 +3775,31 @@ class Agent:
         )
     
     
+    def _svept_yta(self, dt: float) -> float:
+        """
+        Ytan organismen betar av under ett tick, i cellareor.
+
+        En kapsel: bansträckan svept med beteräckvidden, plus halvcirkeln kring
+        ståplatsen.
+
+            A = 2 · r · L  +  π · r²
+
+        `L` är **bansträckan** och inte förflyttningen — se
+        `AgentParams.forage_path_rate` för varför de skiljer sig med två
+        tiopotenser. Ett stillastående djur får `π r²`, alltså vad det når utan
+        att flytta sig.
+
+        Det gör ytan till en storhet med enhet i stället för ett antal celler
+        som geometrin råkar lämna över, och det är den storheten
+        `graze_search_a` ska vara kalibrerad mot. Framför allt: den **följer av
+        `dt`**. Ett dygnstick ger en 1,6 gånger längre bana och därmed 1,6
+        gånger ytan, utan att någon konstant behöver sättas om.
+        """
+        r = float(self.AP.graze_reach_k) * body_depth(
+            float(self.body.M), float(getattr(self.pheno, "structure", 0.25)))
+        L = max(0.0, float(self.AP.forage_path_rate) * float(dt))
+        return 2.0 * r * L + math.pi * r * r
+
     def _perform_feeding(
         self,
         world: World,
@@ -3776,6 +3829,7 @@ class Agent:
             amount=want_kg,
             diet=diet,
             reach=int(self.AP.graze_reach_cells),
+            svept=self._svept_yta(dt),
         )
 
         herb_eff, scav_eff = diet_efficiency(diet)

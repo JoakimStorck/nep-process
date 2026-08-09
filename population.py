@@ -1885,7 +1885,8 @@ class Population:
         
             
     def _consume_flora_from_store(self, x: float, y: float, amount: float,
-                                  max_radius: int = 1) -> tuple[float, float]:
+                                  max_radius: int = 1,
+                                  svept: float = 0.0) -> tuple[float, float]:
         """
         Konsumera växtmassa från diskret flora i OrganismStore via gemensamt spatialindex.
 
@@ -1919,7 +1920,24 @@ class Population:
         # nedan.
         cells = np.asarray(ordered_cells, dtype=np.int64)
         cell_avail = self.store.flora_cell_mass[cells]
-        B = float(cell_avail.sum())
+
+        # **Tillgången är täthet gånger svept yta.**
+        #
+        # Summan över en cellmängd hängde på hur många celler geometrin råkade
+        # lämna över, och `graze_search_a` var kalibrerad mot det antalet —
+        # kommentaren där namnger sjucellsskivans "omkring 76 kg" i klartext.
+        # När 0170 bytte skivan mot vägen föll antalet till 1,5 och beståndet
+        # med det. Ett tak som flyttar sig när geometrin ändras är inte en
+        # funktionell respons.
+        #
+        # Nu skattas **tätheten** ur grannskapet och **mängden** ur den yta
+        # organismen hinner svepa. Vid dagens fart ger det 7,0 cellareor, alltså
+        # samma tal som 0171 — men det talet följer nu av `dt` och av kroppens
+        # räckvidd i stället för av ett cellantal.
+        if svept > 0.0 and cell_avail.size:
+            B = float(cell_avail.mean()) * float(svept)
+        else:
+            B = float(cell_avail.sum())
         if B > 0.0:
             AP = self.AP
             a_s = float(AP.graze_search_a)
@@ -2900,7 +2918,8 @@ class Population:
         return out
         
     def consume_food(self, x: float, y: float, amount: float,
-                     diet: float = 0.5, reach: int = 1) -> tuple[float, float, float, float]:
+                     diet: float = 0.5, reach: int = 1,
+                     svept: float = 0.0) -> tuple[float, float, float, float]:
         """
         Konsumera upp till `amount` kg, från det mest värdefulla först.
 
@@ -2921,10 +2940,10 @@ class Population:
         `diet` är alltså bara en avvägning mellan verkningsgrader, inte
         dessutom en smakriktning.
 
-        `reach` är betesgrannskapets radie i celler: organismens **rumsliga
-        räckvidd**, inte dess väg. Se `AgentParams.graze_reach_cells` för varför
-        det är en radie och inte en bana — 0170 prövade banan och 0171 tog
-        tillbaka den, mätt.
+        `reach` är fönstret **tätheten** skattas ur; `svept` är den yta
+        organismen hinner beta av under ticket. De två är olika storheter och
+        det är hela poängen: var den är, mot hur mycket mark den hinner möta.
+        Se `Agent._svept_yta` och `AgentParams.forage_path_rate`.
 
         Uppdelningen levande/detritus finns kvar därför att den är verklig i
         anskaffningen: levande vävnad tillhör en organism som växer tillbaka
@@ -2970,7 +2989,8 @@ class Population:
             nonlocal got_l, e_l
             if want <= 0.0:
                 return 0.0
-            g, e = self._consume_flora_from_store(x, y, want, max_radius=int(reach))
+            g, e = self._consume_flora_from_store(x, y, want, max_radius=int(reach),
+                                                  svept=float(svept))
             got_l += g
             e_l += e
             return float(g)
