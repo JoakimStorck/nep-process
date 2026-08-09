@@ -591,6 +591,35 @@ class AgentParams:
     # Reproduction (Population)
     # ------------------------
     repro_cooldown_s: float = 8.0
+
+    # **Motivationens tidskonstant, i månader.** Skild från avsvalningstiden
+    # ovan, som den tidigare lånade.
+    #
+    # `parningsdrift` bygger upp sig som `t/(t+τ)` där `t` är tiden sedan
+    # beredskapen inföll. Med `τ = repro_cooldown_s = 8 månader` når ett djur
+    # halv drivkraft först när det gått oparat lika länge som hela
+    # avsvalningen. Uppmätt blev tidsfaktorns median **0,188** — och eftersom
+    # kapacitetstermen har medianen 1,000 är det tiden, och bara tiden, som
+    # håller nere anspråket.
+    #
+    # Följden är aritmetisk. Vid `λ = 2` och nivå 5 mot vardagens 6 måste
+    # parningen ha styrkan 0,305 för att slå födosökets uppmätta 0,611. Den
+    # uppmätta medianen är **0,044**, alltså sju gånger under tröskeln.
+    # Anspråket kan inte vinna, och det förklarar 3 586 tillfällen då ett djur
+    # såg en partner och betade i stället.
+    #
+    # De två är olika storheter. Avsvalningen är fysiologisk — hur länge efter
+    # en dräktighet kroppen behöver innan nästa. Motivationen är beteendemässig
+    # och byggs upp över brunstcykeln, som för ett litet däggdjur är ett par
+    # veckor. `0,5 månader` är den storheten.
+    #
+    # **`repro_cooldown_s` bär fortfarande två storheter till**, och de rättas
+    # inte här: den sätts både vid födsel, där den betyder *ålder vid
+    # könsmognad*, och efter parning, där den betyder *intervall mellan kullar*.
+    # Åtta månader är rimligt för det första och omkring fyra gånger för långt
+    # för det andra — dräktighet plus laktation för en tvåkilos kropp är två
+    # till tre månader. Se `TODO.md`.
+    repro_motivation_tau: float = 0.5
     M_repro_soft: float = 0.03
     E_repro_soft: float = 0.05
 
@@ -3258,7 +3287,7 @@ class Agent:
                        float(getattr(self.pheno, "M_repro_min", 0.0)))
             drift = styrning.parningsdrift(
                 -float(getattr(self, "_repro_cd_s", 0.0)),
-                float(self.AP.repro_cooldown_s),
+                float(self.AP.repro_motivation_tau),
                 (float(self.body.M) - mreq) / max(mreq, 1e-9),
                 float(self.body.reserve_frac()),
             )

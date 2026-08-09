@@ -2562,6 +2562,9 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0174~~ | rörelsen kostar transport, inte dragdissipation | budgeten, kadensen | **klart**, se nedan — uppför var billigare än platt |
 | ~~0175~~ | assimilationen straffade segheten två gånger | födobudgeten | **klart**, se nedan — 16 → 21 % |
 | ~~0176~~ | betningen blir tidsstegsinvariant; `h` och `eat_rate` är samma tal | kadensbytet | **klart**, se nedan — intaget skalade som `dt²` |
+| ~~0177~~ | parningen kunde inte vinna, och sökte i fel säsong | reproduktionen | **klart**, se nedan |
+| — | `repro_cooldown_s` bär könsmognad och kullintervall i samma tal | reproduktionen | **öppen**, se 0177 |
+| — | anspråkens styrkor spänner 0,044–0,955 i median på en deklarerad 0–1-skala | arbitreringen | **öppen**, se 0177 |
 | — | hanteringstiden är åtta gånger för lång; aptiten blir enda taket | födobudgeten | **öppen**, se 0176 |
 | — | reserven behöver en strukturandel innan magen får komma åt segt material | Steg 6 | **öppen**, se 0175 |
 | ~~0173~~ | `docs/scenariers-anatomi.md` | scenarioformen | **klart**, se nedan |
@@ -2658,6 +2661,77 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Parningen kunde inte vinna, och sökte i fel säsong (0177)
+
+Två fel som båda är samma sak: **ett tal som bär två storheter**.
+
+**Motivationens tidskonstant lånade avsvalningstiden.** `parningsdrift` bygger
+upp sig som `t/(t+τ)`, och `τ` var `repro_cooldown_s` — åtta månader. Ett djur
+nådde alltså halv drivkraft först efter att ha gått oparat lika länge som hela
+avsvalningen. Uppmätt blev tidsfaktorns median **0,188** medan kapacitetstermen
+låg på **1,000**: anspråket hölls nere av tiden och av ingenting annat.
+
+Följden är aritmetisk. Vid `λ = 2` och nivå 5 mot vardagens 6 måste parningen ha
+styrkan **0,305** för att slå födosökets uppmätta 0,611. Medianen var **0,044**.
+Anspråket kunde inte vinna, och det förklarar de 3 586 tillfällen i p176 då ett
+djur såg en partner och betade i stället.
+
+Avsvalningen är fysiologisk, motivationen beteendemässig och byggs upp över
+brunstcykeln — ett par veckor för ett litet däggdjur. `repro_motivation_tau =
+0,5 månader` är den storheten. Styrkan steg till 0,07–0,45 i median och
+vinstandelen från 0,4 till 4–7 procent.
+
+**Men det räckte inte, och mätningen sa varför.** Med starkare anspråk gick
+"såg partner men parade inte" från 210 till 337 utan en enda extra parning.
+Djuren närmade sig — *utanför parningsradie* föll från 48 till 36 procent — men
+parade sig inte.
+
+Skälet är att **styrningen och biologin läste olika villkor**.
+`_mating_mode_slot` styr mot partner; `_ready_to_reproduce_slot` avgör om parning
+sker, och den senare har tre villkor till. Uppmätt:
+
+```
+mjuk grind (styr mot partner)     23,4 % av agenttickarna
+hård grind (tillåter parning)      7,7 %
+båda i ett par samtidigt           0,59 %
+
+av dem som styrde mot partner föll
+  på säsongen                     65,4 %
+  på massan                        8,9 %
+  på energin                       0,0 %
+```
+
+**Två av tre djur som sökte partner gjorde det utanför sin parningssäsong.**
+Säsongen är dessutom det enda av villkoren som är helt känt i förväg och som
+inte kan ändras under en tick. Ett djur ska inte vara motiverat till det som är
+omöjligt.
+
+Säsongsgrinden bryts därför ut till `_i_parningssasong` och läses av båda. Efter
+det faller noll procent på säsongen, och den mjuka grinden går på 7,7 procent i
+stället för 23,4.
+
+De två ändringarna hör ihop och kan inte göras var för sig: att höja styrkan utan
+att smalna grinden ökade bara den bortkastade ansträngningen, vilket är mätt
+ovan.
+
+**Utfallet kan `liten6` inte upplösa.** Fyrahundra tick ger tre till åtta
+parningar per körning, och skillnaden 42/39/38 mot 34/38/39 med 8/3/3 födslar mot
+6/4/4 ligger under brusnivån. Det som är verifierat är mekanismen, inte effekten;
+`f6-256` över tre frön och 3 000 tick krävs för det senare.
+
+**Två poster lämnas öppna.** `repro_cooldown_s` bär fortfarande två storheter:
+den sätts vid födsel, där den betyder *ålder vid könsmognad*, och efter parning,
+där den betyder *intervall mellan kullar*. Åtta månader är rimligt för det
+första och omkring fyra gånger för långt för det andra — dräktighet plus laktation
+för en tvåkilos kropp är två till tre månader.
+
+Och anspråkens styrkor spänner **0,044 till 0,955** i median på en deklarerad
+0–1-skala: flykt och jakt ligger på 0,955 och graderar alltså inte alls, medan
+parningen låg på 0,044. Modulens egen inledning förutsade precis det felet —
+*"går en styrka 0–50 medan en annan går 0–1 gör trappan bara det skalskillnaden
+redan gjorde"*. De deklarerade intervallen kontrollerades; de **realiserade**
+fördelningarna mättes aldrig.
 
 ### Betningen skalade som `dt²` (0176)
 

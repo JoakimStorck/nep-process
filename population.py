@@ -1039,21 +1039,51 @@ class Population:
         #
         # Kuen är årscykeln som redan finns — `year_len` med sinusformad
         # temperatur — så ingen ny perception behövs.
-        k = float(getattr(ag.pheno, "breed_sync", 0.0))
-        if k > 1e-6:
-            # Fasen mäts mot årets **temperaturtopp**, inte mot en absolut
-            # punkt i cykeln. Signalen är gemensam för alla på samma latitud,
-            # så synkroniseringen uppstår ur världen i stället för ur delad
-            # genetik. `breed_phase` är individens förskjutning mot toppen.
-            yl = max(1e-9, float(getattr(self.WP, "year_len", 12.0)))
-            ph0 = float(getattr(self.WP, "season_phase0", 0.0))
-            frac = ((float(self.t) / yl) - ph0) % 1.0
-            _bp = float(getattr(ag, "_breed_phase_real", ag.pheno.breed_phase))
-            d = 2.0 * math.pi * (frac - 0.25 - _bp)
-            if math.exp(k * (math.cos(d) - 1.0)) < 0.5:
-                return False
+        if not self._i_parningssasong(ag):
+            return False
 
         return True
+
+    def _i_parningssasong(self, ag) -> bool:
+        """
+        Säsongsgrinden, bruten ut så att **styrningen och biologin läser samma
+        villkor**.
+
+        Beredskapen var asynkron: varje individ blev redo på sin egen tidtabell,
+        och två djur måste vara det samtidigt. Uppmätt i p97 var 14,8 procent
+        klara vid en given tick, alltså 2,2 procents sannolikhet att båda är
+        det — innan de ens ska hitta varandra.
+
+        Grinden är von Mises-liknande: `exp(k·(cos Δ − 1))`, som är ett vid
+        fasens topp och avtar med skärpan `k`. Vid `k = 0` är den konstant ett,
+        så det asynkrona beteendet är bevarat som specialfall och inte
+        borttaget.
+
+        Fasen mäts mot årets **temperaturtopp**, inte mot en absolut punkt i
+        cykeln. Signalen är gemensam för alla på samma latitud, så
+        synkroniseringen uppstår ur världen i stället för ur delad genetik.
+        `breed_phase` är individens förskjutning mot toppen.
+
+        **Den låg tidigare bara i den hårda grinden.** Följden var att
+        styrningen motiverade något biologin inte tillät: uppmätt gick
+        `_mating_mode_slot` på 23,4 procent av agenttickarna mot den hårda
+        grindens 7,7, och av de djur som styrde mot en partner föll **65,4
+        procent på säsongen** — mot 8,9 på massan och 0,0 på energin.
+
+        Två av tre djur som sökte partner kunde alltså inte para sig, och
+        säsongen är det enda av villkoren som är helt känt i förväg och inte
+        kan ändras under ticken. Ett djur ska inte vara motiverat till det som
+        är omöjligt.
+        """
+        k = float(getattr(ag.pheno, "breed_sync", 0.0))
+        if k <= 1e-6:
+            return True
+        yl = max(1e-9, float(getattr(self.WP, "year_len", 12.0)))
+        ph0 = float(getattr(self.WP, "season_phase0", 0.0))
+        frac = ((float(self.t) / yl) - ph0) % 1.0
+        _bp = float(getattr(ag, "_breed_phase_real", ag.pheno.breed_phase))
+        d = 2.0 * math.pi * (frac - 0.25 - _bp)
+        return math.exp(k * (math.cos(d) - 1.0)) >= 0.5
 
     def _mating_mode_slot(self, slot: int) -> bool:
         """
@@ -1082,7 +1112,11 @@ class Population:
             return False
         if float(store.age[s]) < float(ag.pheno.A_mature):
             return False
-    
+
+        # Samma säsongsvillkor som den hårda grinden; se `_i_parningssasong`.
+        if not self._i_parningssasong(ag):
+            return False
+
         return True
         
     # -----------------------

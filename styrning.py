@@ -189,9 +189,15 @@ def parningsdrift(t_sedan_beredskap: float, tau: float,
     tre storheter:
 
       **tidsfaktor** `t/(t+τ)`, där `t` är tiden sedan beredskapen inföll och
-      `τ` är en avsvalningstid. Den byggs upp medan djuret går oparat och
-      nollställs vid parning. Det är den term som faktiskt beter sig som
-      stigande motivation, och den mättar mjukt i stället för att slå i tak.
+      `τ` är **motivationens** tidskonstant. Den byggs upp medan djuret går
+      oparat och nollställs vid parning. Det är den term som faktiskt beter sig
+      som stigande motivation, och den mättar mjukt i stället för att slå i tak.
+
+      `τ` var avsvalningstiden `repro_cooldown_s`, alltså åtta månader, och den
+      är en annan storhet: hur länge kroppen behöver efter en dräktighet, inte
+      hur fort lusten byggs. Uppmätt gav det tidsfaktorn medianen 0,188 medan
+      kapacitetstermen låg på 1,000 — anspråket hölls nere av tiden och av
+      ingenting annat. Se `AgentParams.repro_motivation_tau`.
 
       **kapaciteten** som den bindande av massöverskottet över `M_repro_min`
       och reservandelen. `min` och inte produkt: djuret begränsas av det som
