@@ -2560,6 +2560,10 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0171~~ | betesgrannskapet är en rumslig räckvidd, inte en väg | betningen | **klart**, se nedan — 40/40/40 |
 | ~~0172~~ | betesytan blir bansträcka gånger kroppens räckvidd | kadensbytet | **klart**, se nedan — neutral, men skalar med `dt` |
 | — | `E_move` prissätts på förflyttningen, inte på banan | budgeten | **öppen**, uppmätt 10,9 % av underhållet |
+| ~~0173~~ | `docs/scenariers-anatomi.md` | scenarioformen | **klart**, se nedan |
+| — | `dt` skrivs ut i varje scenario | kadensbytet | **öppen**, se dokumentet |
+| — | kalibreringsblock i scenariofilen | svep utan kodredigering | **öppen**, se dokumentet |
+| — | `f6-256-mager`: bär perceptet någon riktning i en fläckig värld? | 0169, kärnan | **öppen**, kräver ingen kod |
 | 7010 | vattendjupet som fjärde världskanal och fri MLP-ingång | selektionen | öppen |
 | ~~7010~~ | ~~vattenaxeln som nisch~~ | | **slås ihop med 7009** |
 | ~~7011~~ | ~~glesning av hydro~~ | | **utgår**, se nedan |
@@ -2650,6 +2654,32 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Scenariers anatomi (0173)
+
+`docs/scenariers-anatomi.md`. Vad ett scenario är, vilka sektioner det består
+av, och vad som gör en körning ogiltig.
+
+Den bärande regeln skrivs ut för första gången: **filen anger avsikter, koden
+härleder tal.** Prövningen om något hör hemma i ett scenario eller i
+parameterklasserna är om två olika värden kunde vara samtidigt riktiga i två
+körningar — bördighet ja, cellarea nej.
+
+Dokumentet bär också fyra planerade ändringar som alla följer av arbetet i
+0169–0172:
+
+- **`dt` ska stå i varje fil**, även när den är förvalet. Ticklängden är den
+  enda parameter som ändrar innebörden av varje annan, och efter ett
+  dygnstickbyte blir samma filnamn annars två olika världar.
+- **Ett kalibreringsblock.** Fem kalibrerade tal flyttades under en enda
+  arbetssession och inget av dem kan sättas per scenario. Det tvingar fram
+  kodredigering för varje prov, alltså precis det kommandoradsflaggorna gjorde.
+- **`fysiologi` delas.** Att skala en fysikkonstant och att låsa en ärftlig
+  egenskap är olika ingrepp; `sociability` låser just den axel som skulle avgöra
+  om flockningen är adaptiv, och det ska inte gå att göra av misstag.
+- **`f6-256-mager`.** Vid `bordighet 4.0` är varje landcell sluten — `bar`
+  20,1 % mot `hav` 20,0 % — och perceptets toppandel ligger på 0,185 mot
+  jämnfördelningens 0,167. Bördigheten har ingen härledning i någon fil.
 
 ### Betesytan blir bansträcka gånger räckvidd (0172)
 
