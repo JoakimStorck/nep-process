@@ -299,6 +299,12 @@ class BodyBatch:
     body_inputs: list[tuple[Agent, object]]
     body_slots: np.ndarray
     
+# Antal omförsök när en lottad position hamnar i vatten. Åtta räcker för att
+# en fläck som till nio tiondelar ligger torrt aldrig ska misslyckas, och gör
+# ändå ingen skada när fläcken är en ö.
+_TORR_FORSOK = 8
+
+
 @dataclass
 class Population:
     WP: WorldParams
@@ -413,6 +419,10 @@ class Population:
         self.agents = []
         self._tick = 0
         self._fauna_spawn_centre = None
+        # Hur många lottningar som hamnade i vatten och gjordes om. Måttet på
+        # om hypotesen bar: nära noll betyder att placeringen aldrig var
+        # problemet, en betydande andel att en del av dödligheten var lotteri.
+        self._vatten_lott = 0
         self._flora_eq_prev = None
         self._founder_centroids = None
         # Faunan kan hållas tillbaka tills floran nått jämvikt.
@@ -1083,10 +1093,25 @@ class Population:
         else:
             g_child = child_genome_from_parent(parent.genome, rng=self.rng, cfg=self.MC)
 
+        # Avkomman placeras nära föräldern, men inte i vatten. Står föräldern
+        # vid en strand kan spridningen annars lägga barnet i sjön, och ett
+        # nyfött djur har varken massa eller reserv att bära tjugofem gånger
+        # värmeledning. Misslyckas alla försök läggs barnet på förälderns egen
+        # position — den är per definition beboelig, eftersom föräldern lever.
         x_child, y_child = self.grid.wrap_pos(
             float(parent.x) + dx,
             float(parent.y) + dy,
         )
+        for _ in range(_TORR_FORSOK):
+            if not self._ar_vatten(x_child, y_child):
+                break
+            self._vatten_lott += 1
+            dx = float(self.rng.normal(0.0, float(self.PP.spawn_jitter_r)))
+            dy = float(self.rng.normal(0.0, float(self.PP.spawn_jitter_r)))
+            x_child, y_child = self.grid.wrap_pos(
+                float(parent.x) + dx, float(parent.y) + dy)
+        else:
+            x_child, y_child = float(parent.x), float(parent.y)
         child = Agent(
             AP=self.AP,
             genome=g_child,
@@ -1462,10 +1487,20 @@ class Population:
         under fönstret är det spridningen och inte fodret.
 
         Radie <= 0 ger jämn utspridning över hela världen.
+
+        **Ingen placeras i vatten.** Ett djur som *väljer* att gå i sjön är ett
+        styrningsproblem; ett som vaknar där har aldrig fått välja. `f6-256`
+        har tjugo procents hav plus sjöar och floder, och fläckcentrum lottades
+        utan att någon såg efter vad som fanns där — hamnade en fläck över
+        vatten dog en tredjedel av beståndet innan det tagit ett steg.
+        Nedsänkning ger tjugofem gånger värmeledning, så marginalen är kort.
+
+        De två felen måste hållas isär, annars går det inte att avgöra om en
+        styrningsändring hjälpte eller om beståndet bara råkade lottas torrt.
         """
         r = float(self.PP.fauna_spawn_radius)
         if r <= 0.0:
-            return self.grid.random_position(self.rng)
+            return self._torr_position()
 
         # Flera grundargrupper. En enda fläck ger en enda linje: mätt i p91
         # tog två grundarlinjer av tjugo 73 procent av avkommorna, och den
@@ -1480,9 +1515,34 @@ class Population:
 
         # Likformigt i skivan, inte i polära koordinater — sqrt-transformen
         # hindrar klumpning mot centrum.
-        ang = float(self.rng.uniform(0.0, 2.0 * math.pi))
-        rad = r * math.sqrt(float(self.rng.uniform(0.0, 1.0)))
-        return self.grid.wrap_pos(cx + rad * math.cos(ang), cy + rad * math.sin(ang))
+        for _ in range(_TORR_FORSOK):
+            ang = float(self.rng.uniform(0.0, 2.0 * math.pi))
+            rad = r * math.sqrt(float(self.rng.uniform(0.0, 1.0)))
+            x, y = self.grid.wrap_pos(cx + rad * math.cos(ang),
+                                      cy + rad * math.sin(ang))
+            if not self._ar_vatten(x, y):
+                return x, y
+            self._vatten_lott += 1
+        # Fläcken ligger till övervägande del i vatten. Hellre torr mark
+        # någon annanstans än ett djur som föds i sjön.
+        return self._torr_position()
+
+    def _ar_vatten(self, x: float, y: float) -> bool:
+        """Står positionen under vatten? Falskt i en värld utan hydrologi."""
+        w = self.world
+        if getattr(w, "drainage", None) is None:
+            return False
+        return bool(float(w.water[self.grid.cell_of(float(x), float(y))])
+                    > float(w.WP.submerged_threshold))
+
+    def _torr_position(self) -> tuple[float, float]:
+        """Lotta tills marken är torr. Ger upp efter `_TORR_FORSOK` försök."""
+        for _ in range(_TORR_FORSOK):
+            x, y = self.grid.random_position(self.rng)
+            if not self._ar_vatten(x, y):
+                return x, y
+            self._vatten_lott += 1
+        return x, y
 
     def seed_fauna(self, n: int) -> int:
         """
