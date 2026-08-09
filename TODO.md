@@ -2556,7 +2556,8 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~7023~~ | kroppen får ett djupmått; tre läsare delar det | draget, styrningen, driften | **klart**, se nedan |
 | ~~7024~~ | driften blir uppehållstid längs nätet; `drift_max` utgår | styrningen | **klart**, se nedan — max 143 → 13 utan tak |
 | ~~0169~~ | perceptets halvmättnad; `C_sense_K` var en halv gram | perceptet, 0170 | **klart**, se nedan — havet 0,60 → 0,003 |
-| ~~0170~~ | betningen följer vägen i stället för en cirkel | florans fläckighet | **klart**, se nedan — kalibrering öppen |
+| ~~0170~~ | betningen följer vägen i stället för en cirkel | florans fläckighet | **klart**, se nedan — **återtagen i 0171** |
+| ~~0171~~ | betesgrannskapet är en rumslig räckvidd, inte en väg | betningen | **klart**, se nedan — 40/40/40 |
 | 7010 | vattendjupet som fjärde världskanal och fri MLP-ingång | selektionen | öppen |
 | ~~7010~~ | ~~vattenaxeln som nisch~~ | | **slås ihop med 7009** |
 | ~~7011~~ | ~~glesning av hydro~~ | | **utgår**, se nedan |
@@ -2647,6 +2648,58 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Betesgrannskapet är en räckvidd och inte en väg (0171)
+
+0170 lät betningen följa organismens väg under ticket i stället för en cirkel
+kring slutpunkten. Argumentet var att cirkeln var en heuristik och vägen en
+fysisk storhet, och att den skärpta lokala utarmningen skulle göra världen
+fläckig.
+
+**Det höll inte, och två försök att rädda det höll inte heller.**
+
+Uppmätt i `f6-256`, 3 000 tick, tre frön: beståndet gick från 22, 20, 21 till
+**14, 9, 6**. Dödsorsakerna var oförändrade — omkring tre fjärdedelar svält —
+men kroppen var kroniskt sämre: massa per individ 1,24 mot 1,05 och en reserv
+som gick från 1,09 till 0,88 i stället för att plana ut. Ett tillförselunderskott,
+inte en olyckshändelse.
+
+Två hypoteser prövades i `liten6` över tre frön och föll båda:
+
+```
+variant                                bestånd      massa per individ
+skiva, radie ceil(fart·dt)  (7024)     41 39 38     1,24 1,39 1,33
+vägen                       (0170)     37 37 38     1,05 1,07 1,24
+vägen + graze_search_a × 6             34 36 38     1,05 1,03 1,10
+täthet × svept kapselyta               28 37 38     0,94 1,01 1,14
+skiva, radie 1              (0171)     40 40 40     1,30 1,26 1,29
+```
+
+**Hollings tak var inte det bindande.** Att sexfaldiga `graze_search_a`, så att
+halvmättnaden hamnade rätt i vägens geometri, ändrade ingenting i konditionen.
+Aptiten är hungerstyrd, så en höjd gräns efterfrågas inte av den mätta medianen
+— och den räddade inte heller svansen.
+
+**Och den svepta ytan gjorde det sämre**, trots att den var räknad så att arean
+motsvarade skivans sju cellareor. Skälet syns i utarmningsmätningen: den egna
+cellen ligger på **0,54** av landets median och grannringen på **0,63**. En
+täthet vägd mot vägen vägs mot den mest utarmade cellen av alla. Organismen betar
+ner sig själv och lever på marginalen den når utanför.
+
+Det skivan bar var alltså inte en tidsräckvidd utan en **rumslig**. Ett betande
+djur sträcker sig efter födan; det äter inte bara det det trampar på. Radien blir
+därför en egen deklarerad storhet, `graze_reach_cells`, i stället för
+`ceil(fart · dt)` — den ska inte följa farten, och det var kopplingen till farten
+som gjorde 0170 möjlig att tänka.
+
+Att radien måste vara en hel cell när en tvåkilos kropps fysiska räckvidd är en
+halv meter är **rörelsedeficitet uttryckt i födobudgeten**: organismen sveper
+fem meter per tick där ett verkligt betesdjur går ett par kilometer per dygn, och
+aptiten är kalibrerad mot den för höga ytan. Två fel som tar ut varandra, och de
+hör hemma i kadensarbetet.
+
+0169 står kvar orörd och mår bra av det: `toppandel` 0,205 och vid kust 0,232 med
+det återställda grannskapet.
 
 ### Betningen följer vägen (0170)
 

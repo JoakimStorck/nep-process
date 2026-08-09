@@ -450,6 +450,38 @@ class AgentParams:
     graze_handle_h: float = 0.0111   # månader per kg
     graze_search_a: float = 4.5      # 1 / (h · B_halv)
 
+    # Betesgrannskapets radie i celler: hur långt **ut** organismen når för att
+    # beta, inte hur långt den går. Ett betande djur sträcker sig efter födan;
+    # det äter inte bara det det trampar på.
+    #
+    # Radien var `ceil(fart · dt)`, alltså härledd ur vägen. 0170 tog det
+    # steget fullt ut och lät betningen följa banan — en till två celler mot
+    # skivans sju. Det såg mer korrekt ut och var det inte. Mätt över tre frön:
+    #
+    #     variant                        bestånd      massa per individ
+    #     skiva, radie ceil(fart·dt)     41 39 38     1,24 1,39 1,33
+    #     vägen (0170)                   37 37 38     1,05 1,07 1,24
+    #     svept yta ur beteräckvidd      28 37 38     0,94 1,01 1,14
+    #     skiva, radie 1 (detta)         40 40 40     1,30 1,26 1,29
+    #
+    # Två hypoteser prövades och föll. Att höja `graze_search_a` sexfaldigt —
+    # så att halvmättnaden hamnade rätt i vägens geometri — gav **ingen**
+    # ändring i kondition: Hollings tak var inte det bindande. Och att räkna
+    # tillgången som täthet gånger svept kapselyta gjorde det sämre, eftersom
+    # tätheten då vägs mot den egna cellen, som är den mest utarmade av alla.
+    #
+    # Det skivan bar var alltså inte en tidsräckvidd utan en **rumslig**: den
+    # mindre utarmade grannringen. Uppmätt ligger den egna cellen på 0,54 av
+    # landets median och ringen på 0,63 — organismen betar ner sig själv och
+    # lever på det den når utanför. Tas ringen bort finns ingen marginal kvar.
+    #
+    # Radien är därför en egen storhet och inte en följd av farten. Att den är
+    # ett heltal i celler är en approximation som hör ihop med att `Grid` inte
+    # exponerar delceller; den fysiska räckvidden för en tvåkilos kropp är långt
+    # under en cellbredd, och att den ändå måste vara en hel cell är
+    # rörelsedeficitet uttryckt i födobudgeten. Se `docs/varldens-skala.md`.
+    graze_reach_cells: int = 1
+
     wear_a0: float = 0.12
     wear_aE: float = 0.0
     wear_aR: float = 0.0
@@ -2516,8 +2548,6 @@ class Agent:
     # ticket bär förra tickets värden, vilket är rätt — det är den senaste
     # övergång som faktiskt räknades.
     _mv_step: float = field(init=False, default=0.0, repr=False, compare=False)
-    _mv_x0: float = field(init=False, default=0.0, repr=False, compare=False)
-    _mv_y0: float = field(init=False, default=0.0, repr=False, compare=False)
     _mv_dir: float = field(init=False, default=0.0, repr=False, compare=False)
     _mv_sd: float = field(init=False, default=0.0, repr=False, compare=False)
     # Riktningsprofilen från senaste arbitrering: `(bäringar, värden, styrka,
@@ -3667,11 +3697,6 @@ class Agent:
         # Bansträcka och nettoförflyttning ackumuleras utan torusvikning, så att
         # kvoten mellan dem går att läsa i life-loggen. Den kvoten är Del 1:s
         # enda mätpunkt: 0,034 före den här ändringen.
-        # Utgångspunkten sparas för betningen: vägen under ticket är sträckan
-        # från här till där positionen skrivs, och det är den betningen ska
-        # följa. Se `_vagens_celler`.
-        self._mv_x0 = float(self.x)
-        self._mv_y0 = float(self.y)
         self._mv_step = abs(float(dt) * float(speed))
         self.path_len += abs(dt * speed)
         self.disp_x += step_x
@@ -3722,45 +3747,6 @@ class Agent:
         )
     
     
-    _VAG_PROV = 9
-
-    def _vagens_celler(self, grid) -> list:
-        """
-        Cellerna organismen faktiskt uppehöll sig i under ticket, med den
-        andel av tiden som tillbringades i var och en.
-
-        **Uppehållsfördelningen, realiserad.** Efter att kursen dragits är
-        banan under ticket en sträcka från utgångspunkten till den skrivna
-        positionen, och tiden i en cell är sträckans andel som ligger i den.
-        Vikterna summerar därför till ett av konstruktion, vilket är samma
-        regel som all annan transport i modellen följer: en uppdelning av ett
-        lager, aldrig ett flöde räknat ur en hastighet.
-
-        Det ersätter `reach = ceil(fart · dt)`, en cirkel med heltalsradie
-        kring **slutpunkten**. Den var fel åt två håll samtidigt. Den var för
-        stor: ett steg på en halv cellbredd avrundades upp till radie ett,
-        alltså sju celler, och betningen spreds över sex celler organismen
-        aldrig besökte. Och den var osymmetrisk fel: cirkeln låg kring
-        slutpunkten och tog inte hänsyn till varifrån organismen kom.
-
-        Följden av att rätta den är att betningen blir **mer** lokal, inte
-        mindre — och lokal utarmning är vad som gör världen fläckig och därmed
-        vad som ger rörelsen något att söka efter.
-
-        Sträckan provas i `_VAG_PROV` jämnt fördelade punkter. Kvadraturen är
-        deterministisk; en betning som flimrar mellan tick är inte en betning.
-        """
-        x0 = float(getattr(self, "_mv_x0", self.x))
-        y0 = float(getattr(self, "_mv_y0", self.y))
-        dx, dy = grid.torus_delta_pos(x0, y0, float(self.x), float(self.y))
-        n = int(self._VAG_PROV)
-        vikt: dict[int, float] = {}
-        for j in range(n):
-            f = (j + 0.5) / n
-            c = int(grid.cell_of(x0 + f * dx, y0 + f * dy))
-            vikt[c] = vikt.get(c, 0.0) + 1.0 / n
-        return sorted(vikt.items(), key=lambda kv: -kv[1])
-
     def _perform_feeding(
         self,
         world: World,
@@ -3784,14 +3770,12 @@ class Agent:
 
         want_kg = float(self.AP.eat_rate) * dt * (0.25 + 0.75 * float(self.body.hunger()))
         diet = float(getattr(self.pheno, "diet", 0.5))
-        # Betningen följer **vägen**, inte en cirkel kring slutpunkten. Se
-        # `_vagens_celler`.
         got_l, got_d, e_l, e_d = world.consume_food(
             self.x,
             self.y,
             amount=want_kg,
             diet=diet,
-            vag=self._vagens_celler(world.grid),
+            reach=int(self.AP.graze_reach_cells),
         )
 
         herb_eff, scav_eff = diet_efficiency(diet)
