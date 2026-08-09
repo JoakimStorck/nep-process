@@ -545,7 +545,14 @@ class AgentParams:
     # betande gör det inte. En riktning med full vattenkostnad mot en torr med
     # halva projektionen vinner om `vikt < styrka/2`. Med flyktens styrka nära
     # 1 och födosökets median 0,3 ligger gränsen mellan 0,15 och 0,50.
-    kostnad_vikt: float = 0.40
+    #
+    # Höjd från 0,40 sedan kostnaden blev värsta provet i stället för
+    # medelvärdet. Härledningen är densamma, men den räknade med att kostnaden
+    # når 1,0 vid vatten i vägen — vilket den gör först nu. Vid 0,70 avstår ett
+    # födoanspråk med medianstyrkan 0,63 från en våt väg så snart ett
+    # alternativ finns inom nittio grader, medan en flykt med styrkan nära 1
+    # fortfarande går i.
+    kostnad_vikt: float = 0.70
 
     # Marginalen som krävs för att överge en bunden bäring, som andel av
     # anspråkets styrka.
@@ -3278,10 +3285,11 @@ class Agent:
         Rörelsekostnaden längs varje bäring, i [0, 1] — **integrerad**, inte
         samplad i en punkt.
 
-        Medelvärdet av vattnets hinder över `kostnad_prov` punkter ut till
-        `kostnad_rackvidd`. Ett enda prov nära djuret ser strandzonens grunda
-        vatten; medelvärdet ser hur mycket vatten som ligger i vägen hela
-        sträckan.
+        Det värsta provet över `kostnad_prov` punkter ut till
+        `kostnad_rackvidd`, avståndsviktat så att nära hinder väger dubbelt mot
+        avlägsna. Ett enda prov nära djuret ser strandzonens grunda vatten och
+        missar havet bakom; ett medelvärde späder i stället ut faran med den
+        torra delen av vägen.
 
         Hindret är samma uttryck som `_water_factor` läser — djup mättat mot
         `water_drag_depth_ref`, viktat med `1 − buoyancy` — så styrningen och
@@ -3302,15 +3310,29 @@ class Agent:
         for b in baringar:
             a = h + float(b) * math.pi
             ca, sa = math.cos(a), math.sin(a)
-            acc = 0.0
+            # **Värsta provet, inte medelvärdet.** En väg som slutar i djupt
+            # vatten är oframkomlig hur torr början än är, och medelvärdet
+            # späder ut faran just där den räknas: står djuret på stranden är
+            # fyra av sex prov torr mark, medelvärdet blir 0,2 och avdraget
+            # 0,08 mot ett födoanspråk på 0,63. Djuret går i, och kostnaden
+            # hinner ikapp först när de flesta proven är våta — alltså när det
+            # redan står i vattnet och försöker vända.
+            #
+            # Närmare prov väger tyngre. Ett hinder en cellbredd bort är
+            # angeläget nu; ett sex cellbredder bort hinner djuret gå runt, och
+            # med bunden bäring vore det annars omöjligt att röra sig längs en
+            # kust över huvud taget.
+            varst = 0.0
             for j in range(np_prov):
-                r = R * (j + 1) / np_prov
-                c = world.grid.cell_of(float(self.x) + r * ca,
-                                       float(self.y) + r * sa)
+                frak = (j + 1) / np_prov
+                c = world.grid.cell_of(float(self.x) + R * frak * ca,
+                                       float(self.y) + R * frak * sa)
                 d = float(world.water[c])
                 if d > float(world.WP.submerged_threshold):
-                    acc += min(1.0, d / ref) * hind
-            ut.append(acc / np_prov)
+                    k = min(1.0, d / ref) * hind * (1.0 - 0.5 * frak)
+                    if k > varst:
+                        varst = k
+            ut.append(varst)
         return ut
 
     def _water_factor(self) -> float:
