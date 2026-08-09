@@ -1085,6 +1085,27 @@ class Population:
         d = 2.0 * math.pi * (frac - 0.25 - _bp)
         return math.exp(k * (math.cos(d) - 1.0)) >= 0.5
 
+    def _avsvalning(self, ag) -> float:
+        """
+        Avsvalningstiden i månader: dräktighet plus laktation.
+
+        Dräktigheten är redan härledd — `child_M / gestation_growth_kg_per_s` —
+        så tiden behöver ingen egen konstant. Laktationen läggs till som en
+        multipel av dräktigheten; se `AgentParams.lactation_k`.
+
+        Det gör avsvalningen till en **följd av ungens storlek**, som är
+        ärftlig. En förälder som bygger en stor unge betalar inte bara i massa
+        utan också i tid, och det är den avvägningen som gör `child_M` till en
+        verklig axel i stället för en ren kostnad.
+
+        Se `AgentParams.repro_cooldown_s` för de tre storheter det gamla talet
+        bar och varför de skiljs åt.
+        """
+        cm = max(1e-6, float(getattr(ag.pheno, "child_M", 0.2)))
+        rate = max(1e-9, float(ag.AP.gestation_growth_kg_per_s))
+        drakt = cm / rate
+        return float(drakt * (1.0 + max(0.0, float(ag.AP.lactation_k))))
+
     def _mating_mode_slot(self, slot: int) -> bool:
         """
         Mjuk store-baserad signal för mating-orienterat beteende.
@@ -1199,7 +1220,10 @@ class Population:
         self.store.age[store_slot] = np.float32(0.0)
         self._slot_to_agent[int(store_slot)] = child
 
-        self.store.repro_cd[store_slot] = np.float32(float(self.AP.repro_cooldown_s))
+        # **Ingen avsvalning på en nyfödd.** Mognaden är `A_mature`, en ärftlig
+        # egenskap som spänner 5–20 månader; en avsvalning på 8 band mot den och
+        # dödade axelns nedre halva. Se `AgentParams.repro_cooldown_s`.
+        self.store.repro_cd[store_slot] = np.float32(0.0)
         self.store.gestating[store_slot] = False
         self.store.gest_M[store_slot] = np.float32(0.0)
         self.store.gest_E_J[store_slot] = np.float32(0.0)
@@ -1263,6 +1287,17 @@ class Population:
             if self.rng.random() > compat:
                 return
     
+        # Den tyngre bär fostret. Regeln är rimlig i en modell utan kön — den
+        # som bäst orkar bära gör det — men den blir **en väg ut ur
+        # reproduktionens kostnad** nu när partnern inte längre låses: ett djur
+        # som håller sig lätt hamnar alltid i partnerrollen, för sina gener
+        # vidare för priset av fem procent av energitaket, och blir aldrig
+        # dräktigt.
+        #
+        # Selektionen mot `M_target` är därmed något att mäta och inte att anta.
+        # Ett villkor som beror på **kondition** i stället för på ärftlig massa
+        # skulle stänga vägen, eftersom kondition fluktuerar och inte går att
+        # ärva sig fri från. Se `TODO.md`.
         if best.body.M > agent.body.M:
             bearer, partner = best, agent
         else:
@@ -1277,12 +1312,20 @@ class Population:
         if b_slot >= 0:
             self._write_gestation_to_store(b_slot, bearer)
         
+        # **Partnern får ingen avsvalning.** Den bär inget foster och ammar
+        # inte, så det finns ingen fysiologisk motsvarighet till en spärr på
+        # månader — den som inte är dräktig kan para sig igen så snart den vill.
+        # Dess kostnad är energin nedan, och den är redan tagen.
+        #
+        # Den låg tidigare på åtta månader, alltså samma tal som den dräktiga
+        # förälderns. Följden var att **båda parterna låstes ute** vid varje
+        # parning, och eftersom parningen kräver att två samtidigt är klara
+        # kvadrerades effekten på hur ofta det kan ske.
         mating_cost = 0.05 * partner.body.E_cap()
         partner.pay_repro_cost(mating_cost)
         
         if p_slot >= 0:
             self._write_body_surface_to_store(p_slot, partner)
-            store.repro_cd[p_slot] = np.float32(float(self.AP.repro_cooldown_s))
         
     def _try_birth(self, parent: Agent, ctx: StepCtx) -> Optional[Agent]:
         if not parent.body.alive:
@@ -1363,7 +1406,7 @@ class Population:
         self._flush_body_outputs(parent)
         self._flush_body_outputs(child)
 
-        store.repro_cd[p_slot] = np.float32(float(self.AP.repro_cooldown_s))
+        store.repro_cd[p_slot] = np.float32(self._avsvalning(parent))
         return child
 
 
@@ -1745,9 +1788,11 @@ class Population:
             a.body.scale_energy(self.rng.uniform(0.4, 0.95))
             a.body.clamp_energy_to_cap()
 
-            # Cooldown: spridd
+            # Cooldown: spridd över grundarnas egen avsvalning, så att
+            # beredskapen inte är synkron vid tick 0. Talet följer nu individens
+            # `child_M`; se `_avsvalning`.
             init_repro_cd = float(
-                self.rng.uniform(0.0, float(self.AP.repro_cooldown_s)))
+                self.rng.uniform(0.0, self._avsvalning(a)))
 
             # allocate slot in bank and write genome params once
             key = (tuple(g.layer_sizes), str(g.act))

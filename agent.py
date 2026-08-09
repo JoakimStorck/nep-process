@@ -590,7 +590,38 @@ class AgentParams:
     # ------------------------
     # Reproduction (Population)
     # ------------------------
+    # **Avsvalningen härleds nu; se `Population._avsvalning`.** Konstanten är
+    # kvar bara som golv och som av-brytare för scenarier som vill låsa den.
+    #
+    # Den var 8,0 månader — 244 dygn — och bar **tre olika storheter**:
+    #
+    #   *ålder vid könsmognad*, satt på den nyfödda. Den band mot `A_mature`,
+    #   som spänner 5–20 månader, så **hela den nedre halvan av den ärftliga
+    #   mognadsaxeln var död**: ett genotypiskt värde på 5 gav mognad vid 8 ändå.
+    #
+    #   *intervall mellan kullar*, satt på den dräktiga föräldern vid födsel.
+    #   Dräktighet plus laktation för en tvåkilos kropp är två till tre månader,
+    #   inte åtta.
+    #
+    #   *återhämtning efter parning*, satt på den andra föräldern. Åtta månader
+    #   för en part som inte bär fostret har ingen fysiologisk motsvarighet.
+    #
+    # Följden var ett demografiskt tak: med en livslängd på trettio månader och
+    # mognad vid åtta blev fönstret 10–25 reproduktiva månader, alltså **en till
+    # tre kullar per liv à en unge**. Uppmätt uppnåddes 0,25 avkommor per
+    # individ mot 1,0 som krävs för att hålla ett bestånd — tre fjärdedelar
+    # förlorade per generation, i varje version vi kört.
     repro_cooldown_s: float = 8.0
+
+    # Laktationens längd som multipel av dräktighetens. För små däggdjur ligger
+    # de två i samma storleksordning; 1,0 är den utgångspunkten.
+    #
+    # Dräktigheten är redan en härledd storhet i modellen —
+    # `child_M / gestation_growth_kg_per_s` — så avsvalningen behöver ingen egen
+    # tidsskala. Den blir en följd av hur stor unge föräldern bygger, vilket är
+    # ärftligt via `child_M`, och därmed en verklig avvägning: en större unge
+    # kostar inte bara massa utan också tid.
+    lactation_k: float = 1.0
 
     # **Motivationens tidskonstant, i månader.** Skild från avsvalningstiden
     # ovan, som den tidigare lånade.

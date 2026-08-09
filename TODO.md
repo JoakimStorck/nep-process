@@ -2563,6 +2563,9 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0175~~ | assimilationen straffade segheten två gånger | födobudgeten | **klart**, se nedan — 16 → 21 % |
 | ~~0176~~ | betningen blir tidsstegsinvariant; `h` och `eat_rate` är samma tal | kadensbytet | **klart**, se nedan — intaget skalade som `dt²` |
 | ~~0177~~ | parningen kunde inte vinna, och sökte i fel säsong | reproduktionen | **klart**, se nedan |
+| ~~0178~~ | avsvalningen härleds ur dräktighet och laktation | reproduktionen | **klart**, se nedan |
+| — | kullstorleken som ärftlig axel: antal mot storlek | reproduktionen | **öppen**, nästa |
+| — | bäraren väljs på massa, vilket blir en väg ut ur reproduktionens kostnad | selektionen | **öppen**, se 0178 |
 | — | `repro_cooldown_s` bär könsmognad och kullintervall i samma tal | reproduktionen | **öppen**, se 0177 |
 | — | anspråkens styrkor spänner 0,044–0,955 i median på en deklarerad 0–1-skala | arbitreringen | **öppen**, se 0177 |
 | — | hanteringstiden är åtta gånger för lång; aptiten blir enda taket | födobudgeten | **öppen**, se 0176 |
@@ -2661,6 +2664,79 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Avsvalningen härleds ur dräktighet och laktation (0178)
+
+`repro_cooldown_s = 8,0` månader bar **tre olika storheter**:
+
+  *ålder vid könsmognad*, satt på den nyfödda. Den band mot `A_mature`, som
+  spänner 5–20 månader, så **den nedre delen av den ärftliga mognadsaxeln var
+  död** — arton procent av populationen bar ett värde under åtta och mognade
+  vid åtta ändå.
+
+  *intervall mellan kullar*, satt på den dräktiga föräldern vid födsel.
+
+  *återhämtning efter parning*, satt på den andra föräldern — åtta månader för
+  en part som inte bär fostret. **Den togs bort helt**, och det visade sig vara
+  patchens tyngsta ändring; se nedan.
+
+Dräktigheten är redan en härledd storhet, `child_M / gestation_growth_kg_per_s`,
+så avsvalningen behöver ingen egen tidsskala. Den blir dräktighet plus laktation,
+med laktationen som en multipel av dräktigheten (`lactation_k = 1,0`; för små
+däggdjur ligger de i samma storleksordning).
+
+```
+child_M      dräktighet   avsvalning    (var 8,00 för alla)
+0,16 kg          1,88        3,76
+0,28 kg          3,29        6,59
+0,40 kg          4,71        9,41
+```
+
+Uppmätt fördelning i populationen: p10 4,70, median 6,43, p90 8,91 månader.
+
+**Och det är den intressanta följden.** Avsvalningen blir nu en **funktion av
+ungens storlek**, som är ärftlig. En förälder som bygger en stor unge betalar
+inte bara i massa utan också i tid — vid `child_M = 0,40` är avsvalningen längre
+än den gamla konstanten. `child_M` går därmed från att vara en ren kostnad till
+att vara en axel med två sidor.
+
+Nyfödda får ingen avsvalning alls; `A_mature` är mognadsgrinden och är nu ensam
+om det.
+
+**Partnerns avsvalning togs bort, och det var den tyngsta ändringen.** Den bär
+inget foster och ammar inte; dess kostnad är energin — fem procent av
+energitaket — och den är redan tagen. Åtta månaders spärr hade ingen fysiologisk
+motsvarighet.
+
+Följden var värre än den såg ut. Parning kräver att **två** samtidigt är klara,
+så att låsa båda parterna kvadrerar effekten på hur ofta det kan ske. Uppmätt i
+`liten6`, 400 tick, tre frön:
+
+```
+                        bestånd      födslar   parningar
+0177                    42 39 38      8  3  3   8  3  5
+0178 med partnerlås     38 43 39      7  5  4   9  6  4
+0178 utan partnerlås    49 45 45     14  8 10  15  9 10
+```
+
+**Födslarna mer än fördubblades — fjorton mot trettiotvå — och beståndet växte
+över utgångsläget i samtliga frön.** Det är den första ändringen i hela serien
+som flyttar reproduktionen, och kvoten födslar mot dödsfall gick från omkring
+0,3 till över 2.
+
+**Men taket är inte lyft, och en ny väg ut har öppnats.** Bäraren väljs på massa
+— `if best.body.M > agent.body.M` — vilket är rimligt i en modell utan kön, men
+blir en strategi nu när partnern inte längre låses: ett djur som håller sig lätt
+hamnar alltid i partnerrollen, för sina gener vidare för fem procent av
+energitaket, och blir aldrig dräktigt. **Selektionen mot `M_target` är därmed
+något att mäta och inte att anta.**
+
+Ett villkor som beror på **kondition** i stället för på ärftlig massa skulle
+stänga vägen, eftersom kondition fluktuerar och inte går att ärva sig fri från.
+Det är ett eget beslut och görs inte här.
+
+Och fönstret är fortfarande två till tre kullar per liv à **en unge**.
+Kullstorleken som ärftlig axel står näst i tur.
 
 ### Parningen kunde inte vinna, och sökte i fel säsong (0177)
 
