@@ -2559,7 +2559,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0170~~ | betningen följer vägen i stället för en cirkel | florans fläckighet | **klart**, se nedan — **återtagen i 0171** |
 | ~~0171~~ | betesgrannskapet är en rumslig räckvidd, inte en väg | betningen | **klart**, se nedan — 40/40/40 |
 | ~~0172~~ | betesytan blir bansträcka gånger kroppens räckvidd | kadensbytet | **klart**, se nedan — neutral, men skalar med `dt` |
-| — | `E_move` prissätts på förflyttningen, inte på banan | budgeten | **öppen**, uppmätt 10,9 % av underhållet |
+| ~~0174~~ | rörelsen kostar transport, inte dragdissipation | budgeten, kadensen | **klart**, se nedan — uppför var billigare än platt |
 | ~~0173~~ | `docs/scenariers-anatomi.md` | scenarioformen | **klart**, se nedan |
 | — | `dt` skrivs ut i varje scenario | kadensbytet | **öppen**, se dokumentet |
 | — | kalibreringsblock i scenariofilen | svep utan kodredigering | **öppen**, se dokumentet |
@@ -2654,6 +2654,60 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Rörelsen kostar transport, inte dragdissipation (0174)
+
+`E_move` var `dt · F_prop · v / η`, alltså den effekt kraftbalansen dissiperar.
+Det är rätt mekanik för en kropp i en vätska vid terminalfart och fel fysiologi
+för ett djur som går: ett gående djurs kostnad domineras av inre arbete och är i
+god approximation proportionell mot **massa gånger sträcka**, nästan oberoende av
+farten.
+
+**Formen hade fel tecken för allt som hindrar rörelse.** Höjt motstånd sänker
+farten och därmed energin. Uppmätt vid full drivkraft:
+
+```
+fall               gammal J     ny J
+platt, torrt        454 764     10 765
+uppför (r = 1)      206 185     26 580     gammal: 55 % billigare än platt
+vadande (w = 0,5)   134 057     42 372     gammal: 71 % billigare än platt
+```
+
+Vadandet hade fått en lapp för detta — ett additivt tillägg med kommentaren
+*"den metabola kostnaden för rörelse sätts av muskelarbetet, inte av sträckan man
+faktiskt tillryggalägger"*, alltså exakt den här principen tillämpad på
+symptomet. **Lutningen hade samma fel och fick aldrig någon lapp.** Att gå uppför
+var billigare än att gå på platt mark, och terrängens riktning för faunan pekade
+åt fel håll sedan den infördes.
+
+Formen är nu Taylor, Heglund och Maloiy (1982):
+
+```
+E = COT(M) · M · sträcka        COT = 10,7 · M^(-0,316)  J per kg och meter
+```
+
+och motståndet **höjer COT** i stället för att sänka farten. Kraftbalansen är
+orörd och sätter fortfarande farten, så `fartskala`, `water_drag_gain` och
+lutningstermerna fungerar som förut för rörelsen — de har bara slutat bestämma
+energin.
+
+Sträckan är **bansträckan**: födosökets vandring plus den riktade färden, samma
+storhet som betesytan läser sedan 0172. Bägge skalar därmed med `dt` på samma
+sätt.
+
+Talen är metabola och inte mekaniska, så de divideras inte med en verkningsgrad
+en gång till. `locomotion_eff` och `wade_cost` har därmed inga läsare kvar och är
+borttagna.
+
+Uppmätt föll `E_move` från 34 450 till 20 380 J per agenttick, alltså från
+10,9 till 6,5 procent av underhållet — inom det spann en aktivt födosökande
+organism lägger på rörelse. Fem meters gång för en tvåkilos kropp kostade 34 450 J
+där fysiken säger omkring 60; nu betalas 873 meter.
+
+Beståndet i `liten6`, 400 tick, tre frön: 34, 37, 41 mot 0172:s 37, 42, 37, med
+massa per individ 1,28, 1,24, 1,30 mot 1,17, 1,17, 1,37. **Neutralt inom brus.**
+Det var inte poängen: `E_move` låg i facket *fel form, rätt storlek*, och
+patchen rättar formen utan att flytta storleken nämnvärt.
 
 ### Scenariers anatomi (0173)
 

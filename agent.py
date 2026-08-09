@@ -19,6 +19,7 @@ from phenotype import (
     nutrient_content,
     direction_tau,
     body_depth,
+    LENGTH_UNIT_M,
     NUTRIENT_PER_KG_LABILE,
 )
 
@@ -270,10 +271,57 @@ class AgentParams:
     # ------------------------
     # Locomotion mechanics
     # ------------------------
+    # Kraftbalansen sätter **farten**. Efter 0174 sätter den inte längre
+    # energin; se `cot_k`.
     F0: float = 5.0e4
     force_mass_exp: float = 2.0 / 3.0
     drag_lin: float = 220.0
     drag_quad: float = 1.2
+
+    # --- Rörelsens energikostnad ------------------------------------------
+    #
+    # **Transportkostnad, inte dragdissipation.**
+    #
+    # `E_move` var `dt · F_prop · v / η`, alltså den effekt kraftbalansen
+    # dissiperar. Det är rätt mekanik för en kropp som rör sig genom en vätska
+    # vid terminalfart och fel fysiologi för ett djur som går. Ett gående djurs
+    # kostnad domineras av inre arbete — extremiteternas acceleration,
+    # muskelaktivering, markreaktion — inte av luftmotstånd, och den är därför
+    # i god approximation **proportionell mot massa gånger sträcka** och nästan
+    # oberoende av farten.
+    #
+    # Formen hade dessutom fel tecken för allt som hindrar rörelse. Höjt
+    # motstånd sänker farten och därmed energin: att vada blev **billigare** än
+    # att gå. Vadandet fick därför ett eget additivt tillägg med kommentaren
+    # *"den metabola kostnaden för rörelse sätts av muskelarbetet, inte av
+    # sträckan man faktiskt tillryggalägger"* — vilket är precis den här
+    # principen, men bara tillämpad på symptomet. **Lutningen hade samma fel och
+    # fick aldrig något tillägg: att gå uppför var billigare än att gå på
+    # platt mark**, eftersom `climb_gain` höjer draget och sänker farten.
+    #
+    # Här är formen i stället Taylor, Heglund och Maloiy (1982):
+    #
+    #     E = COT(M) · M · sträcka          COT = cot_k · M^(-0.316)  J/(kg·m)
+    #
+    # och motståndet **höjer COT** i stället för att sänka farten. Kraftbalansen
+    # är orörd och sätter fortfarande farten, så `fartskala`, `water_drag_gain`
+    # och lutningstermerna fungerar som förut för rörelsen — de har bara slutat
+    # bestämma energin.
+    #
+    # Sträckan är **bansträckan** och inte förflyttningen: födosökets vandring
+    # plus den riktade färden. Samma storhet som betesytan läser i 0172, och
+    # därmed skalar bägge med `dt` på samma sätt.
+    #
+    # Uppmätt gav den gamla formen 34 450 J per agenttick, alltså 10,9 % av
+    # underhållet, för en förflyttning på fem meter. Den nya ger 10,6 kJ, alltså
+    # 3,4 % — och för en bansträcka på 873 meter. Fem meters gång för en
+    # tvåkilos kropp kostar omkring 60 J i verkligheten; modellen tog 34 450.
+    #
+    # Talen är metabola och inte mekaniska, så de ska **inte** divideras med
+    # `locomotion_eff` en gång till. Den konstanten och `wade_cost` har därmed
+    # inga läsare kvar och är borttagna.
+    cot_k: float = 10.7
+    cot_mass_exp: float = -0.316
 
     # --- Vattnet som medium --------------------------------------------------
     #
@@ -317,12 +365,6 @@ class AgentParams:
     # Uppmätt lutning på land vid 64x128: p10 0,018, median 0,041, p90 0,079,
     # max 0,43. `slope_ref` är satt vid p90, så medianterrängen ligger halvvägs
     # in i skalan och de brantaste sluttningarna mättar.
-    # Metabol kostnad för att röra sig i vatten, per enhet pådrag och
-    # nedsänkning, skalad med massa på samma sätt som dragkraften. Sätts i
-    # storleksordningen F0 = 5e4 så att vadande i full nedsänkning kostar
-    # jämförbart med att springa i full fart på land.
-    wade_cost: float = 3.0e4
-
     # Passiv drift. `drift_gain` är en **dimensionslös** skala på den tidsbudget
     # en flytande kropp har för att följa strömmen: 1,0 är fysisk, 0 stänger av.
     #
@@ -341,7 +383,6 @@ class AgentParams:
     climb_gain: float = 1.5
     descend_gain: float = 0.5
     slope_ref: float = 0.08
-    locomotion_eff: float = 0.25
 
     # ------------------------
     # Starvation / weakness dynamics
@@ -1392,7 +1433,6 @@ class Body:
         _h_base       = float(AP.death_h_base)
         _h_age        = float(AP.death_h_age)
         _h_D          = float(AP.death_h_D)
-        _loco_eff     = float(AP.locomotion_eff)
         _wear_a0      = float(AP.wear_a0)
         _wear_aE      = float(AP.wear_aE)
         _wear_aD      = float(AP.wear_aD)
@@ -3597,6 +3637,7 @@ class Agent:
         # Ett djur som följer en dalgång rör sig billigare än ett som korsar
         # den, utan att någon korridor kodas.
         s_along = self._slope_along_heading()
+        smult_cot = 1.0
         if s_along != 0.0:
             sref = max(1e-9, float(self.AP.slope_ref))
             r = s_along / sref
@@ -3610,6 +3651,7 @@ class Agent:
                 smult = 1.0 + float(self.AP.descend_gain) * r
             if smult < 0.1:
                 smult = 0.1
+            smult_cot = smult
             c1 *= smult
             c2 *= smult
 
@@ -3625,25 +3667,25 @@ class Agent:
         # Vid kraftbalans är den mekaniska effekten exakt dragkraftens
         # dissipation. Uttrycket är oförändrat men beror inte längre på
         # föregående ticks numeriska transient.
-        eta = clamp(float(self.AP.locomotion_eff), 1e-6, 1.0)
-        E_move = (dt * max(0.0, F_prop * speed)) / eta
-
-        # Vadandet kostar, och det måste läggas till uttryckligen.
+        # **Transportkostnad, inte dragdissipation.** Se `AgentParams.cot_k`.
         #
-        # `E_move` är dragkraftens dissipation vid kraftbalans, alltså
-        # proportionell mot den *uppnådda* farten. Höjt drag sänker farten och
-        # därmed energin: ett landdjur som vadade brände mindre per tick än ett
-        # som sprang. Vatten var en fälla, inte en fara — djuret kom ingenstans
-        # men led inte medan det stod där.
+        # Kraftbalansen ovan har satt farten och är färdig. Energin räknas i
+        # stället som massa gånger sträcka gånger en massberoende
+        # transportkostnad, och motståndet **höjer kostnaden** i stället för att
+        # sänka farten. Det ger vadandet och klättrandet rätt tecken utan
+        # additiva tillägg: den gamla formen gjorde båda billigare än att gå på
+        # platt torr mark, och bara vadandet hade fått en lapp.
         #
-        # Det är fysiologiskt bakvänt. Den metabola kostnaden för rörelse sätts
-        # av muskelarbetet, inte av sträckan man faktiskt tillryggalägger, och
-        # att vada är ansträngande just därför att arbetet inte omsätts i
-        # förflyttning. Tillägget är därför proportionellt mot pådraget och mot
-        # hur illa kroppen möter vattnet, oberoende av vad farten blev.
-        if w_fac > 0.0 and u > 0.0:
-            E_move += (dt * float(self.AP.wade_cost) * u * w_fac
-                       * (M_pre ** float(self.AP.force_mass_exp))) / eta
+        # Sträckan är bansträckan — födosökets vandring plus den riktade färden
+        # — och inte nettoförflyttningen. Samma storhet som betesytan läser.
+        cot = float(self.AP.cot_k) * (M_pre ** float(self.AP.cot_mass_exp))
+        stracka_lu = float(self.AP.forage_path_rate) * dt + dt * max(0.0, speed)
+        motstand = 1.0
+        if w_fac > 0.0:
+            motstand *= 1.0 + float(self.AP.water_drag_gain) * w_fac
+        if s_along != 0.0:
+            motstand *= max(0.1, smult_cot)
+        E_move = cot * M_pre * stracka_lu * LENGTH_UNIT_M * motstand
 
         # --- 2. riktning: omedelbar, plus persistent brus ---------------------
         #

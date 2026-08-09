@@ -3195,8 +3195,8 @@ class Population:
         vatten = np.asarray(world.water, dtype=np.float64)
         depth = vatten[cells]
         # **Grinden är flytkraft, inte väta.** Under kroppens eget djup står
-        # djuret på botten och vadar, vilket `wade_cost` prissätter, och
-        # strömmen har inget att bära. Se 7023.
+        # djuret på botten och vadar, vilket transportkostnadens vattenterm
+        # prissätter, och strömmen har inget att bära. Se 7023 och 0174.
         kroppsdjup = np.fromiter((a._body_depth() for a in alive),
                                  dtype=np.float64, count=len(alive))
         wet = depth > kroppsdjup
