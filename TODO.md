@@ -2561,6 +2561,8 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0172~~ | betesytan blir bansträcka gånger kroppens räckvidd | kadensbytet | **klart**, se nedan — neutral, men skalar med `dt` |
 | ~~0174~~ | rörelsen kostar transport, inte dragdissipation | budgeten, kadensen | **klart**, se nedan — uppför var billigare än platt |
 | ~~0175~~ | assimilationen straffade segheten två gånger | födobudgeten | **klart**, se nedan — 16 → 21 % |
+| ~~0176~~ | betningen blir tidsstegsinvariant; `h` och `eat_rate` är samma tal | kadensbytet | **klart**, se nedan — intaget skalade som `dt²` |
+| — | hanteringstiden är åtta gånger för lång; aptiten blir enda taket | födobudgeten | **öppen**, se 0176 |
 | — | reserven behöver en strukturandel innan magen får komma åt segt material | Steg 6 | **öppen**, se 0175 |
 | ~~0173~~ | `docs/scenariers-anatomi.md` | scenarioformen | **klart**, se nedan |
 | — | `dt` skrivs ut i varje scenario | kadensbytet | **öppen**, se dokumentet |
@@ -2656,6 +2658,59 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Betningen skalade som `dt²` (0176)
+
+Hollings typ II stod som `dt · a · B / (1 + a·h·B)` med `a` i enheten 1/månad
+och `B` massan inom räckhåll. **Sedan 0172 är `B = täthet · svept yta` och ytan
+växer med `dt`**, så uttrycket växer som `dt²`. Tiden räknades två gånger: en
+gång i `dt` och en gång i den yta söktiden hunnit täcka.
+
+Härledd ur tidsbudgeten med svept yta som sökmekanism blir formen
+
+```
+N = φ·B / (1 + h·φ·B/dt)
+```
+
+där `φ` är den **andel av beståndet inom den svepta ytan som betas av under en
+passage** — dimensionslös, och därmed en egenskap hos djuret och inte hos
+tidssteget. Vid liten `B` går intaget mot `φ·B`, vid stor mot `dt/h`, och båda
+skalar som `dt¹`.
+
+`φ = dt · a = 0,09` gör uttrycket **algebraiskt identiskt** med det gamla vid
+`dt = 0,02`; verifierat till sista biten utom en avrundning på 2,2e-16 vid stora
+`B`. Provet:
+
+```
+dt        intag normerat till dt = 0,02
+        gammal     ny
+0,020   1,1340   1,1340
+0,010   0,8274   1,1340
+0,005   0,5370   1,1340
+```
+
+Att halvera tidssteget tog tjugosju procent av intaget, att fjärdedela det
+femtiotre. **Ett kadensbyte hade svultit populationen utan att någon mekanism
+ändrats.**
+
+Utfall i `liten6`, 400 tick, tre frön: 34, 38, 39 mot 0175:s 37, 40, 37, med
+massa per individ 1,26, 1,34, 1,38 mot 1,36, 1,30, 1,49. Skillnaden är
+flyttalsbrus som omfördelar banorna, inte en mekanismändring.
+
+**Och ett dubblerat tal noterat.** `graze_handle_h` och `eat_rate` är samma
+storhet: `1/90 = 0,0111` exakt, och kommentaren sade det själv — *h är satt så
+att taket blir 1,8 kg per tick, vilket är den uppmätta maximala aptiten*.
+Mättnadsasymptoten är alltså inte en hanteringstid utan aptiten skriven en andra
+gång, och de två kan inte motsäga varandra eftersom den ena härleddes ur den
+andra.
+
+En verklig hanteringstid för ett litet betesdjur är omkring en timme per kilo —
+bett på ungefär ett gram, ett bett i sekunden, plus tuggning. 0,0111 månader är
+**8,1 timmar** per kilo. Rättas den blir hanteringstaket 14,6 kg per tick och
+binder aldrig; djuret blir söktidsbegränsat över hela det relevanta intervallet
+och aptiten blir det enda taket. Det är sannolikt rätt fysiologi — ett betesdjur
+på god mark är magbegränsat, inte tuggbegränsat — men det är en beteendeändring
+och hör ihop med `eat_rate` i en egen patch.
 
 ### Assimilationen straffade segheten två gånger (0175)
 

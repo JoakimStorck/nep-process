@@ -1924,7 +1924,7 @@ class Population:
         # **Tillgången är täthet gånger svept yta.**
         #
         # Summan över en cellmängd hängde på hur många celler geometrin råkade
-        # lämna över, och `graze_search_a` var kalibrerad mot det antalet —
+        # lämna över, och den funktionella responsen var kalibrerad mot det —
         # kommentaren där namnger sjucellsskivans "omkring 76 kg" i klartext.
         # När 0170 bytte skivan mot vägen föll antalet till 1,5 och beståndet
         # med det. Ett tak som flyttar sig när geometrin ändras är inte en
@@ -1940,9 +1940,14 @@ class Population:
             B = float(cell_avail.sum())
         if B > 0.0:
             AP = self.AP
-            a_s = float(AP.graze_search_a)
+            # Tidsstegsinvariant Hollings typ II; se `AgentParams.graze_take_frac`.
+            # `phi·B` är vad som betas av per passage, `dt/h` hanteringstakets
+            # gräns, och båda skalar som `dt` eftersom `B` bär tickets svepta
+            # yta sedan 0172.
+            phi = float(AP.graze_take_frac)
             h_t = float(AP.graze_handle_h)
-            cap = float(self.WP.dt) * a_s * B / (1.0 + a_s * h_t * B)
+            dt_ = max(1e-12, float(self.WP.dt))
+            cap = phi * B / (1.0 + h_t * phi * B / dt_)
             if cap < amt:
                 amt = cap
         if amt <= 1e-12:

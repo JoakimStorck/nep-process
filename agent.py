@@ -483,13 +483,44 @@ class AgentParams:
     # samma tak som förut; vid liten B faller det proportionellt mot B i
     # stället för att ligga kvar på aptiten.
     #
-    # h är satt så att taket blir 1,8 kg per tick, vilket är den uppmätta
-    # maximala aptiten: h = dt / 1,8. `a` är satt så att halvmättnaden ligger
-    # vid 20 kg inom räckhåll — mellan mättnadslägets omkring 76 kg och
-    # kollapslägets omkring 6, så att responsen biter under en nedgång utan att
-    # märkas under normala förhållanden.
+    # **Formen var inte tidsstegsinvariant.** `a` har enheten 1/månad och `B`
+    # är massan inom räckhåll. Sedan 0172 är `B = täthet · svept yta` och ytan
+    # växer med `dt`, så `dt · a · B` växer som **`dt²`**: att halvera
+    # tidssteget fjärdedelar intaget. Tiden räknades två gånger — en gång i
+    # `dt` och en gång i den yta söktiden hunnit täcka.
+    #
+    # Härledd ur tidsbudgeten med svept yta som sökmekanism blir formen
+    #
+    #     N = φ·B / (1 + h·φ·B/dt)
+    #
+    # där `φ` är den **andel av beståndet inom den svepta ytan som betas av
+    # under en passage** — dimensionslös, och därmed en egenskap hos djuret och
+    # inte hos tidssteget. Vid liten `B` går intaget mot `φ·B`, vid stor mot
+    # `dt/h`; **båda skalar som `dt¹`**, vilket är vad en storhet per tidsenhet
+    # ska göra.
+    #
+    # `φ = dt · a` gör uttrycket algebraiskt identiskt med det gamla vid
+    # `dt = 0,02`. Patchen ändrar alltså ingenting nu och allt vid ett
+    # kadensbyte.
+    graze_take_frac: float = 0.09    # andel av beståndet som betas per passage
+
+    # Hanteringstid per kilo. **`h` och `eat_rate` är samma tal.** Kommentaren
+    # sade det själv: *h är satt så att taket blir 1,8 kg per tick, vilket är
+    # den uppmätta maximala aptiten*. Och `1 / eat_rate = 1 / 90 = 0,0111`
+    # exakt. Mättnadsasymptoten är alltså inte en hanteringstid utan aptiten
+    # skriven en andra gång, och de två kan inte motsäga varandra eftersom den
+    # ena härleddes ur den andra.
+    #
+    # En verklig hanteringstid för ett litet betesdjur är omkring en timme per
+    # kilo — bett på ungefär ett gram, ett bett i sekunden, plus tuggning.
+    # 0,0111 månader är **8,1 timmar** per kilo, alltså åtta gånger för långsamt.
+    #
+    # Rättas den blir hanteringsasymptoten 14,6 kg per tick och binder aldrig;
+    # djuret blir söktidsbegränsat över hela det relevanta intervallet och
+    # aptiten blir det enda taket. Det är sannolikt rätt fysiologi — ett
+    # betesdjur på god mark är magbegränsat, inte tuggbegränsat — men det är en
+    # beteendeändring och hör till en egen patch tillsammans med `eat_rate`.
     graze_handle_h: float = 0.0111   # månader per kg
-    graze_search_a: float = 4.5      # 1 / (h · B_halv)
 
     # Betesgrannskapets radie i celler: fönstret som **tätheten** skattas ur.
     # Den säger var organismen är, inte hur mycket den hinner beta av — det
@@ -3833,7 +3864,7 @@ class Agent:
 
         Det gör ytan till en storhet med enhet i stället för ett antal celler
         som geometrin råkar lämna över, och det är den storheten
-        `graze_search_a` ska vara kalibrerad mot. Framför allt: den **följer av
+        `graze_take_frac` verkar på. Framför allt: den **följer av
         `dt`**. Ett dygnstick ger en 1,6 gånger längre bana och därmed 1,6
         gånger ytan, utan att någon konstant behöver sättas om.
         """
