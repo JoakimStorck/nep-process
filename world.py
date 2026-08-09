@@ -474,8 +474,48 @@ class WorldParams:
     # ett för stabilitet, och laplacianen är normerad med grannantalet.
     nutrient_diffusion: float = 0.20
 
-    # --- Perception scaling ---
-    C_sense_K: float = 5e-4
+    # --- Perceptionens mättnad -------------------------------------------
+    #
+    # Världskanalerna mättas med `v / (v + K)`. `K` är halvmättnadsvärdet och
+    # måste ligga där fältet **typiskt** ligger; annars mappas hela den
+    # observerade fördelningen på en ände av skalan och kanalen slutar bära
+    # information.
+    #
+    # `C_sense_K` stod på 5e-4, alltså **en halv gram**, mot en förnastock på
+    # åttioåtta kilo per landcell. Talet är samma halva gram som `B_K` en gång
+    # hade: den höjdes till 11,0 när massaskalan rättades, och syskonkonstanten
+    # lämnades kvar. En kalibrering som flyttas på ett ställe och inte på det
+    # andra ger ingen felsignal — den ger en kanal som alltid säger ja.
+    #
+    # Uppmätt i `liten6` efter 250 tick, per cell och regim:
+    #
+    #     fält                land    sjö     hav     (kg per cell)
+    #     flora                 9,2    8,5     0,00
+    #     detritus+kadaver     99,0  187,4     0,38
+    #
+    #     kanal               land    sjö     hav
+    #     B  vid K = 11      0,415  0,410   0,0001    <- bär kontrasten
+    #     C  vid K = 5e-4    1,000  1,000   0,970     <- mättad överallt
+    #     C  vid K = 80      0,524  0,677   0,0044
+    #
+    # Med det gamla värdet läste **havet 0,60 mot landets 0,87** i den
+    # dietviktade blandningen, trots 262 gångers skillnad i verklig födomängd.
+    # Det är hela förklaringen till att djuren uppfattar föda ute till havs: det
+    # är förnakanalen som säger ja, inte floraskanalen.
+    #
+    # Halvmättnaden läggs vid den uppmätta medianen, 88 kg, avrundat till 80.
+    # **Det är ett kalibrerat värde och inte ett härlett** — förnastocken är
+    # nedbrytningstidens produkt och har ingen egen naturlig enhet, till skillnad
+    # från floran där `B_K` är en vuxen plantas massa.
+    #
+    # Sjöarna hamnar då **över** landet, vilket de faktiskt är: sedan 7008 är de
+    # sedimentfällor. Den akvatiska nischen fanns redan och var osynlig.
+    #
+    # `B_sense_K` får samtidigt ett eget namn vid samma värde som `B_K`.
+    # Perceptet läste massaskalan direkt, så en ändring av hur mycket en planta
+    # väger ändrade tyst vad ett djur ser. Två storheter, ett tal — nu två namn.
+    B_sense_K: float = 11.0
+    C_sense_K: float = 80.0
 
     # Energy densities for open-system ledger diagnostics (J/kg)
     # Energi per kilo *labil* vävnad, gemensam för allt organiskt material.

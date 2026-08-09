@@ -3326,10 +3326,14 @@ class Population:
         cell0 = self.grid.cell_of_many(xs, ys).astype(np.int64, copy=False)
         cells = self.grid.cells_within_many(cell0, r_max).astype(np.int64, copy=False)
 
-        Kb = float(getattr(self.WP, "B_K", 0.0))
+        Kb = float(getattr(self.WP, "B_sense_K", 0.0))
         Kc = float(getattr(self.WP, "C_sense_K", 0.0))
 
         def sat(field: np.ndarray, K: float) -> np.ndarray:
+            # `K` är halvmättnadsvärdet och hör till `WorldParams`; se
+            # `B_sense_K` för vad som händer när det ligger fel. Grenen för
+            # `K <= 0` ger binär närvaro och är ett uttalat val för en värld
+            # utan mängdsinne, inte ett förval att falla tillbaka på.
             v = np.maximum(field[cells].astype(np.float32, copy=False), np.float32(0.0))
             if K <= 0.0:
                 return (v > 0.0).astype(np.float32, copy=False)

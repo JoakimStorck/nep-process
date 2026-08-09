@@ -2555,6 +2555,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~7009c~~ | vadandet kostar, värmeledning vid nedsänkning, passiv drift ur kontinuitet | faunan möter vattnet | **klart** |
 | ~~7023~~ | kroppen får ett djupmått; tre läsare delar det | draget, styrningen, driften | **klart**, se nedan |
 | ~~7024~~ | driften blir uppehållstid längs nätet; `drift_max` utgår | styrningen | **klart**, se nedan — max 143 → 13 utan tak |
+| ~~0169~~ | perceptets halvmättnad; `C_sense_K` var en halv gram | perceptet, 0170 | **klart**, se nedan — havet 0,60 → 0,003 |
 | 7010 | vattendjupet som fjärde världskanal och fri MLP-ingång | selektionen | öppen |
 | ~~7010~~ | ~~vattenaxeln som nisch~~ | | **slås ihop med 7009** |
 | ~~7011~~ | ~~glesning av hydro~~ | | **utgår**, se nedan |
@@ -2588,6 +2589,63 @@ I stället gjordes 7008 till partikulär transport av förna, eftersom mätninge
 **`sediment_rate` är ett reglage mellan land och vatten, inte en fri parameter.** Näringsförlusten motsvarar exakt sedimentexporten: sjöarna behåller sitt, men floderna är ett avlopp till havet. Vid 0,5 kostar det 16 procent av näringsstocken och en tredjedel av floran att göra vattnet rikare per cell än landet.
 
 **Glesning av hydro utgår.** Motivet var att ett tätt grannflöde skulle bli för dyrt. Jämviktslösningen kostar 0,216 ms per tick vid 16 384 celler och 4,1 vid 262 144 — mindre än den täta laplacianen i `transport_pass`. Görs bara om en mätning på en stor värld motiverar den.
+
+### Perceptets halvmättnad låg fem tiopotenser fel (0169)
+
+`_build_sector_percept` mättar världskanalerna med `v/(v+K)`. `K` är
+halvmättnadsvärdet och måste ligga där fältet typiskt ligger.
+
+Floraskanalen gjorde det: den läste `B_K = 11,0`, alltså en vuxen plantas
+massa, mot en stock på 9,2 kg per landcell. Förnakanalen läste **`C_sense_K =
+5e-4`, en halv gram**, mot 99 kg per landcell. Det är samma halva gram `B_K`
+en gång hade — den höjdes till 11,0 när massaskalan rättades, och
+syskonkonstanten lämnades kvar. **En kalibrering som flyttas på ett ställe och
+inte på det andra ger ingen felsignal; den ger en kanal som alltid säger ja.**
+
+Uppmätt i `liten6` efter 250 tick:
+
+```
+fält                land    sjö     hav      kg per cell
+flora                 9,2    8,5    0,00
+detritus+kadaver     99,0  187,4    0,38
+
+kanal               land    sjö     hav
+B  vid K = 11      0,415  0,410  0,0001     bär kontrasten
+C  vid K = 5e-4    1,000  1,000  0,9705     mättad överallt
+C  vid K = 80      0,524  0,677  0,0044
+```
+
+Dietviktat läste **havet 0,60 mot landets 0,87** trots 262 gångers skillnad i
+verklig födomängd. Det var alltså förnakanalen som sa ja ute till havs, inte
+floraskanalen — djuren såg inte växtlighet i vattnet, de såg en mättad
+sedimentkanal.
+
+Halvmättnaden läggs vid den uppmätta medianen, 88 kg, avrundat till 80.
+`B_sense_K` får samtidigt ett eget namn vid samma värde som `B_K`; perceptet
+läste massaskalan direkt, så en ändring av vad en planta väger ändrade tyst vad
+ett djur ser.
+
+Utfallet, `liten6` 400 tick, tre frön:
+
+```
+                toppandel median      vid kust
+frö    7024    0169    0170     7024   0169   0170
+ 1     0,179   0,209   0,197    0,182  0,238  0,219
+ 2     0,179   0,200   0,190    0,183  0,227  0,212
+ 3     0,180   0,198   0,187    0,182  0,226  0,199
+```
+
+**Kustkontrollen går från att falla till att hålla.** Överskottet mot
+jämnfördelningens 0,167 fyrdubblas vid kusten, och — avgörande — kustdjuren har
+nu en *toppigare* profil än inlandsdjuren (0,238 mot 0,209) i stället för samma.
+Tre sektorer mot hav kan inte ge en jämn profil, och nu gör de det inte heller.
+
+Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 7008.
+**Den akvatiska nischen fanns redan och var osynlig.**
+
+Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
+står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
+skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
 
 ### Driften blir en uppehållstid (7024)
 
