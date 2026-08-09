@@ -3160,6 +3160,31 @@ class Population:
         np.minimum(speed, float(self.AP.drift_max), out=speed)
         step = speed * buoy * float(self.AP.drift_gain)
 
+        # **Passet flyttar inte.** Det lämnar ett förskjutningsbidrag som
+        # `_integrate_motion` adderar till sitt eget innan positionen skrivs.
+        #
+        # Två pass som var för sig utförde en förflyttning på samma tick gjorde
+        # relativhastigheten omöjlig att uttrycka: ett djur som simmar mot
+        # strömmen kunde inte motverka den, eftersom det andra passet redan
+        # hade flyttat det. Enda återstående bromsen blev `drift_max`, ett
+        # godtyckligt tak — satt tjugo gånger för högt mot vad dess egen
+        # kommentar påstod. Uppmätt flyttades djuren 11,08 cellbredder på ett
+        # enda tick i medel mot en egen förflyttning på 0,52, och driften stod
+        # för en fjärdedel av all rörelse i världen fastän den bara berör en
+        # procent av agenttickarna.
+        #
+        # Med bidrag i stället för förflyttning faller relativhastigheten ut av
+        # sig själv: den som simmar mot strömmen får summan nära noll, den som
+        # simmar med får dubbelt, och ingen resultant behöver härledas.
+        #
+        # Manifestets uppdelning står kvar. *Passiv drift hanteras i
+        # Hydro-passet, inte i Locomotion* handlar om vem som **äger flödet** —
+        # hydro räknar strömmen, biologin uttrycker bara `buoyancy`. Att hydro
+        # dessutom utförde förflyttningen var en implementationsdetalj, och det
+        # var den som gjorde taket nödvändigt.
+        for a in alive:
+            a._drift_dx = 0.0
+            a._drift_dy = 0.0
         for k, i in enumerate(idx):
             if step[k] <= 0.0:
                 continue
@@ -3170,7 +3195,8 @@ class Population:
             n = math.hypot(dx, dy)
             if n <= 1e-12:
                 continue
-            a.x, a.y = grid.wrap_pos(a.x + step[k] * dx / n, a.y + step[k] * dy / n)
+            a._drift_dx = step[k] * dx / n
+            a._drift_dy = step[k] * dy / n
             moved += float(step[k])
         return moved
 

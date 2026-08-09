@@ -2478,6 +2478,10 @@ class Agent:
     _temp_sectors: object = field(init=False, default=None, repr=False, compare=False)
     # Sittande vinnare i arbitreringen, för hysteresen.
     _sittande: str = field(init=False, default="", repr=False, compare=False)
+    # Strömmens förskjutningsbidrag för innevarande tick, lagt av
+    # `_drift_system` och konsumerat av `_integrate_motion`.
+    _drift_dx: float = field(init=False, default=0.0, repr=False, compare=False)
+    _drift_dy: float = field(init=False, default=0.0, repr=False, compare=False)
     # Bunden bäring: vald riktning, vilket anspråk som valde den, och kursen
     # den mättes mot. Se `baring_marginal`.
     _bunden_baring: object = field(init=False, default=None, repr=False, compare=False)
@@ -3569,7 +3573,30 @@ class Agent:
         self.disp_x += step_x
         self.disp_y += step_y
 
-        self.x, self.y = self.grid.wrap_pos(float(self.x) + step_x, float(self.y) + step_y)
+        # Strömmens bidrag, lagt av `_drift_system` som inte längre flyttar
+        # något självt. Positionen skrivs en gång, av det pass som äger den.
+        #
+        # `path_len` räknar **eget arbete** och lämnas orörd — annars blir ett
+        # djur som spolats nedför en fåra "rakt gående", och `straightness` i
+        # life-loggen slutar mäta det den heter. Nettoförskjutningen tar
+        # däremot med driften, eftersom den mäter var djuret faktiskt hamnade.
+        #
+        # Ordningen i ticken ändras därmed, och det är ingen ren
+        # omstrukturering: driften låg före sensing och decision, så djuret
+        # uppfattade världen från sin efterdriftade position. Nu beslutar det
+        # från där det står och strömmen verkar på tickens totala förflyttning.
+        # Det är rätt semantik — hastigheter adderas — men det är en
+        # beteendeändring och ska mätas som en.
+        _ddx = float(getattr(self, "_drift_dx", 0.0))
+        _ddy = float(getattr(self, "_drift_dy", 0.0))
+        if _ddx or _ddy:
+            self.disp_x += _ddx
+            self.disp_y += _ddy
+            self._drift_dx = 0.0
+            self._drift_dy = 0.0
+
+        self.x, self.y = self.grid.wrap_pos(float(self.x) + step_x + _ddx,
+                                            float(self.y) + step_y + _ddy)
 
         return float(speed), float(E_move)
 
