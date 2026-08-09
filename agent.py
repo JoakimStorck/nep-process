@@ -547,6 +547,28 @@ class AgentParams:
     # 1 och födosökets median 0,3 ligger gränsen mellan 0,15 och 0,50.
     kostnad_vikt: float = 0.40
 
+    # Marginalen som krävs för att överge en bunden bäring, som andel av
+    # anspråkets styrka.
+    #
+    # Bäringen härleds om från grunden varje tick ur brusig sensing.
+    # Födoprofilen är platt till 96–97 procent, så `argmax` hoppar mellan
+    # likvärdiga grannsektorer stup i kvarten, och vinnaren växlar i 17–18
+    # procent av tickarna. Relaxationen dolde det: kursen tog elva procent av
+    # varje hopp och djuret rörde sig i den *genomsnittliga* riktningen över
+    # tio tick. När den togs bort i 0165 utfördes varje hopp till fullo, och
+    # djuren blev stationära — en slumpvandring på stället i stället för
+    # förflyttning genom landskapet.
+    #
+    # Intentionen fanns alltså aldrig i besluten. Den fanns i kroppens tröghet,
+    # som en bieffekt, och när trögheten var fel på halvdygnsskala försvann
+    # båda. Filtret hör hemma i anspråket och inte i kinematiken: den valda
+    # riktningen binds och behålls tills något ändras meningsfullt.
+    #
+    # 0,15 av styrkan betyder att ett alternativ måste vara mätbart bättre —
+    # inte likvärdigt — för att djuret ska byta väg. Mönstret finns sedan
+    # tidigare i `_follow_id` och `neighbour_memory`, fast bara för en drift.
+    baring_marginal: float = 0.15
+
     # Hur långt kostnaden integreras, i cellbredder, och med hur många prov.
     #
     # **Integration, inte punktprov.** Ett tidigare försök samplade två celler
@@ -2449,6 +2471,11 @@ class Agent:
     _temp_sectors: object = field(init=False, default=None, repr=False, compare=False)
     # Sittande vinnare i arbitreringen, för hysteresen.
     _sittande: str = field(init=False, default="", repr=False, compare=False)
+    # Bunden bäring: vald riktning, vilket anspråk som valde den, och kursen
+    # den mättes mot. Se `baring_marginal`.
+    _bunden_baring: object = field(init=False, default=None, repr=False, compare=False)
+    _bunden_namn: str = field(init=False, default="", repr=False, compare=False)
+    _bunden_heading: float = field(init=False, default=0.0, repr=False, compare=False)
     # Läskopia av `store.repro_cd`, satt av sensingpasset. Store äger fältet.
     _repro_cd_s: float = field(init=False, default=0.0, repr=False, compare=False)
     _cached_B0: float = field(init=False, default=0.0)
@@ -3203,14 +3230,43 @@ class Agent:
             for a in ang:
                 b = ((float(a) + math.pi) % (2.0 * math.pi) - math.pi) / math.pi
                 kand.append(b)
+
+            # Den bundna bäringen är en kandidat bland de övriga. Den är
+            # lagrad i kroppsram från förra ticket, så den måste roteras med
+            # den kursändring som skett sedan dess — annars pekar den på en
+            # riktning i djuret i stället för i världen.
+            bunden = getattr(self, "_bunden_baring", None)
+            if bunden is not None and namn == getattr(self, "_bunden_namn", ""):
+                d = float(self.heading) - float(getattr(self, "_bunden_heading", 0.0))
+                bb = ((float(bunden) * math.pi - d + math.pi)
+                      % (2.0 * math.pi) - math.pi) / math.pi
+                kand.append(bb)
+            else:
+                bb = None
+
             kost = self._kostnad_vag(kand)
             vikt = float(self.AP.kostnad_vikt)
             basta = None
+            v_bunden = None
             for b, k in zip(kand, kost):
                 v = float(_st) * math.cos((b - float(bias)) * math.pi) - vikt * k
+                if bb is not None and b == bb:
+                    v_bunden = v
                 if basta is None or v > basta[0]:
                     basta = (v, b)
-            bias = basta[1]
+
+            # Byt bara om alternativet är *mätbart* bättre. Likvärdiga
+            # riktningar ska inte flytta djuret, för det är precis vad den
+            # platta profilen producerar tolv gånger om dygnet.
+            marg = float(self.AP.baring_marginal) * float(_st)
+            if v_bunden is not None and basta[0] - v_bunden < marg:
+                bias = bb
+            else:
+                bias = basta[1]
+
+            self._bunden_baring = float(bias)
+            self._bunden_namn = namn
+            self._bunden_heading = float(self.heading)
         if thrust_min > 0.0:
             thrust = clamp(max(thrust, thrust_min), 0.0, 1.0)
         explore_drive = float(explore_drive) * float(expl_mult)
