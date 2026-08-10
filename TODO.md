@@ -2567,6 +2567,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0179~~ | kullstorleken som ärftlig axel; dödströskeln blir relativ | reproduktionen, r/K | **klart**, se nedan |
 | ~~0180~~ | avmagring mäts mot kroppens egen topp, inte mot ett löfte | selektionen | **klart**, se nedan |
 | ~~0181~~ | livshistoriens massor blir andelar av vuxenmassan | selektionen | **klart**, se nedan |
+| ~~0182~~ | mognaden blir ett utfall, inte en ålder | selektionen | **klart**, se nedan |
 | — | `M_repro_frac` 0,15–0,45 är bevarad storlek; verkligt är 0,6–0,8 | livshistorien | **öppen**, se 0181 |
 | — | `M_waste_frac = 0,075` är bevarad storlek, inte fysiologisk | mortaliteten | **öppen**, se 0179 |
 | — | `child_M` är absolut där den borde vara en andel av `M_target` | livshistorien | **öppen**, se 0179 |
@@ -2670,6 +2671,49 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Mognaden blir ett utfall (0182)
+
+Villkoret var `age >= A_mature`. Det gjorde **tidig mognad gratis**: den gav
+tidigare reproduktion utan att kräva att kroppen faktiskt vuxit.
+
+0180 tog bort *straffet* för ett obetalt tillväxtlöfte — svältskadan mättes mot
+en utlovad kurva — men lät *belöningen* stå kvar. Uppmätt i p181 föll
+`A_mature` därför mot golvet 5,0 i **två frön av tre igen**, precis som i p179.
+Att rätta straffet utan att rätta belöningen räckte inte, och det borde ha stått
+i 0180 i stället för förutsägelsen att axeln skulle plana ut.
+
+Massan är kvar som grind och är sedan 0181 allometrisk, `M_repro_frac ·
+M_target`. Att mogna tidigt kräver därmed att ha vuxit fort, och att växa fort
+kräver mat. En kropp som svultit som ung mognar sent och får färre kullar —
+**kostnaden är fysisk i stället för deklarerad, och den betalas när den
+uppstår.**
+
+`A_mature` styr efter detta bara tillväxtkurvans branthet via `growth_k`. En
+brant kurva är fortfarande en fördel, men bara i den mån kroppen kan finansiera
+den. Uppmätt i `liten6`:
+
+```
+faktisk mognadsålder   p10  1,2   median  7,4   p90 35,2 månader
+deklarerad A_mature    p10  7,4   median 12,0   p90 17,9
+korrelation                                     0,59
+```
+
+Mognaden följer alltså genotypen till hälften och världen till hälften, vilket
+är vad ett utfall ska göra. Spannet 1,2–35,2 mot det deklarerade 7,4–17,9 visar
+hur mycket av variationen som nu kommer från vad kroppen faktiskt fick i sig.
+
+Den mjuka grinden läser samma villkor som den hårda, av samma skäl som i 0177:
+ett djur ska inte vara motiverat till det som är omöjligt.
+
+Uppmätt i `liten6`, 400 tick, tre frön: 64/73/92 mot 0181:s 49/81/59, med 142
+födslar mot 100.
+
+**Kvar att mäta:** finns någon kostnad för att vara liten? Underhållet skalar som
+`M^0,75` och betesytan som `M^⅓`, så kvoten yta genom behov förbättras när
+kroppen krymper. Motvikten borde vara termoregleringen — värmeförlust `M^⅔` mot
+produktion `M^0,75` — men om den inte biter kan `M_target` rasa mot golvet 0,2.
+I p181 gick frö 3 redan 1,54 → 0,66.
 
 ### Livshistoriens massor blir andelar av vuxenmassan (0181)
 

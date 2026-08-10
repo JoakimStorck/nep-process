@@ -1013,9 +1013,24 @@ class Population:
         if float(store.repro_cd[s]) > 0.0:
             return False
     
-        if float(store.age[s]) < float(ag.pheno.A_mature):
-            return False
-    
+        # **Mognaden är ett utfall, inte en ålder.**
+        #
+        # Villkoret var `age >= A_mature`. Det gjorde tidig mognad **gratis**:
+        # den gav tidigare reproduktion utan att kräva att kroppen faktiskt
+        # vuxit, och selektionen tog den affären varje gång. Uppmätt föll
+        # `A_mature` mot golvet 5,0 i två frön av tre i p179 — och igen i p181,
+        # efter att 0180 tagit bort *straffet* för ett obetalt tillväxtlöfte men
+        # låtit *belöningen* stå kvar.
+        #
+        # Massan är kvar som grind, och den är sedan 0181 allometrisk:
+        # `M_repro_frac · M_target`. Att mogna tidigt kräver därmed att ha vuxit
+        # fort, och att växa fort kräver mat. En kropp som svultit som ung mognar
+        # sent och får färre kullar — kostnaden är fysisk i stället för
+        # deklarerad, och den betalas när den uppstår.
+        #
+        # `A_mature` styr efter detta bara tillväxtkurvans branthet via
+        # `growth_k`. En brant kurva är fortfarande en fördel, men bara i den mån
+        # kroppen kan finansiera den.
         M = float(store.mass[s])
         Mreq = max(float(ag.AP.M_min), float(ag.pheno.M_repro_min))
         if M < Mreq:
@@ -1145,7 +1160,12 @@ class Population:
             return False
         if float(store.repro_cd[s]) > 0.0:
             return False
-        if float(store.age[s]) < float(ag.pheno.A_mature):
+
+        # Mognaden är massa och inte ålder; se `_ready_to_reproduce_slot`. Den
+        # mjuka grinden läser samma villkor som den hårda, av samma skäl som i
+        # 0177: ett djur ska inte vara motiverat till det som är omöjligt.
+        if float(store.mass[s]) < max(float(ag.AP.M_min),
+                                      float(ag.pheno.M_repro_min)):
             return False
 
         # Samma säsongsvillkor som den hårda grinden; se `_i_parningssasong`.
@@ -1234,9 +1254,9 @@ class Population:
         self.store.age[store_slot] = np.float32(0.0)
         self._slot_to_agent[int(store_slot)] = child
 
-        # **Ingen avsvalning på en nyfödd.** Mognaden är `A_mature`, en ärftlig
-        # egenskap som spänner 5–20 månader; en avsvalning på 8 band mot den och
-        # dödade axelns nedre halva. Se `AgentParams.repro_cooldown_s`.
+        # **Ingen avsvalning på en nyfödd.** Mognaden avgörs av massan sedan
+        # 0182 och av `A_mature` dessförinnan; en avsvalning på åtta månader
+        # band mot båda. Se `AgentParams.repro_cooldown_s`.
         self.store.repro_cd[store_slot] = np.float32(0.0)
         self.store.gestating[store_slot] = False
         self.store.gest_M[store_slot] = np.float32(0.0)
