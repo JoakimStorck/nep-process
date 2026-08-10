@@ -844,12 +844,7 @@ class AgentParams:
     kostnad_rackvidd: float = 6.0
     kostnad_prov: int = 6
 
-    # **Kustmätningen är avstängd som förval.** `Agent._dir_vatten` är ren
-    # diagnostik från 1015 — andelen sektorer som pekar mot vatten, för att
-    # skilja kustdjur från inlandsdjur i `--stats`. Den kostar sex
-    # celluppslag per djur och tick, alltså nio procent av `cell_of`-anropen,
-    # för ett tal ingen mekanism läser. Slås på när kustkontrollen ska mätas.
-    mat_dir_vatten: bool = False
+
 
     prey_search_radius: float = 6.0
     mate_search_radius: float = 5.0
@@ -2817,9 +2812,6 @@ class Agent:
     # läsare i simuleringen.
     _dir_food: object = field(init=False, default=None, repr=False, compare=False)
     _dir_vinnare: str = field(init=False, default="", repr=False, compare=False)
-    # Andel av sektorerna som pekar mot vatten två cellbredder fram. Bara
-    # mätning; se `plan_action`.
-    _dir_vatten: float = field(init=False, default=0.0, repr=False, compare=False)
     # Övergångsfördelningens tre tal: steglängd, medelriktning och brusets vidd.
     # Bara visning; se `_integrate_motion`. Ett djur som inte rörde sig under
     # ticket bär förra tickets värden, vilket är rätt — det är den senaste
@@ -4296,20 +4288,7 @@ class Agent:
         #
         # Uppslaget går via samma `world.water` och `submerged_threshold` som
         # hydro skriver, i samma punkt som `_kostnad_vag` provar.
-        self._dir_vatten = 0.0
-        if self.AP.mat_dir_vatten and self._dir_food is not None:
-            try:
-                _S6 = int(len(self._dir_food))
-                _a = float(self.heading) + (np.arange(_S6, dtype=np.float64) + 0.5) \
-                    * (2.0 * math.pi / _S6)
-                _c = world.grid.cell_of_many(
-                    float(self.x) + 2.0 * np.cos(_a),
-                    float(self.y) + 2.0 * np.sin(_a))
-                self._dir_vatten = float(
-                    (np.asarray(world.water, dtype=np.float64)[np.asarray(_c)]
-                     > float(world.WP.submerged_threshold)).mean())
-            except Exception:
-                self._dir_vatten = 0.0
+
         explore_drive *= 1.0 - _hunger * _food_local
         if getattr(self, "_mate_search", False):
             explore_drive = max(explore_drive, 1.0 - _hunger)

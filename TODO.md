@@ -2571,6 +2571,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0183~~ | betningen tar hela grannskapet i ett svep | prestanda | **klart**, se nedan — 3,4× |
 | ~~0184~~ | kostnadsproven batchas; kustmätningen blir valfri | prestanda | **klart**, se nedan — `cell_of` 4,8× färre |
 | ~~0185~~ | genomklämman höjs så att det deklarerade spannet blir nåbart | selektionen | **klart**, se nedan |
+| ~~0186~~ | kustmätningen flyttar från modellen till instrumenteringen | mätningen | **klart**, se nedan |
 | ~~—~~ | `f6-256-mager`: bär perceptet någon riktning i en fläckig värld? | 0169, kärnan | **scenariot finns**, kör det |
 | — | per-agent-Python är kvar; store-first och Numba är nästa | prestanda | **öppen**, manifestets Fas 4–5 |
 | — | `cell_of` anropas 65 gånger per djur och tick | prestanda | **öppen**, nästa |
@@ -2677,6 +2678,30 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Kustmätningen hör inte hemma i modellen (0186)
+
+`Agent._dir_vatten` — andelen sektorer som pekar mot vatten två cellbredder fram
+— infördes i 1015 för att skilja kustdjur från inlandsdjur i kustkontrollen.
+Den läses **bara** av `run_headless._mat_riktning`, alltså är den mätning i båda
+ändar; bara beräkningen låg i `agent.py`.
+
+0184 upptäckte att den kostade sex celluppslag per djur och tick, nio procent av
+alla `cell_of`-anrop, för ett tal ingen mekanism läser — och stängde av den med
+`AgentParams.mat_dir_vatten = False`.
+
+**Det var fel form, och felet växte i tre steg.** En avstängd mätning kräver ett
+sätt att slå på den; ett sätt att slå på den kräver antingen en ny flagga eller
+ett generellt överstyrningsmaskineri; och ett sådant maskineri låter en körnings
+tillstånd glida isär från dess `scenario.yaml` — vilket är precis det
+`docs/scenariers-anatomi.md` säger att scenariosystemet finns för att förhindra.
+
+Beräkningen flyttar därför till `_mat_riktning`, som är den enda läsaren.
+Uppmätt: `--stats` av ger 45,8 ms/tick, `--stats` på ger 97,8. **Mätningen kostar
+när man mäter och ingenting annars**, vilket är hela poängen med att den ligger i
+instrumenteringen.
+
+`AgentParams.mat_dir_vatten` och fältet `Agent._dir_vatten` tas bort.
 
 ### Genomklämman gjorde det deklarerade spannet onåbart (0185)
 

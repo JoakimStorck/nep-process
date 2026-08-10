@@ -501,14 +501,40 @@ def _mat_riktning(agent) -> None:
 
     # Perceptet, före kollapsen. Skild räknare eftersom ett djur kan ha en
     # arbitrering utan att ha sensat.
+    # Kustandelen: hur stor del av sektorerna som pekar mot vatten två
+    # cellbredder fram.
+    #
+    # **Den beräknas här och inte i modellen.** Den läses bara av den här
+    # funktionen, alltså är den mätning i båda ändar, och 0184 gjorde den till
+    # en `AgentParams`-flagga med förvalet av — vilket krävde ett sätt att slå
+    # på den utifrån, vilket i sin tur krävde ett generellt
+    # överstyrningsmaskineri. Det var tre steg åt fel håll från ett tal ingen
+    # mekanism läser.
+    #
+    # Här kostar den ingenting när `--stats` är av, eftersom
+    # `instrument_steering` då aldrig anropas.
+    vat = 0.0
+    w = getattr(agent, "world", None)
     f = getattr(agent, "_dir_food", None)
+    if w is not None and f is not None and len(f) > 1:
+        try:
+            S6 = int(len(f))
+            ang = float(agent.heading) + (np.arange(S6, dtype=np.float64) + 0.5) \
+                * (2.0 * math.pi / S6)
+            c = w.grid.cell_of_many(float(agent.x) + 2.0 * np.cos(ang),
+                                    float(agent.y) + 2.0 * np.sin(ang))
+            vat = float((np.asarray(w.water, dtype=np.float64)[np.asarray(c)]
+                         > float(w.WP.submerged_threshold)).mean())
+        except Exception:
+            vat = 0.0
+
     if f is not None and len(f) > 1:
         tot = float(sum(f))
         if tot > 0.0:
             b = min(19, max(0, int(float(max(f)) / tot * 20.0)))
             _P["n_percept"] += 1
             _P["toppandel"][b] += 1
-            if float(getattr(agent, "_dir_vatten", 0.0)) > 0.0:
+            if vat > 0.0:
                 _P["n_kust"] += 1
                 _P["toppandel_kust"][b] += 1
 
