@@ -2569,6 +2569,8 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0181~~ | livshistoriens massor blir andelar av vuxenmassan | selektionen | **klart**, se nedan |
 | ~~0182~~ | mognaden blir ett utfall, inte en ålder | selektionen | **klart**, se nedan |
 | ~~0183~~ | betningen tar hela grannskapet i ett svep | prestanda | **klart**, se nedan — 3,4× |
+| ~~0184~~ | kostnadsproven batchas; kustmätningen blir valfri | prestanda | **klart**, se nedan — `cell_of` 4,8× färre |
+| — | per-agent-Python är kvar; store-first och Numba är nästa | prestanda | **öppen**, manifestets Fas 4–5 |
 | — | `cell_of` anropas 65 gånger per djur och tick | prestanda | **öppen**, nästa |
 | — | `M_repro_frac` 0,15–0,45 är bevarad storlek; verkligt är 0,6–0,8 | livshistorien | **öppen**, se 0181 |
 | — | `M_waste_frac = 0,075` är bevarad storlek, inte fysiologisk | mortaliteten | **öppen**, se 0179 |
@@ -2673,6 +2675,50 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Kostnadsproven batchas (0184)
+
+`_kostnad_vag` provade sex punkter per bäring över upp till åtta kandidater, med
+ett `grid.cell_of` per punkt. Det gjorde celluppslaget till modellens största
+enskilda post: uppmätt **791 489 anrop på tjugofem tick med 482 djur**, alltså
+sextiofem per djur och tick, och sjutton procent av tickens tid kumulativt.
+
+Uttrycket är oförändrat — värsta provet, avståndsviktat — men punkterna slås upp
+tillsammans med `cell_of_many`, som funnits hela tiden. Fyrtioåtta anrop blir
+ett.
+
+`Agent._dir_vatten` stängs av som förval. Den är ren diagnostik från 1015 —
+andelen sektorer som pekar mot vatten, för att skilja kustdjur från inlandsdjur
+i `--stats` — och kostade sex celluppslag per djur och tick för ett tal ingen
+mekanism läser. `AgentParams.mat_dir_vatten` slår på den när kustkontrollen ska
+mätas.
+
+Uppmätt, 482 djur, 25 tick:
+
+```
+                      cell_of-anrop   tottime   ms/tick   µs/djur
+före 0183                  791 489     2,679       931      1936
+efter 0183                 791 489     2,679       862      1789
+efter 0184                 164 585     0,722       785      1629
+```
+
+**Bitidentiskt tillstånd efter trettio tick** mot 0183: floramassa
+83341,492188 kg, 64 672 plantor, 39 djur, summerad kroppsmassa 55,79001747.
+
+`rebuild_spatial_index` lämnas orörd trots att den anropas två gånger per tick.
+Det andra anropet är `with_flora_fields=False` och behövs: efter faunapassen kan
+medlemskapet ha ändrats av rörelse, födslar och dödsfall. Anteckningen i den
+gamla statusanalysen om ett dubbelarbete är alltså inaktuell.
+
+**Vad som återstår.** 0183 och 0184 tillsammans ger sexton procent, och därefter
+är kurvan platt: `Body.step`, betningen och kostnaden ligger nu på ungefär en
+sekund var per tjugofem tick, och `getattr` ensam står för 1,67 miljoner anrop.
+Det är per-agent-Python, och det finns ingen mer frukt på den nivån.
+
+Nästa steg är manifestets Fas 4 och 5: flytta `Body`:s tillstånd till
+store-arrayer och köra fysiologin som ett Numba-pass. Det bör inte påbörjas
+förrän livshistorien slutat röra sig — sex av dess fält har bytt betydelse under
+0174–0182 — annars migreras fält som ännu ändrar innebörd.
 
 ### Betningen tar hela grannskapet i ett svep (0183)
 

@@ -844,6 +844,13 @@ class AgentParams:
     kostnad_rackvidd: float = 6.0
     kostnad_prov: int = 6
 
+    # **Kustmätningen är avstängd som förval.** `Agent._dir_vatten` är ren
+    # diagnostik från 1015 — andelen sektorer som pekar mot vatten, för att
+    # skilja kustdjur från inlandsdjur i `--stats`. Den kostar sex
+    # celluppslag per djur och tick, alltså nio procent av `cell_of`-anropen,
+    # för ett tal ingen mekanism läser. Slås på när kustkontrollen ska mätas.
+    mat_dir_vatten: bool = False
+
     prey_search_radius: float = 6.0
     mate_search_radius: float = 5.0
     flee_radius: float = 6.0
@@ -3672,34 +3679,43 @@ class Agent:
         R = float(self.AP.kostnad_rackvidd)
         np_prov = max(1, int(self.AP.kostnad_prov))
         h = float(self.heading)
-        ut = []
-        for b in baringar:
-            a = h + float(b) * math.pi
-            ca, sa = math.cos(a), math.sin(a)
-            # **Värsta provet, inte medelvärdet.** En väg som slutar i djupt
-            # vatten är oframkomlig hur torr början än är, och medelvärdet
-            # späder ut faran just där den räknas: står djuret på stranden är
-            # fyra av sex prov torr mark, medelvärdet blir 0,2 och avdraget
-            # 0,08 mot ett födoanspråk på 0,63. Djuret går i, och kostnaden
-            # hinner ikapp först när de flesta proven är våta — alltså när det
-            # redan står i vattnet och försöker vända.
-            #
-            # Närmare prov väger tyngre. Ett hinder en cellbredd bort är
-            # angeläget nu; ett sex cellbredder bort hinner djuret gå runt, och
-            # med bunden bäring vore det annars omöjligt att röra sig längs en
-            # kust över huvud taget.
-            varst = 0.0
-            for j in range(np_prov):
-                frak = (j + 1) / np_prov
-                c = world.grid.cell_of(float(self.x) + R * frak * ca,
-                                       float(self.y) + R * frak * sa)
-                d = float(world.water[c])
-                if d > float(world.WP.submerged_threshold):
-                    k = min(1.0, d / ref) * hind * (1.0 - 0.5 * frak)
-                    if k > varst:
-                        varst = k
-            ut.append(varst)
-        return ut
+
+        # **Alla prov för alla bäringar i ett svep.**
+        #
+        # Uttrycket är oförändrat; det som ändrats är att provpunkterna slås upp
+        # tillsammans. `grid.cell_of` anropades en gång per prov och bäring —
+        # sex gånger åtta — och blev därmed modellens enskilt största post:
+        # uppmätt 791 489 anrop på tjugofem tick med 482 djur, alltså
+        # **sextiofem per djur och tick**, och sjutton procent av tickens tid.
+        #
+        # `cell_of_many` finns sedan tidigare och gör samma sak vektoriserat.
+        # Fyrtioåtta anrop blir ett.
+        _b = np.asarray(baringar, dtype=np.float64) * math.pi + h
+        _frak = (np.arange(np_prov, dtype=np.float64) + 1.0) / np_prov
+        _ca = np.cos(_b)[:, None]
+        _sa = np.sin(_b)[:, None]
+        _xs = float(self.x) + R * _frak[None, :] * _ca
+        _ys = float(self.y) + R * _frak[None, :] * _sa
+        _c = np.asarray(world.grid.cell_of_many(_xs.ravel(), _ys.ravel()))
+        _d = np.asarray(world.water, dtype=np.float64)[_c].reshape(n, np_prov)
+
+        # **Värsta provet, inte medelvärdet.** En väg som slutar i djupt vatten
+        # är oframkomlig hur torr början än är, och medelvärdet späder ut faran
+        # just där den räknas: står djuret på stranden är fyra av sex prov torr
+        # mark, medelvärdet blir 0,2 och avdraget 0,08 mot ett födoanspråk på
+        # 0,63. Djuret går i, och kostnaden hinner ikapp först när de flesta
+        # proven är våta — alltså när det redan står i vattnet och försöker
+        # vända.
+        #
+        # Närmare prov väger tyngre. Ett hinder en cellbredd bort är angeläget
+        # nu; ett sex cellbredder bort hinner djuret gå runt, och med bunden
+        # bäring vore det annars omöjligt att röra sig längs en kust över huvud
+        # taget.
+        _vat = _d > float(world.WP.submerged_threshold)
+        _k = np.minimum(1.0, _d / max(ref, 1e-12)) * hind * (1.0 - 0.5 * _frak[None, :])
+        _k = np.where(_vat, _k, 0.0)
+        ut = np.maximum(_k.max(axis=1), 0.0)
+        return [float(v) for v in ut]
 
     def _body_depth(self) -> float:
         """
@@ -4281,18 +4297,17 @@ class Agent:
         # Uppslaget går via samma `world.water` och `submerged_threshold` som
         # hydro skriver, i samma punkt som `_kostnad_vag` provar.
         self._dir_vatten = 0.0
-        if self._dir_food is not None:
+        if self.AP.mat_dir_vatten and self._dir_food is not None:
             try:
                 _S6 = int(len(self._dir_food))
-                _thr = float(world.WP.submerged_threshold)
-                _nv = 0
-                for _k in range(_S6):
-                    _a = float(self.heading) + (_k + 0.5) * (2.0 * math.pi / _S6)
-                    _cx = float(self.x) + 2.0 * math.cos(_a)
-                    _cy = float(self.y) + 2.0 * math.sin(_a)
-                    if float(world.water[self.grid.cell_of(_cx, _cy)]) > _thr:
-                        _nv += 1
-                self._dir_vatten = _nv / max(1, _S6)
+                _a = float(self.heading) + (np.arange(_S6, dtype=np.float64) + 0.5) \
+                    * (2.0 * math.pi / _S6)
+                _c = world.grid.cell_of_many(
+                    float(self.x) + 2.0 * np.cos(_a),
+                    float(self.y) + 2.0 * np.sin(_a))
+                self._dir_vatten = float(
+                    (np.asarray(world.water, dtype=np.float64)[np.asarray(_c)]
+                     > float(world.WP.submerged_threshold)).mean())
             except Exception:
                 self._dir_vatten = 0.0
         explore_drive *= 1.0 - _hunger * _food_local
