@@ -734,11 +734,37 @@ class AgentParams:
     # veckor, protein sist. Modellen hade det första och det tredje, så svälten
     # var abrupt.
     #
-    # 0,25 per månad betyder att fettet räcker ungefär fyra månader vid full
-    # mobilisering — en vinter. Talet är valt ur den tidsskala poolen ska
-    # täcka, inte trimmat: `M_fast` täcker tick, `M_slow` ska täcka säsong, och
-    # strukturen är sista utvägen.
-    slow_mobil_frac: float = 0.25
+    # **Talet var 0,25 och blandade ihop en uttagstakt med en varaktighet.**
+    #
+    # Motiveringen löd att fettet då räcker fyra månader vid full mobilisering.
+    # Men 0,25 per månad betyder inte att poolen varar fyra månader — det
+    # betyder att **högst en fjärdedel av den får tas ut per månad**. Räcker
+    # inte det för underhållet svälter organismen oavsett hur mycket fett den
+    # bär.
+    #
+    # Uppmätt gjorde det just det. `M_fast` är noll i median — den snabba poolen
+    # är en genomströmning som fylls och töms varje tick — så hela reserven
+    # ligger i `M_slow`, median 0,215 kg. Uttagstaket blir 0,0013 kg per tick
+    # mot ett underhåll på 0,026:
+    #
+    #     taket täcker **fyra procent av behovet**
+    #
+    # Organismen svalt alltså med full tank. Det märktes inte tidigare därför
+    # att aptiten var obegränsad: djuret åt 1,8 kg per tick och skyfflade
+    # 0,29 kg genom den snabba poolen, vilket räckte tio gånger om.
+    # **Genomströmningen var bufferten**, och när aptiten begränsades till det
+    # som får plats föll den bort och taket blev synligt.
+    #
+    # Fett finns för att kunna brännas. Takets uppgift är att göra svälten
+    # *gradvis*, inte att göra fettet oåtkomligt. 1,5 per månad betyder att
+    # poolen kan mobiliseras fullt på omkring tre veckor — långsamt mot
+    # glykogenets tick, snabbt mot strukturens sista utväg.
+    #
+    # Talet hänger ihop med reservtaket: vid det gamla taket, 0,215 kg, täcker
+    # 1,5 bara en fjärdedel av underhållet, och vid det nya, 1,18 kg, täcker det
+    # 136 procent. **De två går inte att flytta var för sig**, vilket är mätt
+    # tre gånger i följd under det här arbetet.
+    slow_mobil_frac: float = 1.5
 
     # Späckets isolerande verkan: den andel av värmeledningen `K` som faller
     # bort vid full späckandel.
@@ -1015,6 +1041,9 @@ class Body:
     # Kroppens högsta uppnådda massa, med långsam avklingning. Referensen för
     # avmagring; se `Body._uppdatera_topp`.
     _M_peak: float = 0.0
+    # Förra tickens totala utflöde, i kilo labil massa. Aptitens behovsterm; se
+    # `Agent._perform_feeding`.
+    _kg_ut_forra: float = 0.0
     # Reservkapacitet per kilo, cachad från fenotypen så E_cap() kan läsa den.
     _reserve_cap: float = 0.0
 
@@ -1878,6 +1907,10 @@ class Body:
             out_basal + out_compute + out_sense + out_loco + out_thermo
             + out_gest_overhead
         )
+
+        # Sparas för aptiten: nästa tick vill organismen äta det den nyss brände
+        # plus det som får plats. Se `Agent._perform_feeding`.
+        self._kg_ut_forra = float(E_out_drain) / max(1e-30, float(_E_labile))
 
         paid = float(self.take_energy(E_out_drain, dt=dt))
         deficit = max(0.0, E_out_drain - paid)
@@ -2823,6 +2856,11 @@ class Agent:
     # `None` betyder att den ännu inte dragits — vilket bara gäller innan
     # `Population` hunnit ge organismen sin `rng`.
     _bearare: object = field(init=False, default=None, repr=False, compare=False)
+
+    # Senast uppmätta assimilationsandel, alltså assimilerat genom ingesterat.
+    # Används för att räkna om ett behov i labil massa till ett intag i
+    # rå föda; se `_perform_feeding`. Förvalet gäller tills första målet ätits.
+    _assim_ratio: float = field(init=False, default=0.25, repr=False, compare=False)
 
     _mv_step: float = field(init=False, default=0.0, repr=False, compare=False)
     _mv_dir: float = field(init=False, default=0.0, repr=False, compare=False)
@@ -4087,7 +4125,40 @@ class Agent:
         if allow_eat <= 0.20:
             return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
 
-        want_kg = float(self.AP.eat_rate) * dt * (0.25 + 0.75 * float(self.body.hunger()))
+        # **Aptiten begränsas av hur mycket som får plats.**
+        #
+        # Uttrycket var `eat_rate · dt · (0,25 + 0,75 · hunger)`, alltså enbart
+        # motivationsstyrt. Det tog ingen hänsyn till reservens återstående
+        # utrymme, och överskottet töms som exkrement i `Body.step` — `Et > Ecap`.
+        #
+        # Uppmätt i p187 var det **fyrtiofem procent av allt som togs upp**:
+        # 3 966 kg mot underhållets 4 296. Ett tugg vid full hunger ger 0,384 kg
+        # labil massa mot ett reservtak på 0,319 — **ett enda mål kan fylla hela
+        # reserven 1,2 gånger**, och resten går rakt igenom.
+        #
+        # Följden är inte bara spilld tid. Betestrycket på floran blir dubbelt
+        # så högt som organismen har nytta av, i en värld där floran är den
+        # begränsande resursen.
+        #
+        # Kommentaren vid tömningen sa redan vad som borde göras: *"Att i stället
+        # begränsa intaget vid källan är biologiskt renare men rör födosöket, och
+        # tas när kalibreringen är stabil."*
+        #
+        # Behovet är återstående utrymme plus vad ticken kommer att förbränna,
+        # omräknat till rå föda med den senast uppmätta assimilationsandelen.
+        # `eat_rate · dt` står kvar som **tak** — hur fort munnen hinner — i
+        # stället för som drivkraft.
+        _Ecap = float(self.body.E_cap())
+        _Et = float(self.body.E_total())
+        _e_lab = float(self.AP.E_labile_J_per_kg)
+        _utrymme = max(0.0, (_Ecap - _Et) / _e_lab)
+        _forbrukning = max(0.0, float(getattr(self.body, "_kg_ut_forra", 0.0)))
+        _assim = min(1.0, max(0.02, float(getattr(self, "_assim_ratio", 0.25))))
+        want_kg = min(float(self.AP.eat_rate) * dt,
+                      (_utrymme + _forbrukning) / _assim)
+        # Hungern styr fortfarande *om* organismen bryr sig om att äta, via
+        # `allow_eat` och födoanspråkets styrka. Den behöver inte längre också
+        # bestämma mängden.
         diet = float(getattr(self.pheno, "diet", 0.5))
         got_l, got_d, e_l, e_d = world.consume_food(
             self.x,
@@ -4102,6 +4173,10 @@ class Agent:
 
         a_l = self._excrete(world, got_l, e_l, herb_eff)
         a_d = self._excrete(world, got_d, e_d, scav_eff)
+
+        _ing = float(got_l) + float(got_d)
+        if _ing > 1e-12:
+            self._assim_ratio = min(1.0, max(0.02, (float(a_l) + float(a_d)) / _ing))
 
         return float(got_l), float(got_d), float(e_l), float(e_d), float(a_l), float(a_d)
 

@@ -2573,6 +2573,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0185~~ | genomklämman höjs så att det deklarerade spannet blir nåbart | selektionen | **klart**, se nedan |
 | ~~0186~~ | kustmätningen flyttar från modellen till instrumenteringen | mätningen | **klart**, se nedan |
 | ~~0187~~ | bärarrollen blir en ärftlig allokering i stället för massa | selektionen | **klart**, se nedan — `M_target` stannar |
+| ~~0189~~ | aptiten, reservtaket och fettets uttagstakt som en enhet | svälten | **klart**, se nedan — spillet 1249 → 91 kg |
 | — | Fishers jämvikt nås inte; bärarandelen beror på `lactation_k` | reproduktionen | **öppen**, se 0187 |
 | ~~—~~ | `f6-256-mager`: bär perceptet någon riktning i en fläckig värld? | 0169, kärnan | **scenariot finns**, kör det |
 | — | per-agent-Python är kvar; store-first och Numba är nästa | prestanda | **öppen**, manifestets Fas 4–5 |
@@ -2680,6 +2681,83 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Reserven fungerade inte som reserv (0189)
+
+Frågan var varför faunan svälter när det finns hundra till sjuhundra gånger mer
+växt per djur än i en verklig ekologi och Hollings tak ligger 6,6 gånger över
+behovet. Svaret visade sig vara tre kopplade fel i reservens hantering, och
+**inget av dem går att rätta ensamt** — det prövades och beståndet föll varje
+gång.
+
+**Ett: aptiten kände inte till utrymmet.** `eat_rate · dt · (0,25 + 0,75 ·
+hunger)` är rent motivationsstyrd. Ett tugg vid full hunger ger 0,384 kg labil
+massa mot ett reservtak på 0,319 — **ett mål kan fylla hela reserven 1,2 gånger**
+— och överskottet töms i `Body.step` som `Et > Ecap`. Uppmätt fyrtiofem procent
+av allt som togs upp, alltså dubbelt betestryck på floran utan nytta.
+
+**Två: taket enforcerades bara en gång per tick.** Uppmätt reservfyllnad före
+rättelsen:
+
+```
+E_total / E_cap    p10 1,000   median 1,000   p75 1,344   p90 3,677
+```
+
+Djuren bar alltså **1,3 till 3,7 gånger sitt nominella tak** mellan passen, upp
+till 61 procent av kroppen som fett. Nominellt tak och verklig kapacitet var två
+olika tal, och `Body.step` slängde skillnaden.
+
+**Tre: fettet gick inte att ta ut.** `M_fast` är **noll i median** — den snabba
+poolen är en genomströmning som fylls och töms varje tick — så hela reserven
+ligger i `M_slow`. Med `slow_mobil_frac = 0,25` per månad blir uttaget 0,0013 kg
+per tick mot ett underhåll på 0,026:
+
+```
+taket täckte fyra procent av behovet
+```
+
+**Organismen svalt med full tank.** Det märktes inte, därför att överätandet
+skyfflade 0,29 kg per tick genom den snabba poolen — genomströmningen *var*
+bufferten. Så snart aptiten begränsades föll den bort och taket blev synligt.
+Konstantens motivering blandade dessutom ihop en uttagstakt med en varaktighet:
+0,25 per månad betyder inte att fettet räcker fyra månader, utan att högst en
+fjärdedel får tas ut per månad.
+
+**Rättelserna, som en enhet.**
+
+Aptiten blir återstående utrymme plus ticken förbrukning, omräknat med den
+senast uppmätta assimilationsandelen; `eat_rate · dt` står kvar som tak — hur
+fort munnen hinner — i stället för som drivkraft.
+
+Reservtaket sätts ur verkligt fett. `M` innehåller inte reserven, så
+`reserve_cap` är fett per kilo **stomme**:
+
+```
+reserve_cap    per kg stomme    andel av kroppen
+0,5e6              0,054              5,1 %     mager gnagare
+4,0e6              0,430             30,1 %     jordekorre — gamla taket
+1,1e7              1,183             54,2 %     sjusovare före dvala
+```
+
+Taket vid femtiofyra procent gör en dvalande strategi nåbar utan att göra den
+påbjuden. Golvet står kvar.
+
+Uttagstakten blir 1,5 per månad, alltså full mobilisering på omkring tre veckor
+— långsamt mot glykogenets tick, snabbt mot strukturens sista utväg. Vid det nya
+taket täcker det 136 procent av underhållet; vid det gamla bara en fjärdedel,
+vilket är varför de två inte går att flytta var för sig.
+
+**Utfallet i `liten6`, 300 tick, tre frön:**
+
+```
+                bestånd        underhåll strypt   spill
+baslinje        81  88 126     2,9 3,5 4,2 %      1249 kg
+0189           101 103 114     4,4 4,0 4,1 %        91 kg
+```
+
+Spillet faller med en faktor fjorton och beståndet stiger. Reservfyllnaden blir
+median 0,971 med p10 0,779 och fyra promille tomma — en reserv som används i
+stället för en som svämmar över.
 
 ### Bärarrollen blir en ärftlig allokering (0187)
 

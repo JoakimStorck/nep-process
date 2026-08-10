@@ -392,8 +392,36 @@ class PhenoRanges:
     fast_frac_min: float = 0.50
     fast_frac_max: float = 0.95
 
+    # **Reservens tak, i joule per kilo stomme.** `M` innehåller inte reserven,
+    # så talet är fett i förhållande till kroppens ram och inte till hela
+    # kroppen. Omräknat med `E_labile_J_per_kg = 9,302e6`:
+    #
+    #     reserve_cap   kg reserv per kg stomme   andel av hela kroppen
+    #     0,5e6              0,054                      5,1 %
+    #     4,0e6              0,430                     30,1 %
+    #     1,1e7              1,183                     54,2 %
+    #
+    # Verkliga tal: en liten icke-dvalande gnagare bär fem till femton procent
+    # fett, en jordekorre före dvala omkring fyrtio, och en sjusovare eller en
+    # flyttfågel före resan femtio till sextio. Taket sätts därför vid
+    # **femtiofyra procent** — den fetaste vilda kroppen, med lite marginal —
+    # så att en dvalande strategi är nåbar utan att vara påbjuden. Golvet lämnas
+    # där det är: fem procent är en mager gnagare, och det är rätt undre ände.
+    #
+    # Det gamla taket, 30 procent, motsvarar en jordekorre. Det hade räckt om
+    # det gällt — men **taket enforcerades bara en gång per tick**, i
+    # `Body.step`, och aptiten tog ingen hänsyn till återstående utrymme.
+    # Uppmätt bar djuren i praktiken 1,3 till 3,7 gånger sitt nominella tak
+    # mellan passen, alltså upp till 61 procent av kroppen som fett, och
+    # `Body.step` slängde överskottet. Nominellt tak och verklig kapacitet var
+    # två olika tal.
+    #
+    # När aptiten begränsas till det som får plats faller den dolda
+    # kapaciteten bort, och taket måste bära vad det säger att det bär. Vid
+    # 1,1e7 räcker reserven 45 tick, alltså **28 dygn** av underhåll, mot
+    # tio vid det gamla.
     reserve_cap_min: float = 0.5e6
-    reserve_cap_max: float = 4.0e6
+    reserve_cap_max: float = 1.1e7
 
     repair_capacity_min: float = 0.10
     repair_capacity_max: float = 1.50   # höjt — k_age1 ger lägre inflöde än k_age0=0.2
