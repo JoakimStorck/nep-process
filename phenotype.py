@@ -361,8 +361,12 @@ class PhenoRanges:
 
     # Barnets massa vid födseln.
     # Kompromiss: litet nog att kosta föräldern rimligt, stort nog att överleva.
-    child_M_min: float = 0.16   # var 0.10 → 0.05 (för litet gav utrotning)
-    child_M_max: float = 0.40   # var 0.30 → 0.15 (gav utrotning) → 0.20
+    # Kullens totala massa som **andel av vuxenmassan** — reproduktiv
+    # ansträngning. Vid `M_target = 2,0` ger spannet 0,16–0,40 kg, alltså exakt
+    # de absoluta talen som stod här. Ett verkligt litet däggdjur investerar tio
+    # till tjugofem procent per kull; åtta till tjugo ligger i det spannet.
+    child_frac_min: float = 0.08
+    child_frac_max: float = 0.20
 
     # Kullstorlekens spann. Nedre änden är en unge, alltså dagens beteende som
     # specialfall och inte som borttaget. Vid övre änden och minsta investering
@@ -394,8 +398,10 @@ class PhenoRanges:
     predation_min: float = 0.0
     predation_max: float = 1.0
 
-    M_repro_min_min: float = 0.30   # var 0.20 — lite lägre för att hinna reproducera
-    M_repro_min_max: float = 0.90   # var 0.45
+    # Fortplantningsmassa som **andel av vuxenmassan**. Vid `M_target = 2,0`
+    # ger spannet 0,30–0,90 kg, alltså exakt de absoluta talen som stod här.
+    M_repro_frac_min: float = 0.15
+    M_repro_frac_max: float = 0.45
 
     # Nätverksarkitektur — tillåtna bredder för dolda lager.
     # Diskreta steg via snap-funktion i derive_pheno.
@@ -451,6 +457,30 @@ def derive_pheno(traits: np.ndarray | None, R: PhenoRanges = PhenoRanges()) -> P
     hidden_1 = _snap_hidden(u_h1, int(R.hidden_min), int(R.hidden_max))
     hidden_2 = _snap_hidden(u_h2, int(R.hidden_min), int(R.hidden_max))
 
+    # **Livshistoriens massor är andelar av vuxenmassan, inte absoluta tal.**
+    #
+    # `M_target` spänner 0,2–4,0 kg, alltså tjugo gångers skillnad i kroppsstorlek.
+    # `child_M` och `M_repro_min` var absoluta och oberoende av den:
+    #
+    #   en kropp med `M_target = 0,20` skulle investera 0,16–0,40 kg i en kull,
+    #   alltså upp till **tvåhundra procent av sin egen vuxenmassa**, och nå
+    #   fortplantningsmassan 0,3–0,9 kg först efter att ha passerat den. Den kan
+    #   aldrig reproducera sig.
+    #
+    #   en kropp med `M_target = 4,00` investerar fyra till tio procent och
+    #   mognar vid åtta till tjugotvå. Den har det för lätt.
+    #
+    # Uppmätt investerade åtta procent av populationen mer än halva sin egen
+    # vuxenmassa i en kull. Kroppsstorleken var därmed inte en livshistorie-
+    # strategi utan bara en underhållskostnad — den gav ingen billigare
+    # reproduktion tillbaka.
+    #
+    # Andelarna är valda så att medianen ligger kvar där de absoluta talen låg
+    # vid `M_target ≈ 2,0`, alltså **bevarad storlek, rättad form**. Vad de
+    # faktiskt bör vara är en egen fråga: ett verkligt däggdjur föder vid sextio
+    # till åttio procent av vuxenmassan, inte vid tjugofem.
+    M_target = float(_lerp(R.M_target_min, R.M_target_max, u_Mtarget))
+
     return Phenotype(
         A_mature=float(_lerp(R.A_mature_min, R.A_mature_max, u_mature)),
         repro_rate=float(_lerp(R.repro_rate_min, R.repro_rate_max, u_prepro)),
@@ -458,8 +488,8 @@ def derive_pheno(traits: np.ndarray | None, R: PhenoRanges = PhenoRanges()) -> P
         repro_cost=float(_lerp(R.repro_cost_min, R.repro_cost_max, u_cost)),
     
         # NEW
-        M_repro_min=float(_lerp(R.M_repro_min_min, R.M_repro_min_max, u_mrepro)),
-        M_target=float(_lerp(R.M_target_min, R.M_target_max, u_Mtarget)),
+        M_repro_min=float(M_target * _lerp(R.M_repro_frac_min, R.M_repro_frac_max, u_mrepro)),
+        M_target=M_target,
     
         metabolism_scale=float(_lerp(R.metabolism_min, R.metabolism_max, u_metab)),
         susceptibility=float(_lerp(R.susceptibility_min, R.susceptibility_max, u_susc)),
@@ -477,7 +507,7 @@ def derive_pheno(traits: np.ndarray | None, R: PhenoRanges = PhenoRanges()) -> P
         child_E_fast=float(_lerp(R.child_E_fast_min, R.child_E_fast_max, u_cef)),
         child_E_slow=float(_lerp(R.child_E_slow_min, R.child_E_slow_max, u_ces)),
         child_Fg=float(_lerp(R.child_Fg_min, R.child_Fg_max, u_cfg)),
-        child_M=float(_lerp(R.child_M_min, R.child_M_max, u_childM)),
+        child_M=float(M_target * _lerp(R.child_frac_min, R.child_frac_max, u_childM)),
     
         risk_aversion=float(u_risk),
         sociability=float(u_soc),

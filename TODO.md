@@ -2566,6 +2566,8 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0178~~ | avsvalningen härleds ur dräktighet och laktation | reproduktionen | **klart**, se nedan |
 | ~~0179~~ | kullstorleken som ärftlig axel; dödströskeln blir relativ | reproduktionen, r/K | **klart**, se nedan |
 | ~~0180~~ | avmagring mäts mot kroppens egen topp, inte mot ett löfte | selektionen | **klart**, se nedan |
+| ~~0181~~ | livshistoriens massor blir andelar av vuxenmassan | selektionen | **klart**, se nedan |
+| — | `M_repro_frac` 0,15–0,45 är bevarad storlek; verkligt är 0,6–0,8 | livshistorien | **öppen**, se 0181 |
 | — | `M_waste_frac = 0,075` är bevarad storlek, inte fysiologisk | mortaliteten | **öppen**, se 0179 |
 | — | `child_M` är absolut där den borde vara en andel av `M_target` | livshistorien | **öppen**, se 0179 |
 | — | kullstorleken som ärftlig axel: antal mot storlek | reproduktionen | **öppen**, nästa |
@@ -2668,6 +2670,39 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Livshistoriens massor blir andelar av vuxenmassan (0181)
+
+`M_target` spänner 0,2–4,0 kg, alltså tjugo gångers skillnad i kroppsstorlek.
+`child_M` och `M_repro_min` var **absoluta** och oberoende av den:
+
+  en kropp med `M_target = 0,20` investerade 0,16–0,40 kg i en kull, alltså upp
+  till **tvåhundra procent av sin egen vuxenmassa**, och nådde
+  fortplantningsmassan 0,3–0,9 kg först efter att ha passerat den. Den kunde
+  aldrig reproducera sig.
+
+  en kropp med `M_target = 4,00` investerade fyra till tio procent och mognade
+  vid åtta till tjugotvå. Den hade det för lätt.
+
+Uppmätt investerade **åtta procent av populationen mer än halva sin egen
+vuxenmassa** i en kull. Kroppsstorleken var därmed inte en livshistoriestrategi
+utan bara en underhållskostnad — den gav ingen billigare reproduktion tillbaka,
+och det förklarar varför `M_target` kunde drivas uppåt i p179 utan att betala.
+
+Andelarna är valda så att medianen ligger kvar där de absoluta talen låg vid
+`M_target ≈ 2,0`: `child_frac` 0,08–0,20 ger 0,16–0,40 kg och `M_repro_frac`
+0,15–0,45 ger 0,30–0,90 kg. **Bevarad storlek, rättad form** — samma mönster som
+`E_move` i 0174 och betningen i 0176.
+
+Uppmätt i `liten6`, 400 tick, tre frön: 49/81/59 mot 0180:s 78/54/47. Spridningen
+mellan frön är stor och riktningen otydlig vid de talen; det som är verifierat är
+att axeln blivit skalfri.
+
+**En öppen post.** `M_repro_frac` 0,15–0,45 betyder att ett djur föder vid
+femton till fyrtiofem procent av sin vuxenmassa. Ett verkligt däggdjur gör det
+vid sextio till åttio. Talet är bevarat och inte härlett, av samma skäl som
+`M_waste_frac`: hela mortalitets- och tillväxtkalibreringen vilar på de gamla
+absoluta värdena och måste flyttas som en enhet.
 
 ### Avmagring mäts mot kroppens egen topp (0180)
 
