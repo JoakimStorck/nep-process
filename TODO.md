@@ -2568,6 +2568,8 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0180~~ | avmagring mäts mot kroppens egen topp, inte mot ett löfte | selektionen | **klart**, se nedan |
 | ~~0181~~ | livshistoriens massor blir andelar av vuxenmassan | selektionen | **klart**, se nedan |
 | ~~0182~~ | mognaden blir ett utfall, inte en ålder | selektionen | **klart**, se nedan |
+| ~~0183~~ | betningen tar hela grannskapet i ett svep | prestanda | **klart**, se nedan — 3,4× |
+| — | `cell_of` anropas 65 gånger per djur och tick | prestanda | **öppen**, nästa |
 | — | `M_repro_frac` 0,15–0,45 är bevarad storlek; verkligt är 0,6–0,8 | livshistorien | **öppen**, se 0181 |
 | — | `M_waste_frac = 0,075` är bevarad storlek, inte fysiologisk | mortaliteten | **öppen**, se 0179 |
 | — | `child_M` är absolut där den borde vara en andel av `M_target` | livshistorien | **öppen**, se 0179 |
@@ -2671,6 +2673,49 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Betningen tar hela grannskapet i ett svep (0183)
+
+Uttaget var en nästlad Python-loop: för varje cell i grannskapet, för varje
+planta i cellen, `min(edible, amt)` med ett tiotal `float()`-omvandlingar per
+besök.
+
+Så länge betet var glest räckte det — kommentaren i koden noterade 1,22 plantor
+per anrop. **Den siffran gäller inte längre.** När betestrycket stiger ligger
+plantorna vid sin meristemrefug, `edible` är noll, och loopen skannar hela
+grannskapet utan att ta något. `cell_avail` kan inte fånga det, eftersom den bär
+skottmassan `max(0, m − rot)` medan det ätbara är `m − rot · meristem_keep`: en
+cell kan ha skott men inget ätbart.
+
+Kostnaden växte alltså **med** betestrycket, vilket är precis fel håll.
+
+Uppmätt på `liten6` med 482 djur, 25 tick:
+
+```
+                              tottime/anrop   kumulativt   ms/tick
+före                              322 µs         472 µs      931
+cellvis vektorisering             235 µs         459 µs        —
+hela grannskapet i ett svep        94 µs         281 µs      854
+```
+
+**Cellvis vektorisering gav bara en tredjedel.** Med ett tjugotal plantor per
+cell är numpy-anropens fasta kostnad — omkring trettiofem mikrosekunder per cell
+— större än arbetet. Sju celler i ett svep gör den kostnaden till en sjundedel,
+och det är den formen som gäller.
+
+`OrganismStore.slots_in_cells` slår upp flera celler med ett `searchsorted` och
+en konkatenering, i cellernas ordning. Ordningen är densamma som den gamla
+nästlade loopens, eftersom `cells_within` ger ringarna inifrån och ut, så
+girigheten fyller tuggan ur samma plantor i samma följd. Uttaget blir en
+`cumsum` med ett `searchsorted`.
+
+**Bitidentiskt tillstånd efter trettio tick**: floramassa 83341,492188 kg,
+64 672 plantor, 39 djur, cellsumma 41346,750000 — samma tal före och efter.
+
+Tickvinsten är åtta procent. Det låter lite och är rätt: betningen var
+tjugotvå procent av tiden och är nu elva. **Det som blev störst i stället är
+`cell_of` med 791 489 anrop på 25 tick — sextiofem per djur och tick**, alltså
+tolv procent av tottime och sjutton kumulativt. Den står näst i tur.
 
 ### Mognaden blir ett utfall (0182)
 

@@ -2099,73 +2099,91 @@ class Population:
         # `PopParams.flora_meristem_frac`.
         meristem_keep = 1.0 + max(0.0, float(self.PP.flora_meristem_frac))
 
-        for ci, cell in enumerate(ordered_cells):
-            if float(cell_avail[ci]) <= 1e-12:
-                continue
-            for slot in self.store.slots_in_cell(cell):
-                s = int(slot)
-    
-                if amt <= 1e-12:
-                    break
-                if not bool(self.store.alive[s]) or int(self.store.kind[s]) != 1:
-                    continue
-    
-                m = float(self.store.mass[s])
-                if m <= 1e-12:
-                    continue
-    
-                # Betningshorisonten. Betaren tar skott och lämnar roten, precis
-                # som en verklig betare tar blad och lämnar meristem. Plantan
-                # överlever varje passage och skjuter igen ur sin reserv.
-                #
-                # Skälet är mätt. Betaren tömmer inte ett grannskap — den lämnar
-                # det två till sex gånger snabbare än den hinner: 18 tick att
-                # passera mot 44 att beta ner ett mediangrannskap. Men den tar
-                # `min(m, amt)` per *planta*, och medianplantan väger 0,197 kg
-                # mot en tugga på 0,907. Varje tugga svepte därför upp flera
-                # hela småplantor, och i p70 föll floran från 37 324 till 5 396
-                # individer under en betningstopp — antalet i takt med massan,
-                # vilket bara sker om hela växter försvinner.
-                #
-                # Refugen som saknades var alltså inte att lämna plantor i
-                # cellen, utan att lämna en del av varje planta. Det ger
-                # tröskeleffekten typ II saknar, ur en fysisk begränsning i
-                # stället för en postulerad kurva — och det ger `root_alloc` en
-                # ny konsekvens: rot är betesskydd, och den som satsat på skott
-                # betalar för det när trycket kommer.
-                # En betare tar blad och lämnar meristem. Lämnar den bara
-                # roten blir bladarean noll och plantan kan aldrig
-                # fotosyntetisera igen.
-                edible = m - float(self.store.flora_root_mass[s]) * meristem_keep
-                if edible <= 1e-12:
-                    continue
-    
-                take = edible if edible < amt else amt
-                new_m = m - take
-    
-                self.store.mass[s] = np.float32(new_m)
-                e_kg = self._slot_energy_per_kg(s)
-                self.store.energy[s] = np.float32(max(0.0, new_m * e_kg))
-                got += take
-                energy += take * e_kg
-                amt -= take
+        # **Uttaget görs cellvis och vektoriserat.**
+        #
+        # Loopen tog `min(edible, amt)` per planta i den ordning cellindexet
+        # gav dem, med ett tiotal `float()`-omvandlingar per besök. Så länge
+        # betet var glest räckte det: kommentaren nedan noterade 1,22 plantor
+        # per anrop.
+        #
+        # Den siffran gäller inte längre. När betestrycket stiger ligger
+        # plantorna vid sin meristemrefug, `edible` är noll, och loopen
+        # **skannar hela grannskapet utan att ta något** — uppmätt 140
+        # växtbesök per djur och tick, 356 mikrosekunder per anrop och tjugotvå
+        # procent av hela tickens tid vid tusentals djur. Kostnaden växte alltså
+        # med betestrycket, vilket är precis fel håll.
+        #
+        # `cell_avail` kan inte fånga det, eftersom den bär skottmassan
+        # `max(0, m − rot)` medan det ätbara är `m − rot · meristem_keep`.
+        # En cell kan alltså ha skott men inget ätbart.
+        #
+        # Samma ordning, samma `min(edible, amt)`, men som en `cumsum` över
+        # cellens slotar. Utfallet är identiskt så när som på
+        # flyttalsavrundning.
+        # Hela grannskapet i ett svep. Cellvis vektorisering prövades och gav
+        # bara en tredjedel: med ett tjugotal plantor per cell är numpy-anropens
+        # fasta kostnad, omkring trettiofem mikrosekunder, större än arbetet.
+        # `slots_in_cells` slår upp alla cellerna med ett `searchsorted` och en
+        # konkatenering, så de sju cellernas hundrafyrtio plantor blir en
+        # array-operation i stället för sjuttio små.
+        E_lab = float(self.WP.E_labile_J_per_kg)
+        sl = self.store.slots_in_cells(cells)
+        if sl.size == 0:
+            return 0.0, 0.0
+        sl = np.asarray(sl, dtype=np.int64)
 
-                # Cellens skottförråd skrivs av direkt. Utan det skulle nästa
-                # betare inom samma tick se massa som redan är uppäten, och
-                # tillgängligheten vore inte längre den verkliga.
-                self.store.flora_cell_mass[cell] = np.float32(
-                    max(0.0, float(self.store.flora_cell_mass[cell]) - take)
-                )
-    
-                if new_m <= 1e-12:
-                    # Nås numera bara av plantor utan rotmassa alls. Betning kan
-                    # inte längre döda en planta med rot; svältdöden i
-                    # tillväxtpasset tar den som betats under sitt golv.
-                    self._release_flora_slot(s)
-    
-            if amt <= 1e-12:
-                break
-    
+        m = self.store.mass[sl].astype(np.float64, copy=False)
+        ok = (self.store.alive[sl]) & (self.store.kind[sl] == 1) & (m > 1e-12)
+        ed = m - self.store.flora_root_mass[sl].astype(np.float64,
+                                                       copy=False) * meristem_keep
+        ed = np.where(ok, ed, 0.0)
+        np.maximum(ed, 0.0, out=ed)
+        if not ed.any():
+            return 0.0, 0.0
+
+        # Girigheten i samma ordning som förut: fyll tuggan ur den första
+        # plantan, sedan nästa, tills den är full. `slots_in_cells` bevarar
+        # cellernas ordning, och `cells_within` ger ringarna inifrån och ut, så
+        # ordningen är densamma som den gamla nästlade loopens.
+        cs = np.cumsum(ed)
+        if cs[-1] <= amt:
+            take = ed
+        else:
+            k = int(np.searchsorted(cs, amt, side="left"))
+            take = ed.copy()
+            take[k + 1:] = 0.0
+            take[k] = amt - (cs[k - 1] if k > 0 else 0.0)
+
+        tot_take = float(take.sum())
+        if tot_take <= 1e-12:
+            return 0.0, 0.0
+
+        new_m = m - take
+        self.store.mass[sl] = new_m.astype(np.float32, copy=False)
+        e_kg = E_lab * (1.0 - self.store.structure[sl].astype(np.float64,
+                                                              copy=False))
+        self.store.energy[sl] = np.maximum(0.0, new_m * e_kg
+                                           ).astype(np.float32, copy=False)
+        got = tot_take
+        energy = float((take * e_kg).sum())
+
+        # Cellernas skottförråd skrivs av direkt, annars ser nästa betare inom
+        # samma tick massa som redan är uppäten. `add.at` eftersom flera slotar
+        # delar cell.
+        tagna = take > 0.0
+        if tagna.any():
+            np.add.at(self.store.flora_cell_mass,
+                      self.store.cell_idx[sl[tagna]],
+                      -take[tagna].astype(np.float32, copy=False))
+            np.maximum(self.store.flora_cell_mass, 0.0,
+                       out=self.store.flora_cell_mass)
+
+        # Nås numera bara av plantor utan rotmassa alls. Betning kan inte längre
+        # döda en planta med rot; svältdöden i tillväxtpasset tar den som betats
+        # under sitt golv.
+        for s_dead in sl[(new_m <= 1e-12) & tagna]:
+            self._release_flora_slot(int(s_dead))
+
         if got > 0.0:
             self._flora_summary_cache = None
     

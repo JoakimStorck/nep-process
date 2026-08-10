@@ -747,6 +747,44 @@ class OrganismStore:
             return self.cell_slots[0:0]
         return self.cell_slots[int(self.idx_starts[i]):int(self.idx_starts[i + 1])]
 
+    def slots_in_cells(self, cells: np.ndarray) -> np.ndarray:
+        """
+        Slotarna i flera celler, sammanslagna i cellernas ordning.
+
+        Samma uppslag som `slots_in_cell` men med **ett** `searchsorted` för
+        hela mängden och en enda konkatenering. Skälet är mätt: betningen
+        arbetade cell för cell, och med ett tjugotal plantor per cell blev
+        numpy-anropens fasta kostnad — omkring trettiofem mikrosekunder per
+        cell — större än arbetet. Sju celler i ett svep gör den kostnaden till
+        en sjundedel.
+        """
+        c = np.asarray(cells, dtype=np.int64).ravel()
+        idx = self.idx_cells
+        if c.size == 0 or idx.size == 0:
+            return self.cell_slots[0:0]
+        i = np.searchsorted(idx, c)
+        ok = (i < idx.size)
+        i_ok = np.where(ok, i, 0)
+        ok &= (idx[i_ok] == c)
+        if not ok.any():
+            return self.cell_slots[0:0]
+        i = i[ok]
+        a = self.idx_starts[i]
+        b = self.idx_starts[i + 1]
+        n = b - a
+        keep = n > 0
+        if not keep.any():
+            return self.cell_slots[0:0]
+        a = a[keep]
+        n = n[keep]
+        # Bygg indexvektorn utan Python-loop: repetera varje start och lägg på
+        # en löpande position inom sitt block.
+        tot = int(n.sum())
+        rep = np.repeat(a.astype(np.int64), n)
+        offs = np.arange(tot, dtype=np.int64) - np.repeat(
+            np.concatenate(([0], np.cumsum(n)[:-1])).astype(np.int64), n)
+        return self.cell_slots[rep + offs]
+
     def slot_for_id(self, id_: int) -> int:
         oid = int(id_)
         if oid < 0 or oid >= self.id_lookup_cap:
