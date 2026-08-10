@@ -77,7 +77,35 @@ class MutationConfig:
     # selektionen, och egenskaperna blir brus i stället för anpassningar.
     traits_sigma: float = 0.05
     traits_p: float = 0.15
-    traits_clip: float = 2.0  # clip to [-clip, clip]
+    # Klämman på locusvärdet, `[-clip, clip]`.
+    #
+    # **Den var 2,0, och det gjorde det deklarerade fenotypspannet onåbart.**
+    # Fenotypen fås som `_lerp(min, max, sigmoid(x))`, och `sigmoid(±2)` ger
+    # `u ∈ [0,119, 0,881]` — alltså bara **76 procent av spannet**, centrerat:
+    #
+    #     axel          deklarerat      nåbart vid 2,0    nåbart vid 4,0
+    #     M_target      0,20–4,00       0,653–3,547       0,268–3,932
+    #     A_mature      5,0–20,0        6,79–18,21        5,27–19,73
+    #     child_frac    0,08–0,20       0,094–0,186       0,082–0,198
+    #
+    # Det gällde alla fyrtiotre loci, och i p182 låg tre av dem hårt mot den:
+    # `M_target` landade på **0,653 i alla tre frön ner till tredje decimalen**,
+    # vilket är `logit(u) = −2,0000` exakt. `A_mature` gjorde detsamma på 6,81
+    # i ett frö, och `child_frac` i två.
+    #
+    # Att en axel pinnar vid sin gräns ska betyda att biologin tagit slut. Med
+    # klämman på 2,0 betydde det i stället att representationen gjorde det, och
+    # de två ser likadana ut i loggen. Vi kunde alltså se riktningen men inte
+    # om 0,653 kg är ett optimum eller en vägg.
+    #
+    # Att i stället bredda `M_target_min` flyttar bara klämman: med 0,05 blir
+    # nåbara golvet 0,52 i stället för 0,653.
+    #
+    # **Mappningens form är oförändrad.** Sigmoidens derivata vid ±clip är
+    # fortfarande omkring 2,4 gånger lägre än i mitten, så gränsen förblir mjuk
+    # och ett mutationssteg nära kanten flyttar fenotypen mindre än ett i
+    # mitten. Mutationssteget självt — `traits_sigma`, `traits_p` — rörs inte.
+    traits_clip: float = 4.0
 
     # trophic traits mutation (diet/predation)
     # Dessa traits representerar en djupare livsformsdisposition och ska därför

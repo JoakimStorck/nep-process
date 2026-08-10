@@ -2570,6 +2570,8 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0182~~ | mognaden blir ett utfall, inte en ålder | selektionen | **klart**, se nedan |
 | ~~0183~~ | betningen tar hela grannskapet i ett svep | prestanda | **klart**, se nedan — 3,4× |
 | ~~0184~~ | kostnadsproven batchas; kustmätningen blir valfri | prestanda | **klart**, se nedan — `cell_of` 4,8× färre |
+| ~~0185~~ | genomklämman höjs så att det deklarerade spannet blir nåbart | selektionen | **klart**, se nedan |
+| ~~—~~ | `f6-256-mager`: bär perceptet någon riktning i en fläckig värld? | 0169, kärnan | **scenariot finns**, kör det |
 | — | per-agent-Python är kvar; store-first och Numba är nästa | prestanda | **öppen**, manifestets Fas 4–5 |
 | — | `cell_of` anropas 65 gånger per djur och tick | prestanda | **öppen**, nästa |
 | — | `M_repro_frac` 0,15–0,45 är bevarad storlek; verkligt är 0,6–0,8 | livshistorien | **öppen**, se 0181 |
@@ -2675,6 +2677,47 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Genomklämman gjorde det deklarerade spannet onåbart (0185)
+
+I p182 landade `M_target` på **0,653 i alla tre frön, ner till tredje
+decimalen**. Det är ingen konvergens: `logit((0,653 − 0,20)/3,80) = −2,0000`
+exakt, och `genetics.traits_clip` stod på 2,0.
+
+Fenotypen fås som `_lerp(min, max, sigmoid(x))`, och `sigmoid(±2)` ger
+`u ∈ [0,119, 0,881]` — alltså **76 procent av det deklarerade spannet**,
+centrerat. Det gällde alla fyrtiotre loci:
+
+```
+axel          deklarerat      nåbart vid 2,0    nåbart vid 4,0
+M_target      0,20–4,00       0,653–3,547       0,268–3,932
+A_mature      5,0–20,0        6,79–18,21        5,27–19,73
+child_frac    0,08–0,20       0,094–0,186       0,082–0,198
+```
+
+Tre axlar låg hårt mot den i p182: `M_target` i alla frön, `A_mature` på 6,81 i
+ett, `child_frac` i två.
+
+**Att en axel pinnar vid sin gräns ska betyda att biologin tagit slut.** Med
+klämman på 2,0 betydde det i stället att representationen gjorde det, och de två
+ser likadana ut i loggen. Vi kunde se riktningen men inte om 0,653 kg är ett
+optimum eller en vägg.
+
+Att bredda `M_target_min` flyttar bara klämman — med 0,05 blir nåbara golvet 0,52
+i stället för 0,653. Det är klämman själv som måste flyttas.
+
+Mappningens form är oförändrad: sigmoidens derivata vid `±clip` är fortfarande
+omkring 2,4 gånger lägre än i mitten, så gränsen förblir mjuk och ett
+mutationssteg nära kanten flyttar fenotypen mindre än ett i mitten.
+`traits_sigma` och `traits_p` rörs inte.
+
+Uppmätt i `liten6`, 400 tick, tre frön: 75/82/100 mot 0184:s 72/70/73. Det säger
+ingenting om selektionen — fyrahundra tick räcker inte — bara att modellen bär
+det bredare spannet.
+
+**Nästa körning är ett experiment med ett svar.** Stannar `M_target` någonstans
+över 0,268 är det ett optimum; går den till golvet finns ingen kostnad för att
+vara liten, och det är nästa knut. Följ dess median över tid.
 
 ### Kostnadsproven batchas (0184)
 

@@ -1,0 +1,69 @@
+# **Vänta med slutsatser till efter tick 15 000.** Inkörningen i en terrängvärld
+# är så lång: floran sås och självgallrar under de första tusentals ticken, och
+# näringsstocken faller mot sin urlakade jämvikt under samma tid. Enskilda frön
+# säger ingenting om populationstrender — kör minst tre.
+#
+# ---
+#
+# **Syftet: har världen någon rumslig struktur att röra sig mot?**
+#
+# `f6-256` är identisk utom i bördigheten. Där är den 4,0, och följden är att
+# **varje landcell är sluten**: uppmätt `bar = 20,1 %` mot `hav = 20,0 %`,
+# alltså är den bara marken exakt havet och ingenting annat. Åttiotretusen
+# plantor per femtiotusen landceller är sjutton per cell, och landet är en jämn
+# matta ända ut till strandlinjen.
+#
+# Konsekvensen mättes i 1014 och 1015: perceptets toppandel ligger på 0,185 mot
+# en jämnfördelnings 0,167, och vid kusten på 0,200. Riktningen bär alltså
+# nästan ingen information, och en rörelsekärna byggd på det blir diffusion och
+# inte födosök.
+#
+# Bördigheten har ingen härledning i någon fil. Den är ärvd från mindre världar,
+# och `TODO.md` noterar att 4,0 inte är skalfritt. Det här scenariot prövar om
+# en magrare värld ger fläckighet — och därmed om perceptet kan bära någon
+# riktning alls — utan att någon kod ändras.
+#
+# **Vad som ska mätas**, i `--stats` och i HUD:en:
+#
+#   `bar` mot `hav`     skiljer de sig åt finns det bar mark som inte är hav
+#   `toppandel`         över 0,167 betyder att riktningen bär information
+#   `vid kust`          kräver `mat_dir_vatten` påslagen sedan 0184
+#   beståndet           en magrare värld bär färre djur; jämför inte antalet
+#                       med `f6-256` utan kvoten födslar mot dödsfall
+#
+# Bördigheten sänks till en fjärdedel. Det är ett grovt steg och avsiktligt:
+# frågan är om fläckighet uppstår över huvud taget, inte var gränsen går. Ger
+# 1,0 en fläckig värld kan mellanlägena prövas sedan; ger den ingen skillnad
+# ligger felet inte i näringstillgången.
+#
+# Fauna och terräng är oförändrade mot `f6-256`, så skillnaden i utfall är
+# bördighetens och ingenting annat. Terrängens frö är detsamma, alltså är det
+# samma landskap.
+namn: f6-256-mager
+varld:
+  bredd: 256
+  hojd: 256
+  dt: 0.02
+  bordighet: 1.0
+  latitud: 48.0
+  kontinentalitet: 0.55
+  terrang:
+    seed: 1
+    lambda_max_frac: 0.75
+    lambda_min: 3.0
+    beta: 2.4
+    hav_andel: 0.20
+    hav_lutning: 1.0
+flora:
+  sadd: bordighet
+  plantmassa: 1.32
+fauna:
+  antal: 80
+  insatts_vid: start
+  flackar: 3
+  flackradie: 20.0
+  max_antal: 8192
+fysiologi:
+  fartskala: 0.5
+  sociability: 0.8
+  sociability_sd: 0.5
