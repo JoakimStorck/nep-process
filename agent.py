@@ -407,6 +407,11 @@ class AgentParams:
     # sin förväntade massa och klarar sig; en vuxen som brutit ner halva sin
     # kropp gör det inte, oavsett hur stor den var från början.
     M_waste_frac: float = 0.075
+
+    # Tidskonstant för toppmassans avklingning, i månader. Lång mot en säsong
+    # och kort mot ett liv: en vinter ska inte skriva om vad kroppen är, men ett
+    # år av tillbakagång ska göra det. Se `Body._uppdatera_topp`.
+    M_peak_tau: float = 12.0
     # Absolut golv, bara för att en massa mot noll inte är en kropp.
     M_min: float = 0.01
 
@@ -1005,6 +1010,9 @@ class Body:
     _svalt_andel: float = 0.0
     # Förväntad massa för åldern, cachad i step() så hunger() kan läsa den.
     _M_expected: float = 0.0
+    # Kroppens högsta uppnådda massa, med långsam avklingning. Referensen för
+    # avmagring; se `Body._uppdatera_topp`.
+    _M_peak: float = 0.0
     # Reservkapacitet per kilo, cachad från fenotypen så E_cap() kan läsa den.
     _reserve_cap: float = 0.0
 
@@ -1230,7 +1238,11 @@ class Body:
         h    = (Ecap - Et) / (Ecap if Ecap > 1e-9 else 1e-9)
         h    = 0.0 if h < 0.0 else 1.0 if h > 1.0 else h
 
-        M_exp = float(getattr(self, "_M_expected", 0.0))
+        # Hungerns andra term mäter mot kroppens egen topp av samma skäl som
+        # svältskadan gör det: en juvenil som växer långsamt är liten, inte
+        # hungrig, och ska inte rapportera full hunger för att den ligger under
+        # ett löfte. Se `_uppdatera_topp`.
+        M_exp = float(getattr(self, "_M_peak", 0.0))
         if M_exp > 1e-9:
             span = max(1e-9, M_exp - float(self.AP.M_min))
             hm = (M_exp - float(self.M)) / span
@@ -1411,6 +1423,57 @@ class Body:
         if level >= 3:
             return float(self.AP.sense_cost_L3)
         return 0.0
+
+    def _uppdatera_topp(self, dt: float) -> float:
+        """
+        Kroppens egen topp: den högsta massa den nått, med långsam avklingning.
+
+        **Referensen för avmagring var tidigare `expected_mass(age)`**, alltså
+        vad genomet hade *lovat* att kroppen skulle väga. Svältskadan mättes som
+        `M / M_expected` mot 0,55, och dödströskeln som en andel av samma tal.
+
+        Det gjorde tillväxtkurvan till ett löfte som fenotypen straffades för
+        att bryta — medan vinsten av att lova mycket betalades ut först. Sänkt
+        `A_mature` ger tidigare mognad och därmed tidigare reproduktion
+        omedelbart; skadan kommer efter att genen är vidarebefordrad.
+
+        Selektionen tog den affären. Uppmätt i p179 föll `A_mature` från 12,1
+        till 6,8 månader mot golvet 5,0 medan `M_target` steg från 2,07 till
+        3,28, så att den krävda tillväxttakten gick från 0,165 till 0,475 kg per
+        månad — utan att världens födotillgång ändrats. Alla tre frön dog ut,
+        med nittio procent svält och en dödsålder som sjönk mot den nya
+        mognadsåldern.
+
+        Att magra ihjäl sig är att ha förlorat **mot sig själv**, inte att ha
+        misslyckats med en plan. Toppen är därför referensen:
+
+          * ett löfte kan inte längre löna sig, eftersom ingen mäter mot det
+          * straffet för långsam tillväxt blir det riktiga — senare mognad och
+            därmed färre kullar per liv, automatiskt och utan konstant
+          * en juvenil straffas inte längre hårdast av alla för att växa
+            långsamt
+
+        Avklingningen behövs för att en kropp som verkligen krympt ska kunna
+        etablera en ny normal; utan den blir en gammal topp en permanent
+        dödsdom. Tidskonstanten är lång mot en säsong och kort mot ett liv, så
+        att en vinter inte skriver om vad kroppen är men ett år av tillbakagång
+        gör det.
+
+        För en vuxen i jämvikt sammanfaller topp och förväntan, så
+        `starve_mass_ok_frac` och `starve_mass_crit_frac` behåller sin
+        innebörd. Skillnaden ligger nästan helt hos de unga.
+        """
+        M = float(self.M)
+        peak = float(getattr(self, "_M_peak", 0.0))
+        if M >= peak:
+            self._M_peak = M
+            return M
+        tau = max(1e-9, float(self.AP.M_peak_tau))
+        peak += (M - peak) * (1.0 - math.exp(-float(dt) / tau))
+        if peak < M:
+            peak = M
+        self._M_peak = float(peak)
+        return float(peak)
 
     def expected_mass(self, pheno: Phenotype, age_s: float) -> float:
         """
@@ -1948,12 +2011,16 @@ class Body:
         age_rate = max(0.0, _k_age0 + _k_age1 * float(age_s))
         dD_age   = dt * age_rate * (1.0 + _k_ageD * d_norm) * (1.0 + frailty_gain)
 
-        # Svältskada: individens massa relativt förväntad massa för åldern.
-        # M_expected är linjär från child_M (age=0) till M_target (age=A_mature),
-        # sedan konstant. En agent under kurvan har inte kunnat växa i takt — svälter.
+        # Svältskada: massan relativt kroppens **egen topp**, inte relativt en
+        # utlovad kurva. Se `_uppdatera_topp` för varför.
+        #
+        # `expected_mass` beräknas fortfarande och skrivs till `_M_expected`,
+        # eftersom tillväxtens målkurva behöver den — men den mäter inte längre
+        # kondition, och den delar inte längre ut skada.
         M_expected = self.expected_mass(pheno, age_s)
         self._M_expected = float(M_expected)
-        m_rel = float(self.M) / max(M_expected, 1e-9)
+        M_ref = self._uppdatera_topp(dt)
+        m_rel = float(self.M) / max(M_ref, 1e-9)
         m_ok   = float(getattr(AP, 'starve_mass_ok_frac',   0.85))
         m_crit = float(getattr(AP, 'starve_mass_crit_frac', 0.55))
         mass_severity = styrning.massunderskott(m_rel, m_ok, m_crit)
@@ -2040,7 +2107,7 @@ class Body:
         # Avmagringsdöden mäts mot förväntad massa för åldern; se
         # `AgentParams.M_waste_frac`. Faller `_M_expected` bort — den skrivs i
         # tillväxtsteget — används golvet ensamt.
-        _M_exp_now = float(getattr(self, "_M_expected", 0.0))
+        _M_exp_now = float(getattr(self, "_M_peak", 0.0))
         _M_dod = max(_M_min, float(self.AP.M_waste_frac) * _M_exp_now) if _M_exp_now > 0.0 else _M_min
         if float(D_raw) >= _D_max or float(self.M) <= _M_dod:
             self.death_cause = "damage" if float(D_raw) >= _D_max else "starvation"

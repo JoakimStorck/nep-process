@@ -2565,6 +2565,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0177~~ | parningen kunde inte vinna, och sökte i fel säsong | reproduktionen | **klart**, se nedan |
 | ~~0178~~ | avsvalningen härleds ur dräktighet och laktation | reproduktionen | **klart**, se nedan |
 | ~~0179~~ | kullstorleken som ärftlig axel; dödströskeln blir relativ | reproduktionen, r/K | **klart**, se nedan |
+| ~~0180~~ | avmagring mäts mot kroppens egen topp, inte mot ett löfte | selektionen | **klart**, se nedan |
 | — | `M_waste_frac = 0,075` är bevarad storlek, inte fysiologisk | mortaliteten | **öppen**, se 0179 |
 | — | `child_M` är absolut där den borde vara en andel av `M_target` | livshistorien | **öppen**, se 0179 |
 | — | kullstorleken som ärftlig axel: antal mot storlek | reproduktionen | **öppen**, nästa |
@@ -2667,6 +2668,61 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Avmagring mäts mot kroppens egen topp (0180)
+
+`expected_mass(age)` är vad genomet har **lovat** att kroppen ska väga —
+von Bertalanffy från `child_M` mot `M_target` vid `A_mature`. Svältskadan mättes
+som `M / M_expected` mot 0,55, hungermåttet mot samma tal, och sedan 0179 även
+dödströskeln.
+
+**Det gjorde tillväxtkurvan till ett löfte som fenotypen straffades för att
+bryta, medan vinsten av att lova mycket betalades ut först.** Sänkt `A_mature`
+ger tidigare mognad och därmed tidigare reproduktion omedelbart; skadan kommer
+efter att genen är vidarebefordrad.
+
+Selektionen tog den affären. Uppmätt i p179, `f6-256` över 10 000 tick, tre frön:
+
+```
+             A_mature    M_target   litter   krävd tillväxt
+s2 start       12,1        2,07      3,4      0,165 kg/mån
+s2 slut         6,8        3,28      5,4      0,475
+s3 start       13,2        1,54      3,9      0,111
+s3 slut         6,8        2,00      4,9      0,285
+```
+
+`A_mature` föll mot golvet 5,0 medan `M_target` steg, så att den krävda
+tillväxttakten nästan tredubblades utan att världens födotillgång ändrats.
+**Alla tre frön dog ut** — nittio procent svält, med en dödsålder som sjönk mot
+den nya mognadsåldern. Födelsetakten hade samtidigt fyrdubblats, från 0,010 till
+0,040 per individmånad, så reproduktionen var löst; det var evolutionen som tog
+beståndet.
+
+Att magra ihjäl sig är att ha förlorat **mot sig själv**, inte att ha misslyckats
+med en plan. Referensen blir därför kroppens högsta uppnådda massa, med en
+avklingning på tolv månader — lång mot en säsong och kort mot ett liv, så att en
+vinter inte skriver om vad kroppen är men ett år av tillbakagång gör det.
+
+Tre följder:
+
+  * **Ett löfte kan inte längre löna sig**, eftersom ingen mäter mot det.
+  * **Straffet för långsam tillväxt blir det riktiga** — senare mognad och därmed
+    färre kullar per liv, automatiskt och utan konstant.
+  * **En juvenil straffas inte längre hårdast av alla** för att växa långsamt.
+    Den är liten, inte svältande.
+
+För en vuxen i jämvikt sammanfaller topp och förväntan, så
+`starve_mass_ok_frac` och `starve_mass_crit_frac` behåller sin innebörd.
+Skillnaden ligger nästan helt hos de unga.
+
+`expected_mass` beräknas fortfarande — tillväxtens målkurva behöver den — men
+den mäter inte längre kondition och delar inte längre ut skada.
+
+Uppmätt i `liten6`, 400 tick, tre frön: 78/54/47 mot 0179:s 63/50/51, med 3/2/5
+dödsfall mot 6/5/12. **Den evolutionära effekten syns inte där** — runawayen tog
+10 000 tick i terrängvärlden — så det som är verifierat är mekanismen och
+riktningen på dödligheten. Följ `A_mature`s median över en lång körning; den ska
+sluta falla mot golvet.
 
 ### Kullstorleken blir en axel (0179)
 
