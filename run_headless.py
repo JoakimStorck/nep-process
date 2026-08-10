@@ -354,53 +354,142 @@ def instrument_vatten() -> None:
 # produktionskoden. Det håller mätningen utanför `agent.py` helt.
 _M: dict = {}
 
-# Radnumren flyttar när `agent.py` ändras. Kartan slås därför upp mot
-# funktionsnamn plus offset vid installationen i stället för mot fasta tal —
-# se `instrument_reserv`.
+# Radnumren flyttar när källan ändras. Kartan byggs därför vid installationen
+# genom att läsa källan, inte ur fasta tal. Nyckeln är `(filnamn, radnummer)`,
+# eftersom både `agent.py` och `population.py` betalar ur reserven — se
+# `_bind_reservrader`.
 _M_RADER: dict = {}
 
 _INSTRUMENTED_RESERV = False
 
 
+# Etiketten för en anropsplats, härledd ur uttryckets egen text. Ordningen är
+# betydelsebärande: den första träffen vinner, så det mest specifika villkoret
+# står först.
+#
+# `"@djupare"` är inte en post utan ett besked: anropet kom från `take_energy`,
+# som gör uttaget åt någon annan. Den som mäter måste då gå ett bildruteled till
+# för att få veta vem som faktiskt betalade.
+_M_GENOMGANG = "@djupare"
+
+
+def _reserv_etikett(txt: str) -> str:
+    """Namnge ett reservuttag efter vad uttrycket faktiskt betalar."""
+    if "_take_reserve_mass(amt / e_lab" in txt:
+        return _M_GENOMGANG
+    if "trim_kg" in txt:
+        return "trimning"
+    if "strypt=False" in txt:
+        return "dräktighet: material" if "gest" in txt else "tillväxt: material"
+    if "E_need" in txt:
+        return "reparation"
+    if "_gest_build_E_kg" in txt:
+        return "dräktighet: byggarbete"
+    if "_growth_build_E_kg" in txt:
+        return "tillväxt: byggarbete"
+    if "E_out_drain" in txt:
+        return "underhåll"
+    if "deficit" in txt:
+        return "underhåll: efter katabolism"
+    if "want_J" in txt:
+        return "reproduktion: överföring"
+    if "hunt_eff" in txt:
+        return "predation: attackkostnad"
+    return ""
+
+
+def _bind_reservrader() -> dict:
+    """
+    Bind anropsplatserna vid installationen genom att läsa källan.
+
+    Fasta radnummer åldras med första ändring i `agent.py`, och en mätning som
+    tyst byter etikett är värre än ingen.
+
+    Två saker skiljer mot den tidigare bindningen. Uttrycket klassas på **hela
+    anropet** och inte på den rad det börjar på, eftersom ett radbrutet anrop
+    annars klassas på var det råkar brytas — den gamla treradsfönstret lät
+    dräktighetens byggkostnad läsa materialradens `strypt=False` och byta namn.
+    Och nyckeln bär **filen**, eftersom `population.py` också betalar ur reserven
+    och radnumren där inte har något med `agent.py`s att göra.
+    """
+    import inspect as _insp
+    import os as _os
+
+    exakt: dict = {}
+    extra: dict = {}
+    import agent as _ag
+    import population as _pop
+    for _mod in (_ag, _pop):
+        _src, _lin0 = _insp.getsourcelines(_mod)
+        # `getsourcelines` på en **modul** returnerar radnumret 0, inte 1. Den
+        # gamla bindningen dolde det genom att registrera både `n` och `n + 1`;
+        # med exakt matchning blir felet i stället totalt, och varje post får
+        # namnet `rad fil:N`. Det är rätt sorts fel — det syns.
+        _lin0 = max(1, int(_lin0))
+        _fil = _os.path.basename(_insp.getsourcefile(_mod) or "")
+        for _i, _rad in enumerate(_src):
+            if "def " in _rad:
+                continue
+            if "_take_reserve_mass(" not in _rad and "take_energy(" not in _rad:
+                continue
+            # Läs framåt tills parenteserna balanserar, alltså tills uttrycket
+            # är helt. `f_lineno` pekar på den rad där det *avslutas*.
+            txt = ""
+            d = 0
+            for d in range(min(6, len(_src) - _i)):
+                txt += " " + _src[_i + d].strip()
+                if txt.count("(") <= txt.count(")"):
+                    break
+            _namn = _reserv_etikett(txt)
+            n = _lin0 + _i
+            exakt[(_fil, n)] = _namn
+            for _k in range(1, d + 1):
+                extra.setdefault((_fil, n + _k), _namn)
+    return {**extra, **exakt}
+
+
 def instrument_reserv() -> None:
-    """Bokför hur ofta reservuttaget ger mindre än begärt, och till vem."""
+    """
+    Bokför hur ofta reservuttaget ger mindre än begärt, och till vem.
+
+    **Posterna namngavs efter fel bildruta.** `take_energy` gör uttaget åt sina
+    egna anropare, så varje betalning som gick den vägen registrerades på raden
+    inne i `take_energy` och fick etiketten "underhåll" — reparationen,
+    tillväxtens och dräktighetens byggkostnader, katabolismens efterbetalning,
+    reproduktionens överföring och predationens attackkostnad, allt i en post.
+    Uppmätt på `f6-256-mager` var strypningen 23,7 procent av de verkliga
+    underhållsbetalningarna mot de 7,3 som blandningen rapporterade.
+
+    En anropsplats som inte känns igen får numera namnet `rad fil:N` i stället
+    för att falla igenom till "underhåll". En okänd post ska synas som okänd.
+    """
     global _INSTRUMENTED_RESERV
     if _INSTRUMENTED_RESERV:
         return
     _INSTRUMENTED_RESERV = True
 
     import sys as _sys
+    import os as _os
     from agent import Body
 
     orig = Body._take_reserve_mass
 
-    # Bind radnumren vid installationen genom att läsa källan. Fasta tal
-    # åldras med första ändring i `agent.py`, och en mätning som tyst byter
-    # etikett är värre än ingen.
-    import inspect as _insp
-    from agent import Body as _B
-    _src, _lin0 = _insp.getsourcelines(_insp.getmodule(_B))
-    for _i, _rad in enumerate(_src):
-        if "_take_reserve_mass(" not in _rad or "def " in _rad:
-            continue
-        n = _lin0 + _i
-        if "strypt=False" in _rad:
-            _namn = "dräktighet" if "gest" in _rad else "tillväxt"
-        elif "Ecap" in _rad or "trim" in _rad:
-            _namn = "trimning"
-        else:
-            _namn = "underhåll"
-        # `f_lineno` pekar på raden där uttrycket *avslutas*, vilket kan vara
-        # nästa rad när anropet är radbrutet. Registrera båda.
-        _M_RADER[n] = _namn
-        _M_RADER[n + 1] = _namn
+    _M_RADER.update(_bind_reservrader())
+
+    def _plats(f) -> tuple:
+        return (_os.path.basename(f.f_code.co_filename), f.f_lineno)
 
     def wrapped(self, kg, dt=1.0, **kw):
         ut = orig(self, kg, dt, **kw)
         want = float(kg)
         if want > 1e-15:
-            rad = _sys._getframe(1).f_lineno
-            namn = _M_RADER.get(rad, f"rad {rad}")
+            f = _sys._getframe(1)
+            namn = _M_RADER.get(_plats(f), "")
+            if namn == _M_GENOMGANG:
+                f = _sys._getframe(2)
+                namn = _M_RADER.get(_plats(f), "")
+            if not namn:
+                namn = "rad %s:%d" % _plats(f)
             e = _M.get(namn)
             if e is None:
                 e = [0, 0, 0.0, 0.0]      # anrop, strypta, begärt, givet
@@ -1318,9 +1407,13 @@ def print_summary(pop: Population, d0: dict, nb0: dict, unika: int, worst_drift:
                   f"med minst halva toppens värde")
 
     if _M:
-        print("\n  reservuttag   anrop      strypta    begärt kg    givet kg   andel given")
-        for k, e in sorted(_M.items(), key=lambda kv: -kv[1][0]):
-            print(f"    {k:<12}{e[0]:9d}{100 * e[1] / max(1, e[0]):9.1f} %"
+        # Sorterad på **given massa** och inte på antal anrop: posten som
+        # flyttar mest ska stå överst, och reparationen anropas lika många
+        # gånger som underhållet men betalar en tjugondel.
+        print("\n  reservuttag                      anrop   strypta"
+              "    begärt kg    givet kg   andel given")
+        for k, e in sorted(_M.items(), key=lambda kv: -kv[1][3]):
+            print(f"    {k:<28}{e[0]:9d}{100 * e[1] / max(1, e[0]):9.1f} %"
                   f"{e[2]:12.4g}{e[3]:12.4g}{100 * e[3] / max(1e-12, e[2]):11.1f} %")
 
     print(f"\n  näring (kg)  fri {nb['free']:.2f}  flora {nb['in_flora']:.2f}  "

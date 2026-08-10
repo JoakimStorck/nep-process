@@ -2574,6 +2574,12 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0186~~ | kustmätningen flyttar från modellen till instrumenteringen | mätningen | **klart**, se nedan |
 | ~~0187~~ | bärarrollen blir en ärftlig allokering i stället för massa | selektionen | **klart**, se nedan — `M_target` stannar |
 | ~~0189~~ | aptiten, reservtaket och fettets uttagstakt som en enhet | svälten | **klart**, se nedan — spillet 1249 → 91 kg |
+| ~~0190~~ | reservuttagen namngavs efter fel bildruta; dödsposten rapporterade noll | mätningen | **klart**, se nedan — bitidentisk körning |
+| — | `M_birth_min` skapar massa vid födseln — men den är inte hela näringsdriften | balansen | **öppen**, se 0190 |
+| — | anabolismen kostar 1/930 av materialet; `anabolism_eff` har noll läsare | budgeten | **öppen**, nästa (0191) |
+| — | `sense_cost_L1..L3` ligger 1e6 fel i enhet — sensing är gratis | A2 | **öppen**, se 0190 |
+| — | `gestation_mass_burden` och `gestation_P_overhead_per_kg` finns inte i `AgentParams` | reproduktionen | **öppen**, se 0190 |
+| — | nyfödda utrustas mot `E_cap_per_M`, inte mot sin egen `reserve_cap` | livshistorien | **öppen**, se 0190 |
 | — | Fishers jämvikt nås inte; bärarandelen beror på `lactation_k` | reproduktionen | **öppen**, se 0187 |
 | ~~—~~ | `f6-256-mager`: bär perceptet någon riktning i en fläckig värld? | 0169, kärnan | **scenariot finns**, kör det |
 | — | per-agent-Python är kvar; store-first och Numba är nästa | prestanda | **öppen**, manifestets Fas 4–5 |
@@ -2681,6 +2687,90 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Instrumenten som rapporterade fel (0190)
+
+Ingen mekanism ändras. Patchen rättar två mätfel som gjorde varje efterföljande
+mätning otillförlitlig, och körningen är bitidentisk mot HEAD: `liten6` 400 tick
+frö 1 ger 28 387 agenttick och näringsdrift 5,82e-07 både före och efter.
+
+**Reservuttagen namngavs efter fel bildruta.** `take_energy` gör uttaget åt sina
+egna anropare, så varje betalning som gick den vägen registrerades på raden inne
+i `take_energy` och fick etiketten "underhåll". I den posten låg reparationen,
+tillväxtens och dräktighetens byggkostnader, katabolismens efterbetalning,
+reproduktionens överföring och predationens attackkostnad — sex sänkor under ett
+namn. Bindningen hade dessutom en tyst offsetbugg: `getsourcelines` på en
+**modul** returnerar radnumret 0 och inte 1, vilket doldes av att både `n` och
+`n + 1` registrerades.
+
+Uttrycket klassas nu på hela anropet, avgränsat av när parenteserna balanserar —
+ett treradsfönster lät dräktighetens byggkostnad läsa materialradens
+`strypt=False` och byta namn. Nyckeln bär filen, eftersom `population.py` också
+betalar ur reserven. En anropsplats som inte känns igen får namnet `rad fil:N` i
+stället för att falla igenom till "underhåll": en okänd post ska synas som okänd.
+
+`f6-256-mager`, 300 tick, frö 1:
+
+```
+post                          anrop   strypta   begärt kg   givet kg
+underhåll                     28547     18,2 %        1263       1211
+trimning                       6176      0,0 %       151,7      151,7
+tillväxt: material            27778      0,0 %       89,71      89,71
+reparation                    28547      0,0 %       64,48      63,85
+underhåll: efter katabolism    5379      0,0 %       51,71      51,71
+predation: attackkostnad        409      0,0 %       20,06      17,16
+dräktighet: material           1517      0,0 %       2,562      2,562
+reproduktion: överföring         57      0,0 %      0,6979     0,6979
+tillväxt: byggarbete          27778      0,0 %     0,09644    0,09644
+dräktighet: byggarbete         1517      0,0 %    0,002754   0,002754
+```
+
+Tre tal som blandningen dolde:
+
+**Strypningen är 18,2 procent av de verkliga underhållsbetalningarna**, inte 7,3.
+Reparationen anropas lika många gånger som underhållet men stryps aldrig,
+eftersom den anropar `take_energy` **utan `dt`** — samma sak gäller trimningen och
+reproduktionen, som därmed får ett femtio gånger generösare mobiliseringstak än
+underhållet vid `dt = 0,02`. Det är en egen patch.
+
+**Tillväxtens byggarbete är 0,096 kg mot materialets 89,7** — en faktor 930.
+`growth_E_per_kg = 10 000 J/kg` är 0,107 procent av det labila innehållet i det
+som byggs. `_build_E_kg = E_body_J_per_kg / anabolism_eff` beräknas varje
+kroppssteg och **läses aldrig**; `anabolism_eff = 0,70` har därmed noll läsare
+trots att den är rätt tal. Nästa patch.
+
+**Predationens attackkostnad var osynlig** och är 20 kg på 300 tick, med 14
+procents strypning.
+
+**Dödsposten rapporterade noll.** `records.death_record` läser `body.M` och
+`body.E_total()`, och `_step_deaths` nollställde dem innan posten skrevs.
+Uppmätt var `M` och `E` exakt 0,0 i **748 dödsfall av 748** över p189m:s tre
+frön. Posten skrivs nu före nollställningen och bär också `M_reserve` och
+`M_fetus`, så att `M + M_reserve + M_fetus == carcass_amount` går att pröva —
+vilket den gör exakt.
+
+Första gången posten kunde läsas visade den ett dödsfall som ingen tidigare
+mätning kunde se: en dräktig individ som svalt ihjäl på `M = M_min` med
+0,0109 kg kvar i reserven och ett foster på 0,0153 kg, alltså större än dess
+egen återstående vävnad. Den dog med 101 kJ i tanken. Det är
+`slow_mobil_frac`-taket som binder, och det är samma fynd som strypningstalet
+ovan pekar på.
+
+**Vad som lyftes ur patchen, och varför.** `M_birth_min` klämmer upp nyföddas
+massa till golvet utan att någon betalar mellanskillnaden, alltså skapas massa ur
+ingenting. På `f6-256-mager` över 800 tick skapade 33 klämda födslar 0,175 kg
+massa och 0,003827 kg näring, mot en rapporterad drift på 2,92e-07 relativt av
+13 201,77 kg — alltså 0,003855 kg, **99,3 procent av driften**. Rättelsen
+förbereddes: bäraren fyller på ur sin egen reserv i stället för att golvet skapar
+massan.
+
+Den prövades och **misslyckades**. På `liten6` gick driften från +5,82e-07 till
+−1,11e-06 med bara påfyllningen och −1,49e-06 med hela ändringen, alltså förbi
+toleransen åt andra hållet. Bokföringen av själva överföringen går ihop på
+papperet — reservens 1/30 lämnar, vävnadens `nutrient_content(s)` anländer,
+mellanskillnaden släpps som `d_nut` — så det finns en andra, motsatt term i
+`_try_birth` som klämmans skapade massa hittills maskerade. Den ska hittas innan
+klämman rättas. En uppmätt försämring är data.
 
 ### Reserven fungerade inte som reserv (0189)
 

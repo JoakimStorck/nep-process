@@ -547,6 +547,8 @@ class Population:
         agent: Agent,
         carcass_amount: float,  # kg
         carcass_rad: int,
+        M_reserve: float = 0.0,
+        M_fetus: float = 0.0,
     ) -> None:
         self._emit(
             "death",
@@ -556,6 +558,8 @@ class Population:
                 agent=agent,
                 carcass_amount=float(carcass_amount),
                 carcass_rad=int(carcass_rad),
+                M_reserve=float(M_reserve),
+                M_fetus=float(M_fetus),
             ),
         )
 
@@ -4355,20 +4359,28 @@ class Population:
                         structure=s_carc,
                     )
 
-                body.M = 0.0
-                body.M_fast = 0.0
-                body.M_slow = 0.0
-                body.gest_M = 0.0
-                body.gestating = False
-    
+                # **Posten skrivs före nollställningen.** `death_record` läser
+                # `body.M` och `body.E_total()`, och de raderades på raderna
+                # nedan innan posten skrevs. Följden var att `M` och `E` var
+                # exakt 0,0 i varje dödsfall i varje körning — 748 av 748 över
+                # p189m:s tre frön. Ett instrument som tyst rapporterar noll är
+                # värre än inget instrument, eftersom posten såg fullständig ut.
                 deaths += 1
-    
+
                 self._emit_death(
                     self.t,
                     a,
                     carcass_amount=carcass_kg,
                     carcass_rad=int(self.PP.carcass_rad),
+                    M_reserve=M_res,
+                    M_fetus=M_fetus,
                 )
+
+                body.M = 0.0
+                body.M_fast = 0.0
+                body.M_slow = 0.0
+                body.gest_M = 0.0
+                body.gestating = False
             else:
                 survivors.append(a)
     

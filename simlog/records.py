@@ -144,6 +144,8 @@ def death_record(
     agent,
     carcass_amount: float,   # kg
     carcass_rad: int,
+    M_reserve: float = 0.0,
+    M_fetus: float = 0.0,
 ) -> dict:
     body = getattr(agent, "body", None)
 
@@ -178,7 +180,13 @@ def death_record(
         "x": float(getattr(agent, "x", float("nan"))),
         "y": float(getattr(agent, "y", float("nan"))),
 
-        "M": M,              # kg (body mass at death)
+        # `M` är den **committade vävnaden** och inte hela kroppen: reserven
+        # och fostret ligger utanför. De tre summerar till `carcass_amount`,
+        # och utan uppdelningen går en välgödd kropp inte att skilja från en
+        # utmärglad med samma stomme.
+        "M": M,              # kg, committad vävnad
+        "M_reserve": float(M_reserve),
+        "M_fetus": float(M_fetus),
         "E": Et,
         "D": D,
 
