@@ -226,7 +226,7 @@ class PopParams:
     store_growth_min_chunk: int = 256
     store_growth_factor: float = 2.0
     
-    n_traits: int = 43   # +1: _T_LITTER = 42, kullstorlek
+    n_traits: int = 44   # +1: _T_BEARER = 43, bärarbenägenhet
 
     spawn_jitter_r: float = 1.5
 
@@ -1248,6 +1248,12 @@ class Population:
 
         self._ensure_store_capacity(1)
         store_slot = self.store.alloc_slot()
+        # **Rollen dras ur bärarförälderns benägenhet**, inte ur barnets egen.
+        # Se `phenotype._T_BEARER`: styr benägenheten den egna rollen finns en
+        # direkt individuell fördel i att slippa dräktigheten, och axeln blir
+        # samma flyktväg som massregeln var.
+        child._bearare = bool(float(self.rng.random())
+                              < float(getattr(parent.pheno, "bearer_p", 0.5)))
         child.store_slot = int(store_slot)
         self.store.write_agent(store_slot, child, self.grid)
         self._write_spatial_to_store(store_slot, child.x, child.y)
@@ -1332,7 +1338,10 @@ class Population:
         # Ett villkor som beror på **kondition** i stället för på ärftlig massa
         # skulle stänga vägen, eftersom kondition fluktuerar och inte går att
         # ärva sig fri från. Se `TODO.md`.
-        if best.body.M > agent.body.M:
+        # Rollerna är dragna vid födseln och komplementära; `_find_best_mate`
+        # släpper bara igenom par där de skiljer sig. Se `phenotype._T_BEARER`
+        # för varför massregeln — den tyngre bär — var en runaway utan jämvikt.
+        if bool(getattr(best, "_bearare", False)):
             bearer, partner = best, agent
         else:
             bearer, partner = agent, best
@@ -1871,6 +1880,8 @@ class Population:
             self.store.write_agent(store_slot, a, self.grid)
             self._write_spatial_to_store(store_slot, a.x, a.y)
             self.store.age[store_slot] = np.float32(age_s)
+            a._bearare = bool(float(self.rng.random())
+                              < float(getattr(a.pheno, "bearer_p", 0.5)))
             self._slot_to_agent[int(store_slot)] = a
 
             self.store.repro_cd[store_slot] = np.float32(init_repro_cd)

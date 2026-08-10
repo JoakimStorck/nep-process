@@ -62,6 +62,7 @@ class Phenotype:
     child_Fg: float
     child_M: float   # kullens TOTALA massa; massa per unge är child_M / litter
     litter: float    # antal ungar kullen delas på; se _T_LITTER
+    bearer_p: float  # sannolikhet att bli bärare; se _T_BEARER
 
     # Genetiskt tillväxtprogram
     M_target: float
@@ -269,6 +270,59 @@ _T_FAST_FRAC       = 41
 # vuxenmassa via `growth_curve_mass`. r och K blir ett val där kostnaden ligger
 # i ungdödligheten och inte i investeringen.
 _T_LITTER          = 42
+
+# **Bärarbenägenheten.** Sannolikheten att individen blir den som bär fostret.
+#
+# Rollen avgjordes tidigare av massa: `if best.body.M > agent.body.M` — den
+# tyngre bär. Regeln är rimlig i en modell utan kön, men den är **en runaway
+# utan jämvikt**. Fitness beror inte på att vara liten i absolut mening utan på
+# att vara *lättare än sin partner*: en genotyp under populationsmedelvärdet
+# slipper alltid dräktigheten, medelvärdet sjunker, och den nya undre halvan
+# vinner igen.
+#
+# Uppmätt i p185, med genomklämman höjd så att golvet flyttades från 0,653 till
+# 0,268: `M_target` gick rakt igenom det gamla golvet och landade på median
+# **0,278 med p10 0,269** — hela spridningen kollapsad mot väggen, i båda
+# fungerande frön. Kapplöpningen tar slut först när alla står vid gränsen.
+#
+# **Kondition i stället för massa löser det inte.** "Den med störst reservandel
+# bär" gör låg reservandel till en strategi, och reservandelen är delvis
+# ärftlig. Varje regel av formen *den bäst ställda bär* selekterar för att vara
+# sämre ställd; runawayen flyttar bara axel.
+#
+# Här är rollen i stället en **ärftlig benägenhet hos föräldern**: `bearer_p`
+# är sannolikheten att *den här organismens avkommor* blir bärare. Barnet drar
+# sin roll ur bärarförälderns benägenhet, en gång vid födseln, och behåller den
+# livet ut. Genotypen är kontinuerlig, individen diskret.
+#
+# **Att låta benägenheten styra den egna rollen prövades och föll.** Då finns en
+# direkt individuell fördel: en icke-bärare slipper dräktighet, laktation och
+# avsvalning och betalar bara fem procent av energitaket. Uppmätt gick andelen
+# bärare till 0,333 efter 1 200 tick och `bearer_p`s median till 0,238 och
+# fortsatte falla — alltså samma flyktväg som massregeln, bara ometiketterad.
+#
+# Fishers argument gäller när egenskapen styr **avkommornas** kön, inte det
+# egna. Då försvinner den direkta fördelen: den egna rollen är dragen ur
+# förälderns benägenhet och kan inte ärvas bort, och det enda som återstår är
+# frekvensberoendet.
+#
+# Det stänger runawayen genom Fishers princip snarare än genom en kostnad.
+# Parning kräver en bärare och en icke-bärare, så benägenheten står under
+# **negativt frekvensberoende selektion**: blir populationen sjuttio procent
+# bärare får varje icke-bärare fler avkommor, och en genotyp som producerar
+# fler icke-bärare vinner. Jämvikten är 0,5. En genotyp som gör lätta kroppar
+# producerar ändå bärare i hälften av fallen — **man kan inte ärva sig fri.**
+#
+# Och könen blir ett **utfall**. Finns det någon fördel med specialisering
+# splittras benägenheten mot 0 och 1 i skilda linjer, och då har två kön uppstått
+# i modellen i stället för kodats in. Gör den det inte stannar den vid 0,5
+# monomorft och stokastiskt. Båda utfallen är intressanta.
+#
+# Fishers jämvikt är dessutom ett **orakel modellen aldrig haft**: könskvoten
+# måste gå mot 0,5 när de två rollerna kostar lika mycket att producera, vilket
+# de gör här — samma ungmassa. Går den inte dit är reproduktionsbokföringen fel
+# någonstans.
+_T_BEARER          = 43
 
 @dataclass(frozen=True)
 class PhenoRanges:
@@ -501,6 +555,7 @@ def derive_pheno(traits: np.ndarray | None, R: PhenoRanges = PhenoRanges()) -> P
                               _sigmoid(_get_trait(traits, _T_FAST_FRAC)))),
         litter=float(_lerp(R.litter_min, R.litter_max,
                            _sigmoid(_get_trait(traits, _T_LITTER)))),
+        bearer_p=float(_sigmoid(_get_trait(traits, _T_BEARER))),
         frailty_gain=float(_lerp(R.frailty_gain_min, R.frailty_gain_max, u_frail)),
         E_rep_min=float(_lerp(R.E_rep_min_min, R.E_rep_min_max, u_erep)),
     

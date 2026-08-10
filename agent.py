@@ -2816,6 +2816,14 @@ class Agent:
     # Bara visning; se `_integrate_motion`. Ett djur som inte rörde sig under
     # ticket bär förra tickets värden, vilket är rätt — det är den senaste
     # övergång som faktiskt räknades.
+    # **Rollen: bärare eller inte.** Dras en gång ur `pheno.bearer_p` och gäller
+    # livet ut. Genotypen är kontinuerlig, individen diskret; se
+    # `phenotype._T_BEARER`.
+    #
+    # `None` betyder att den ännu inte dragits — vilket bara gäller innan
+    # `Population` hunnit ge organismen sin `rng`.
+    _bearare: object = field(init=False, default=None, repr=False, compare=False)
+
     _mv_step: float = field(init=False, default=0.0, repr=False, compare=False)
     _mv_dir: float = field(init=False, default=0.0, repr=False, compare=False)
     _mv_sd: float = field(init=False, default=0.0, repr=False, compare=False)
@@ -3287,7 +3295,13 @@ class Agent:
                 best_prey = (detected, dx, dy, dist)
                 best_prey_score = sc
     
-        if in_mating_mode and bool(getattr(detected, "_mating_mode", False)):
+        # **Rollerna måste vara komplementära.** En bärare kan bara para sig med
+        # en icke-bärare. Att söka någon med samma roll vore att styra mot det
+        # omöjliga, precis det 0177 rättade för säsongen.
+        if (in_mating_mode
+                and bool(getattr(detected, "_mating_mode", False))
+                and bool(getattr(self, "_bearare", False))
+                != bool(getattr(detected, "_bearare", False))):
             best_mate = (detected, dx, dy, dist)
     
         return best_prey, best_prey_score, best_threat, best_threat_score, best_mate

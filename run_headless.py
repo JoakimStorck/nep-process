@@ -1213,6 +1213,30 @@ def print_summary(pop: Population, d0: dict, nb0: dict, unika: int, worst_drift:
               f"     såg partner men parade inte {_R['sag_men_parade_ej']:5d}")
         print(f"    täthet {d['fauna_n'] / max(1, n_cells) * 1000.0:.2f} agenter per 1000 celler")
 
+        # **Fishers jämvikt som orakel.**
+        #
+        # Parning kräver en bärare och en icke-bärare, och de två kostar lika
+        # mycket att producera — samma ungmassa. Då *måste* andelen bärare gå
+        # mot 0,5: blir den högre får varje icke-bärare fler avkommor, och en
+        # genotyp som producerar fler icke-bärare vinner.
+        #
+        # Går den inte dit är reproduktionsbokföringen fel någonstans. Det är en
+        # kontroll av hela delsystemet som inte beror på om ekologin råkar bära
+        # populationen, och den enda vi har av det slaget.
+        #
+        # `bearer_p` är genotypen och andelen är utfallet. De behöver inte
+        # sammanfalla: en population av 0,3- och 0,7-genotyper ger också 0,5 i
+        # utfall, och att de skiljer sig är i så fall början till två kön.
+        _lev = [a for a in pop.agents if a.body.alive]
+        if _lev:
+            _bar = sum(1 for a in _lev if bool(getattr(a, "_bearare", False)))
+            _bp = np.array([float(getattr(a.pheno, "bearer_p", 0.5)) for a in _lev])
+            print(f"    bärarandel {_bar / len(_lev):.3f} av {len(_lev)}"
+                  f"   (Fisher förutsäger 0,500)"
+                  f"   bearer_p p10 {np.percentile(_bp, 10):.3f}"
+                  f" median {np.median(_bp):.3f}"
+                  f" p90 {np.percentile(_bp, 90):.3f}")
+
     if _S["tick"]:
         n = _S["tick"]
         print(f"\n  arbitrering  {n} agenttick, {_S['n_anskrav'] / n:.2f} anspråk per tick")

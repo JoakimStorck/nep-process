@@ -2572,6 +2572,8 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0184~~ | kostnadsproven batchas; kustmätningen blir valfri | prestanda | **klart**, se nedan — `cell_of` 4,8× färre |
 | ~~0185~~ | genomklämman höjs så att det deklarerade spannet blir nåbart | selektionen | **klart**, se nedan |
 | ~~0186~~ | kustmätningen flyttar från modellen till instrumenteringen | mätningen | **klart**, se nedan |
+| ~~0187~~ | bärarrollen blir en ärftlig allokering i stället för massa | selektionen | **klart**, se nedan — `M_target` stannar |
+| — | Fishers jämvikt nås inte; bärarandelen beror på `lactation_k` | reproduktionen | **öppen**, se 0187 |
 | ~~—~~ | `f6-256-mager`: bär perceptet någon riktning i en fläckig värld? | 0169, kärnan | **scenariot finns**, kör det |
 | — | per-agent-Python är kvar; store-first och Numba är nästa | prestanda | **öppen**, manifestets Fas 4–5 |
 | — | `cell_of` anropas 65 gånger per djur och tick | prestanda | **öppen**, nästa |
@@ -2678,6 +2680,67 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Bärarrollen blir en ärftlig allokering (0187)
+
+Rollen avgjordes av massa: `if best.body.M > agent.body.M` — den tyngre bär.
+Regeln är rimlig i en modell utan kön men är **en runaway utan jämvikt**.
+Fitness beror inte på att vara liten i absolut mening utan på att vara *lättare
+än sin partner*: en genotyp under populationsmedelvärdet slipper alltid
+dräktigheten, medelvärdet sjunker, och den nya undre halvan vinner igen.
+
+Uppmätt i p185: `M_target` gick rakt genom det gamla golvet 0,653 och landade på
+median 0,278 med **p10 0,269** mot det nya golvet 0,268 — hela spridningen
+kollapsad mot väggen, i båda fungerande frön.
+
+`bearer_p` är nu ett locus: sannolikheten att **den här organismens avkommor**
+blir bärare. Barnet drar sin roll ur bärarförälderns benägenhet, en gång vid
+födseln, och behåller den livet ut. Parning kräver komplementära roller, och
+`_find_best_mate` släpper bara igenom sådana par — annars styr djuren mot
+partner de inte kan para sig med, precis det 0177 rättade för säsongen.
+
+**En första form prövades och föll.** Att låta benägenheten styra den *egna*
+rollen ger en direkt individuell fördel: en icke-bärare slipper dräktighet,
+laktation och avsvalning och betalar bara fem procent av energitaket. Uppmätt
+gick bärarandelen till 0,333 efter 1 200 tick och `bearer_p` till 0,238 och
+fortsatte falla — samma flyktväg som massregeln, bara ometiketterad. Fishers
+argument gäller när egenskapen styr avkommornas roll, inte den egna.
+
+**Huvudresultatet.** `liten6`, frö 2:
+
+```
+tick 1200        M_target  p10 / median / p90    djur   litter
+0186 massregel     0,335 / 0,431 / 2,000          149    4,02
+0187 bärarroll     0,669 / 0,711 / 1,484          586    5,08
+```
+
+**Undre kvartilen är exakt dubbel och står stilla** — 0,676 vid tick 600 och
+0,669 vid 1 200 — medan massregelns p10 sjunker mot golvet. Populationen är
+fyra gånger större. Runawayen är stängd.
+
+**Men oraklet går inte igenom, och det ska sägas rakt ut.** Fishers princip
+säger att bärarandelen måste gå mot 0,5 när de två rollerna kostar lika mycket
+att producera, vilket de gör här — samma ungmassa. Uppmätt efter 700 tick, frö 2:
+
+```
+lactation_k = 0,0    bärarandel 0,705   bearer_p 0,888   356 djur
+lactation_k = 1,0    bärarandel 0,44                     272 djur (vid 800)
+lactation_k = 3,0    bärarandel 0,462   bearer_p 0,489   171 djur
+```
+
+**Andelen beror på bärarens kostnad, och det borde den inte göra.** Antingen är
+körningarna för långt från demografisk jämvikt — populationen fyrdubblas under
+mätningen, och Fishers ESS är ett jämviktspåstående — eller så finns en
+asymmetri jag inte hittat. Talen är dessutom förvirrade av att tätheten skiljer
+sig, vilket ändrar partnersökningen och därmed frekvensberoendet.
+
+Andelen rapporteras i `--stats` tillsammans med `bearer_p`s kvartiler, så den går
+att följa. **Skiljer sig genotypens fördelning från utfallet — en population av
+0,3- och 0,7-genotyper ger också 0,5 i utfall — är det början till två kön.**
+
+Patchen levereras trots att oraklet faller, därför att den löser det den byggdes
+för och den gamla regeln bevisligen inte har någon jämvikt alls. Men
+bärarandelen är inte en löst fråga.
 
 ### Kustmätningen hör inte hemma i modellen (0186)
 
