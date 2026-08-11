@@ -79,9 +79,16 @@ def las_seed(kat):
                     fodslar.append((float(d.get("t", 0.0)),
                                     np.asarray(tr, dtype=float)))
             elif d.get("cause"):
+                # Massa, reserv och skada bär verkliga tal sedan 0190; dessförinnan
+                # nollställdes kroppen innan posten skrevs. `M_peak` finns inte i
+                # posten, men `M_waste_frac` binder i 99 procent av svältdödsfallen,
+                # så toppen är `M / M_waste_frac` för dem.
                 dodsfall.append((float(d.get("t", 0.0)),
                                  str(d.get("cause")),
-                                 float(d.get("age", 0.0) or 0.0)))
+                                 float(d.get("age", 0.0) or 0.0),
+                                 float(d.get("M", 0.0) or 0.0),
+                                 float(d.get("M_reserve", 0.0) or 0.0),
+                                 float(d.get("D", 0.0) or 0.0)))
 
     t_max = max([r[0] for r in bana] + [f[0] for f in fodslar] + [1.0])
     kant = np.linspace(0.0, t_max, N_FONSTER + 1)
@@ -103,26 +110,67 @@ def las_seed(kat):
             axlar[a].append(kvantiler([getattr(p_, a, float("nan")) for p_ in P]))
 
     # Dödsorsaker: antal per fönster, samt ålder och årstid.
-    orsaker = sorted({c for _, c, _ in dodsfall})
+    orsaker = sorted({r[1] for r in dodsfall})
     dod_per = {c: [0] * N_FONSTER for c in orsaker}
     alder_per = {c: [None] * N_FONSTER for c in orsaker}
+    massa_per = {c: [None] * N_FONSTER for c in orsaker}
+    reserv_per = {c: [None] * N_FONSTER for c in orsaker}
+    skada_per = {c: [None] * N_FONSTER for c in orsaker}
     for i in range(N_FONSTER):
-        blk = [(c, a) for t, c, a in dodsfall if kant[i] <= t < kant[i + 1]]
+        blk = [r for r in dodsfall if kant[i] <= r[0] < kant[i + 1]]
         for c in orsaker:
-            al = [a for cc, a in blk if cc == c]
-            dod_per[c][i] = len(al)
-            alder_per[c][i] = kvantiler(al)
+            rr = [r for r in blk if r[1] == c]
+            dod_per[c][i] = len(rr)
+            alder_per[c][i] = kvantiler([r[2] for r in rr])
+            massa_per[c][i] = kvantiler([r[3] for r in rr])
+            reserv_per[c][i] = kvantiler([r[4] for r in rr])
+            skada_per[c][i] = kvantiler([r[5] for r in rr])
 
     manad = {c: [0] * 12 for c in orsaker}
-    for t, c, _ in dodsfall:
-        manad[c][int(t % 12.0)] += 1
+    for r in dodsfall:
+        manad[r[1]][int(r[0] % 12.0)] += 1
+
+    # Årstid mot ålder och mot fettreserv. Två frågor som bara går att ställa
+    # här: om en vinterkrympning blir en dödsdom **nästa** år skrivs den som en
+    # topp i andra levnadsårets dödlighet, och om mobiliseringstaket binder i
+    # kylan dör djuren med fett kvar just då och inte jämnt över året.
+    #
+    # `andel_med_fett` räknar dödsfall där reserven översteg en procent av
+    # kroppsmassan. Tröskeln är godtycklig men skiljer "tom" från "hade kvar".
+    manad_alder = {c: [None] * 12 for c in orsaker}
+    manad_fett = {c: [0.0] * 12 for c in orsaker}
+    for c in orsaker:
+        for m in range(12):
+            rr = [r for r in dodsfall if r[1] == c and int(r[0] % 12.0) == m]
+            manad_alder[c][m] = kvantiler([r[2] for r in rr])
+            if rr:
+                manad_fett[c][m] = round(
+                    sum(1 for r in rr if r[4] > 0.01 * max(r[3], 1e-12)) / len(rr), 4)
+
+    # Åldersband per månad, för att skilja juvenil svält från vuxen. Banden är
+    # satta mot `A_mature`, som ligger på 6–12 månader i körningarna.
+    band = ((0.0, 1.0), (1.0, 6.0), (6.0, 12.0), (12.0, 24.0), (24.0, 1e9))
+    manad_band = {c: [[0] * 12 for _ in band] for c in orsaker}
+    for r in dodsfall:
+        m = int(r[0] % 12.0)
+        for bi, (lo, hi) in enumerate(band):
+            if lo <= r[2] < hi:
+                manad_band[r[1]][bi][m] += 1
+                break
 
     ut["fonster"] = [round(float(x), 3) for x in kant]
     ut["fodslar_per_fonster"] = n_per
     ut["axlar"] = axlar
     ut["dod_per_fonster"] = dod_per
     ut["dodsalder_per_fonster"] = alder_per
+    ut["dodsmassa_per_fonster"] = massa_per
+    ut["dodsreserv_per_fonster"] = reserv_per
+    ut["dodsskada_per_fonster"] = skada_per
     ut["dod_per_manad"] = manad
+    ut["dodsalder_per_manad"] = manad_alder
+    ut["andel_med_fett_per_manad"] = manad_fett
+    ut["aldersband"] = [list(b) for b in band]
+    ut["dod_per_manad_och_aldersband"] = manad_band
     ut["n_fodslar"] = len(fodslar)
     ut["n_dodsfall"] = len(dodsfall)
     return ut

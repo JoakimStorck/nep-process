@@ -2579,6 +2579,10 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0192~~ | näringsbalansen sluter sig: golvet betalas, buffertarna räknas | balansen | **klart**, se nedan — 2,6e-07 → 1,9e-09 |
 | ~~0193~~ | fettets mobiliseringstak mättes mot depån i stället för mot ämnesomsättningen | svälten | **klart**, se nedan — reserv vid död 0,0108 → 0 kg |
 | ~~0194~~ | dödströskeln och svältskadans ramp sätts ihop mot toppmassan | dödligheten | **klart**, se nedan — massförlust 92,8 → 37,8 % |
+| ~~0195~~ | `sammandrag.py` läser dödspostens massa, reserv och skada; årstid mot ålder och fett | mätningen | **klart**, se nedan |
+| — | reparationen betalas till 60–76 % och är näst största posten; `repair_E_per_D` saknar härledning | budgeten | **öppen**, nästa |
+| — | barnets startreserv betalas till 43–74 %; föräldern har inte råd med den redan minimala gåvan | livshistorien | **öppen**, hör ihop med `E_cap_per_M` |
+| — | ett `cell_idx`-brott i p194/s3 vid tick 2000, en slot av 1,2 miljoner | invarianterna | **öppen** |
 | — | `M_peak_tau = 12` mån är längre än den uppmätta livslängden; avklingningen är i praktiken av | dödligheten | **öppen**, mät efter 0194 |
 | — | `dD_starve` kan inte döda: 0,025/mån mot `D_max = 1` är fyrtio månader vid full svält | dödligheten | **öppen** |
 | — | tio procent av dödsfallen sker med fett kvar, för att taket binder vid hög dränering | svälten | **öppen**, bieffekt av 0193 |
@@ -2693,6 +2697,38 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Sammandraget läser dödsposten (0195)
+
+Instrument, ingen mekanism. `sammandrag.py` läste bara orsak, tid och ålder ur
+`life.jsonl`. Dödsposten bär sedan 0190 verkliga `M`, `M_reserve`, `M_fetus` och
+`D`, och de fälten var det som fattades för att kunna svara på två frågor som
+0193 och 0194 lämnade öppna.
+
+Nytt i utdata: `dodsmassa_per_fonster`, `dodsreserv_per_fonster` och
+`dodsskada_per_fonster` som kvantiler per tidsfönster, samt tre korstabeller mot
+årstid — `dodsalder_per_manad`, `andel_med_fett_per_manad` och
+`dod_per_manad_och_aldersband`.
+
+De två frågorna:
+
+**Binder mobiliseringstaket i kylan?** 0194 gav p90 0,18 kg reserv vid död mot
+3e-18 i 0193. Klumpar de fettrika dödsfallen sig i vintermånaderna gör taket från
+0193 vad det ska; ligger de jämnt över året är två basalomsättningar för lågt satt.
+`andel_med_fett_per_manad` räknar dödsfall där reserven översteg en procent av
+kroppsmassan.
+
+**Skriver vintern om vad kroppen är?** `M_peak_tau = 12` månader mot en uppmätt
+medianlivslängd på 15,9. Är svältdödsfallen koncentrerade till andra levnadsåret
+hos djur som klarade första vintern har den gamla toppen följt med och tau är för
+lång. `dod_per_manad_och_aldersband` delar dödsfallen på 0–1, 1–6, 6–12, 12–24 och
+över 24 månader, satt mot `A_mature` som ligger på 6–12 i körningarna.
+
+`M_peak` finns inte i posten, men eftersom `M_waste_frac` binder i 99,1 procent av
+svältdödsfallen är toppen `M / M_waste_frac` för dem.
+
+Ändringen rör bara läsaren, så den kan köras mot p193 och p194 utan att
+simuleringarna görs om.
 
 ### Dödströskeln och svältskadans ramp sätts ihop (0194)
 
