@@ -2580,7 +2580,8 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0193~~ | fettets mobiliseringstak mättes mot depån i stället för mot ämnesomsättningen | svälten | **klart**, se nedan — reserv vid död 0,0108 → 0 kg |
 | ~~0194~~ | dödströskeln och svältskadans ramp sätts ihop mot toppmassan | dödligheten | **klart**, se nedan — massförlust 92,8 → 37,8 % |
 | ~~0195~~ | `sammandrag.py` läser dödspostens massa, reserv och skada; årstid mot ålder och fett | mätningen | **klart**, se nedan |
-| — | reparationen betalas till 60–76 % och är näst största posten; `repair_E_per_D` saknar härledning | budgeten | **öppen**, nästa |
+| ~~0196~~ | reparationen lagade skada som inte fanns och kostade lika mycket oavsett kroppsstorlek | budgeten | **klart**, se nedan — 77 % av energin köpte ingenting |
+| — | skade- och reparationssystemet är nästan inert: `D` har medianen 0,0000 och `repair_capacity` binder i 2 % av tickarna | selektionen | **öppen**, nästa |
 | — | barnets startreserv betalas till 43–74 %; föräldern har inte råd med den redan minimala gåvan | livshistorien | **öppen**, hör ihop med `E_cap_per_M` |
 | — | ett `cell_idx`-brott i p194/s3 vid tick 2000, en slot av 1,2 miljoner | invarianterna | **öppen** |
 | — | `M_peak_tau = 12` mån är längre än den uppmätta livslängden; avklingningen är i praktiken av | dödligheten | **öppen**, mät efter 0194 |
@@ -2697,6 +2698,66 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Reparationen lagade skada som inte fanns (0196)
+
+Två fel i samma post, och de förstärkte varandra.
+
+**Efterfrågan tog aldrig hänsyn till hur mycket skada som fanns.** `R_des` sattes
+av kapaciteten och smärtan, och `R_max` band i 99,2 procent av tickarna medan `D`
+hade medianen 0,0000 i varje massakvintil. Djuret betalade alltså full kapacitet
+varje tick för att laga skada det inte hade. Uppmätt på `f6-256-mager` över 41 708
+agenttick: 375 enheter reparationsförmåga köptes, 81 användes — **77 procent av
+energin köpte ingenting.** Efter rättelsen är siffran 100,0 procent, 100,2 enheter
+köpta och 100,2 använda.
+
+**Kostnaden skalade inte med kroppen.** `repair_E_per_D = 2,0e6 J` per enhet `D`
+var oberoende av massan medan allt annat underhåll går som `M^0,75`. Uppmätt
+kostade reparationen 41,5 procent av basalomsättningen för den minsta
+massakvintilen och 3,5 för den största — en faktor tolv, åt fel håll, i en
+population som dvärgat. Talet var dessutom uttryckligen fittat: kommentaren löd
+*"var 0.02 → sänkt: billigare reparation gör det evolutionärt lönsamt"*.
+
+**Reparation är anabolism av skadad vävnad.** Att laga andelen `R` av en kropp på
+`M` kilo är att bygga om `R · M` kilo vävnad, till samma syntesarbete per kilo som
+tillväxten betalar sedan 0191:
+
+```
+E_per_D = M · E_labile · (1/anabolism_eff − 1)
+```
+
+Ingen ny konstant. `repair_E_per_D` faller.
+
+De två hänger ihop av konstruktion: formändringen ensam hade femdubblat kostnaden
+medan 77 procent slösades, och skadegränsen ensam hade lämnat massaskalningen fel.
+Tillsammans går aggregatet 7,4 → 5,1 procent av basalen medan formen blir rätt åt
+båda hållen.
+
+**Uppmätt utfall.** `f6-256-mager`, 800 tick, frö 1, mot 0194:
+
+```
+                                 0194        0196
+reparationens andel av basalen   7,4 %       5,1 %
+andel av energin som köpte något  23,4 %     100,0 %
+kostnad/basal, minsta kvintil    0,415       0,018
+kostnad/basal, största kvintil   0,035       0,053
+bestånd vid t=800                  22          36
+födslar / dödsfall             58 / 116   109 / 153
+massförlust vid död, median      37,8 %      37,1 %
+D vid död, median                0,037       0,038
+```
+
+Massförlusten och skadan vid död är oförändrade, vilket är vad som ska hända:
+0194:s mekanism är orörd.
+
+**Vad rättelsen avslöjar.** Med efterfrågan bunden av skadan binder nu `D/eta` i
+97,7 procent av tickarna och `repair_capacity` i drygt två. Den genetiska axeln
+har därmed nästan ingen konsekvens — men felet ligger inte i gränsen utan i att
+det inte finns någon skada att laga. `D` har medianen 0,0000, medianen vid död är
+0,038 av en budget på 1, ingen individ har någonsin nått `D_max`, och `dD_starve`
+kan inte döda ens vid full svält. **Hela skade- och reparationssystemet är nästan
+inert.** Det är nästa sak att undersöka, och det är en mätning innan det är en
+patch.
 
 ### Sammandraget läser dödsposten (0195)
 

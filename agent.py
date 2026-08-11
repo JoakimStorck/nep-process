@@ -504,7 +504,12 @@ class AgentParams:
 
     # repair (energy -> D reduction)
     repair_gain: float = 50.0
-    repair_E_per_D: float = 2.0e6  # var 0.02 → sänkt: billigare reparation gör det evolutionärt lönsamt
+    # `repair_E_per_D` är borttagen. Den var 2,0e6 J per enhet `D`, oberoende av
+    # kroppsmassan, och uttryckligen fittad — kommentaren löd "var 0.02 → sänkt:
+    # billigare reparation gör det evolutionärt lönsamt". Sedan 0196 är
+    # kostnaden `M · E_labile · (1/anabolism_eff − 1)`: att laga andelen `R` av
+    # en kropp är att bygga om `R · M` kilo vävnad, till samma syntesarbete per
+    # kilo som tillväxten betalar. Se `Body.step_pain_and_repair`.
     repair_W_decay: float = 0.15   # var 0.3 — mjukare degradering av reparation med ålder
     repair_eta0: float = 1.0
     repair_eta_W: float = 0.1     # var 0.2
@@ -1360,6 +1365,10 @@ class Body:
         """
         AP = self.AP
         dt = float(ctx.dt)
+        # Syntesarbetet per kilo ombyggd vävnad — samma storhet som tillväxtens,
+        # härledd ur `anabolism_eff`. Se `Body.step`, avsnitt (0C).
+        _ana_eff = max(1e-9, float(getattr(AP, "anabolism_eff", 1.0)))
+        _E_synt = float(AP.E_labile_J_per_kg) * (1.0 / _ana_eff - 1.0)
         dD = (float(self.D) - float(D_before)) / max(1e-9, dt)
         dD_pos = dD if dD > 0.0 else 0.0
     
@@ -1384,12 +1393,35 @@ class Body:
         R_des = max(0.0, float(AP.repair_gain) * float(self.P))
         R_des = min(R_des, R_max) * dt
 
-        E_per_D = max(1e-9, float(AP.repair_E_per_D))
+        eta = float(AP.repair_eta0) * math.exp(-float(AP.repair_eta_W) * float(self.W))
+
+        # **Man kan inte laga mer än som är trasigt.** Efterfrågan sattes av
+        # kapaciteten och smärtan och tog aldrig hänsyn till hur mycket skada som
+        # faktiskt fanns. Uppmätt band `R_max` i 99,2 procent av tickarna medan
+        # `D` hade medianen 0,0000 i varje massakvintil: djuret betalade full
+        # kapacitet varje tick för att laga skada det inte hade. Av 375 enheter
+        # köpt reparationsförmåga användes 81, alltså **77 procent av energin
+        # köpte ingenting**.
+        R_des = min(R_des, float(self.D) / max(eta, 1e-9))
+
+        # **Reparation är anabolism av skadad vävnad.** Att laga andelen `R` av
+        # en kropp på `M` kilo är att bygga om `R · M` kilo vävnad, till samma
+        # syntesarbete per kilo som tillväxten betalar sedan 0191. Det ger
+        # kostnaden en härledning i stället för ett tal, och det ger den rätt
+        # storleksberoende.
+        #
+        # `repair_E_per_D = 2,0e6 J` per enhet `D` var **oberoende av
+        # kroppsmassan** medan allt annat underhåll skalar som `M^0,75`. Uppmätt
+        # kostade reparationen 41,5 procent av basalomsättningen för den minsta
+        # massakvintilen och 3,5 för den största — en faktor tolv över
+        # massaspannet, åt fel håll. Talet var dessutom uttryckligen fittat:
+        # kommentaren löd *"var 0.02 → sänkt: billigare reparation gör det
+        # evolutionärt lönsamt"*.
+        E_per_D = max(1e-9, float(self.M)) * _E_synt
         E_need = R_des * E_per_D
         E_paid = float(self.take_energy(E_need, dt=dt))
         R = E_paid / E_per_D
-    
-        eta = float(AP.repair_eta0) * math.exp(-float(AP.repair_eta_W) * float(self.W))
+
         self.D = max(0.0, float(self.D) - eta * R)
     
         self._D_prev = float(self.D)   # om du fortfarande vill ha den som debug/state
