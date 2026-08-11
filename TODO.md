@@ -2577,7 +2577,9 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0190~~ | reservuttagen namngavs efter fel bildruta; dödsposten rapporterade noll | mätningen | **klart**, se nedan — bitidentisk körning |
 | ~~0191~~ | syntesarbetet härleds ur `anabolism_eff`; tre ärvda konstanter faller | budgeten | **klart**, se nedan — 0,13 → 86,7 kg |
 | ~~0192~~ | näringsbalansen sluter sig: golvet betalas, buffertarna räknas | balansen | **klart**, se nedan — 2,6e-07 → 1,9e-09 |
-| — | `M_waste_frac = 0,075` — svält är 99 % av all dödlighet och sker efter 92,5 % massförlust | dödligheten | **öppen**, högst prioritet |
+| ~~0193~~ | fettets mobiliseringstak mättes mot depån i stället för mot ämnesomsättningen | svälten | **klart**, se nedan — reserv vid död 0,0108 → 0 kg |
+| — | `M_waste_frac = 0,075` — döden sker efter 93 % massförlust; koden själv säger 30–40 % | dödligheten | **öppen**, nästa (0194) |
+| — | `starve_mass_crit_frac = 0,55` ligger under dödströskeln som den ska ramp:a mot | dödligheten | **öppen**, hör ihop med 0194 |
 | — | reparationen är näst största posten och betalas till 80–86 %; `repair_E_per_D` saknar härledning | budgeten | **öppen** |
 | — | `sense_cost_L1..L3` ligger 1e6 fel i enhet — sensing är gratis | A2 | **öppen**, se 0190 |
 | — | `gestation_mass_burden` och `gestation_P_overhead_per_kg` finns inte i `AgentParams` | reproduktionen | **öppen**, se 0190 |
@@ -2689,6 +2691,90 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Fettet gick inte att komma åt (0193)
+
+Taket för mobilisering ur den långsamma reservpoolen var
+`M_slow · slow_mobil_frac · dt`, alltså proportionellt mot **det fett som är
+kvar**. En sådan takt kollapsar precis när den behövs: ju tommare depån blir,
+desto långsammare rinner den, och den sista fjärdedelen är asymptotiskt
+oåtkomlig. Djuret svälter ihjäl ovanpå sitt eget fett.
+
+Uppmätt på `f6-256-mager` över 48 181 agenttick:
+
+```
+M_slow 0,00–0,05 kg   taket täckte   6,9 % av behovet
+M_slow 0,05–0,20 kg                 18,8 %
+M_slow 0,20–0,50 kg                 31,7 %
+M_slow 0,50–2,00 kg                 50,0 %
+M_slow över 2,00 kg                 68,3 %
+```
+
+**Taket band i 83 procent av agenttickarna trots att fettet fanns kvar.** 0189
+räknade 136 procents täckning, men mot reservtaket 1,18 kg; populationen lever på
+medianen 0,33 kg. Deklarerat tak är inte realiserat innehåll — samma mönster som
+`traits_clip` och `E_cap`, fast på en tillståndsvariabel.
+
+**Ny form, härledd ur fysiologin.** Lipolysens takt sätts av enzymatisk kapacitet,
+som skalar med ämnesomsättningen och inte med depåns storlek, och ett svältande
+däggdjur tömmer sitt fett nästan helt. Maximal fettoxidation hos däggdjur når 3–4
+gånger basalomsättningen; taket är satt till två, den försiktiga änden:
+
+```
+tak = mobil_max_x_basal · k_basal · M_carry^0,75 · dt / E_labile
+```
+
+Dräneringen ligger på 1,58 basalomsättningar i median och 1,93 vid p90, så ett
+djur i vila kan täcka hela sin dränering ur fettet medan ett kallt eller mycket
+aktivt inte kan det. Det är där svälten hör hemma. Gradvisheten ligger kvar men i
+depåns storlek i stället för i en avtagande takt. `slow_mobil_frac` faller.
+
+**Alla betalare möter nu samma tak.** Reparationen, trimningen och reproduktionen
+anropade `take_energy` **utan `dt`** och fick därför ett femtio gånger generösare
+tak än underhållet vid dagens kadens — de stryptes aldrig. Trimningen och
+barnöverföringen får `strypt=False`, eftersom den ena är utsöndring och den andra
+bygger avkomma; reparationen, reproduktionsavgiften och predationens attackkostnad
+får `dt` och möter taket. De hänger ihop av konstruktion: det är ett tak och en
+pool.
+
+**Uppmätt utfall.** `f6-256-mager`, 800 tick, frö 1, mot 0192:
+
+```
+                              0192       0193
+reserv vid död, median     0,0108 kg    0,0000 kg      p90 0,105 -> 3e-18
+svältfas, median              1,4 mån     0,82 mån
+D vid död, median            0,070       0,199
+dödsfall                      121          97
+födslar                        83          83
+bestånd vid t=800              42          66
+M_fauna                      31,8 kg     54,7 kg
+byten                        24,0 %      12,8 %
+underhåll strypta (liten6)   15,3 %       0,3 %
+```
+
+Det som patchen skulle åstadkomma är den första raden: **djuren tömmer nu tanken
+innan de dör**, exakt och i alla tre frön av mätningen. Att beståndet stiger är en
+följd och inte ett mål; det som betyder något är att svälten nu inträffar när
+fettet är slut och inte medan det finns kvar.
+
+Anropen till `underhåll: efter katabolism` föll 79 procent på `liten6` — den
+futila cykeln där strypt underhåll tvingade fram katabolism av egen vävnad är
+i allt väsentligt borta.
+
+**Ett mätfel i 0190 rättas samtidigt.** Strypningskriteriet i
+`instrument_reserv` läste reserven **efter** uttaget och krävde att den räckte
+till hela begäran även efter att ha gett vad den kunde. Det underskattade
+strypningen grovt: raden rapporterade 18 procent i en körning där den verkliga
+siffran var 83. Kriteriet läser nu reserven före uttaget.
+
+**Vad som blir läsbart först nu.** Dödströskeln var konfunderad av det här:
+djuren dog med oåtkomligt fett, så `M_waste_frac` gick inte att bedöma. Efter
+0193 dör de med tom tank, och mätningen av dödströskeln blir ren. Den är nästa
+patch — döden inträffar fortfarande vid 6,9 procent av toppmassan, alltså efter
+93 procents massförlust, mot 30–40 procent hos verkliga däggdjur och 60–70
+procent enligt kodens egen kommentar. Ingen individ nådde `D_max`:
+svältskadan står för en femtedel av skadebudgeten vid dödsögonblicket och kan
+inte döda.
 
 ### Näringsbalansen sluter sig (0192)
 

@@ -332,23 +332,11 @@ def instrument_vatten() -> None:
 # ---------------------------------------------------------------------------
 # Reservuttagets strypning.
 #
-# `slow_mobil_frac = 0,25` per månad gör `M_slow` till fett med veckors
-# tidsskala. Men p160b visar att `fast_frac` fortsätter drifta mot den snabba
-# poolen även när isoleringen sänker termoregleringen från 102 till 81 procent
-# av basalomsättningen — späcket lönar sig inte trots att det fungerar.
-#
-# Misstanken är att taket kostar på fel ställe. Det sattes för att motsvara en
-# vinter, alltså fyra månaders **uttömning av hela poolen**. Men uttaget sker
-# per tick, och vid dt = 0,02 släpper taket bara en halv procent av poolen per
-# steg. Det är inte en vinterbudget utan en flaskhals i vardagen — och tillväxt
-# och dräktighet drar ur samma pool.
-#
-# Frågan mätningen ska avgöra: **vem svälter på strypningen?**
-#
-#   underhållet   då är taket för hårt och bör lätta
-#   tillväxten    då ska taket gälla underhåll men inte anabolism, vilket
-#     dräktigheten  också är biologiskt rimligare — en dräktig hona omsätter
-#                 sina reserver snabbare än en vilande
+# Mätningen fanns för att avgöra **vem som svälter på strypningen**: underhållet,
+# tillväxten eller dräktigheten. Svaret kom i etapper. 0162 lät anabolismen gå
+# förbi taket, 0189 höjde taket, 0190 visade att posterna var felnamngivna, och
+# 0193 bytte takets form sedan mätningen visat att det band i 83 procent av
+# agenttickarna trots att fettet fanns kvar — se `AgentParams.mobil_max_x_basal`.
 #
 # Anroparna skiljs på anropsplats via stackens radnummer, inte på en flagga i
 # produktionskoden. Det håller mätningen utanför `agent.py` helt.
@@ -480,6 +468,12 @@ def instrument_reserv() -> None:
         return (_os.path.basename(f.f_code.co_filename), f.f_lineno)
 
     def wrapped(self, kg, dt=1.0, **kw):
+        # **Reserven läses före uttaget.** Kriteriet stod efter `orig` och läste
+        # därmed den *återstående* reserven, vilket krävde att den räckte till
+        # hela begäran även efter att ha gett vad den kunde. Det underskattade
+        # strypningen grovt: 0193 mätte 83 procent bindande tak i en körning där
+        # den här raden rapporterade 18.
+        Mr_fore = float(self.M_reserve())
         ut = orig(self, kg, dt, **kw)
         want = float(kg)
         if want > 1e-15:
@@ -497,12 +491,10 @@ def instrument_reserv() -> None:
             e[0] += 1
             e[2] += want
             e[3] += float(ut)
-            # Strypt om uttaget understiger det begärda trots att reserven
+            # Strypt om uttaget understeg det begärda trots att reserven
             # hade räckt — alltså att taket och inte tomheten band.
-            if ut < want * 0.999 and float(self.M_reserve()) > want:
+            if ut < want * 0.999 and Mr_fore > want:
                 e[1] += 1
-            # Anabolismen går sedan 0162 förbi taket. Raden står kvar i
-            # mätningen för att kunna visa att strypningen faktiskt upphörde.
         return ut
 
     Body._take_reserve_mass = wrapped

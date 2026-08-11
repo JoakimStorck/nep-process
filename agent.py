@@ -734,8 +734,8 @@ class AgentParams:
     # Någon `flee_score_sat` finns inte. Flyktstyrkans mättnad *är*
     # `attack_score_min`: den punkt där motparten kan anfalla. Se
     # `styrning.styrka_flykt`.
-    # Den långsamma reservpoolens mobiliseringstak, som andel av `M_slow` per
-    # månad.
+    # Den långsamma reservpoolens mobiliseringstak, uttryckt som en multipel av
+    # basalomsättningen.
     #
     # `M_fast` och `M_slow` fanns men uttaget fördelades efter poolernas
     # *storlek* och inte efter takt, med fast insättning 85/15. De töms i takt
@@ -744,37 +744,42 @@ class AgentParams:
     # veckor, protein sist. Modellen hade det första och det tredje, så svälten
     # var abrupt.
     #
-    # **Talet var 0,25 och blandade ihop en uttagstakt med en varaktighet.**
-    #
+    # **Talet var först 0,25 och blandade ihop en uttagstakt med en varaktighet.**
     # Motiveringen löd att fettet då räcker fyra månader vid full mobilisering.
     # Men 0,25 per månad betyder inte att poolen varar fyra månader — det
-    # betyder att **högst en fjärdedel av den får tas ut per månad**. Räcker
-    # inte det för underhållet svälter organismen oavsett hur mycket fett den
-    # bär.
+    # betyder att högst en fjärdedel av den får tas ut per månad. 0189 höjde det
+    # till 1,5 och mätte att taket då täcker 136 procent av underhållet vid ett
+    # fullt reservtak på 1,18 kg.
     #
-    # Uppmätt gjorde det just det. `M_fast` är noll i median — den snabba poolen
-    # är en genomströmning som fylls och töms varje tick — så hela reserven
-    # ligger i `M_slow`, median 0,215 kg. Uttagstaket blir 0,0013 kg per tick
-    # mot ett underhåll på 0,026:
+    # **Formen var ändå fel, och 0193 bytte den.** Taket var proportionellt mot
+    # `M_slow`, alltså mot det fett som är *kvar*. En sådan takt kollapsar
+    # precis när den behövs: ju tommare tanken blir, desto långsammare rinner
+    # den, och den sista fjärdedelen är asymptotiskt oåtkomlig. Uppmätt på
+    # `f6-256-mager` över 48 181 agenttick:
     #
-    #     taket täcker **fyra procent av behovet**
+    #     M_slow 0,00–0,05 kg   taket täckte   6,9 % av behovet
+    #     M_slow 0,05–0,20 kg                 18,8 %
+    #     M_slow 0,20–0,50 kg                 31,7 %
+    #     M_slow 0,50–2,00 kg                 50,0 %
+    #     M_slow över 2,00 kg                 68,3 %
     #
-    # Organismen svalt alltså med full tank. Det märktes inte tidigare därför
-    # att aptiten var obegränsad: djuret åt 1,8 kg per tick och skyfflade
-    # 0,29 kg genom den snabba poolen, vilket räckte tio gånger om.
-    # **Genomströmningen var bufferten**, och när aptiten begränsades till det
-    # som får plats föll den bort och taket blev synligt.
+    # Taket band **i 83 procent av agenttickarna trots att fettet fanns kvar**.
+    # 0189:s 136 procent räknades mot reservtaket 1,18 kg; populationen lever på
+    # medianen 0,33 kg, alltså en dryg fjärdedel av det. Deklarerat tak är inte
+    # realiserat innehåll.
     #
-    # Fett finns för att kunna brännas. Takets uppgift är att göra svälten
-    # *gradvis*, inte att göra fettet oåtkomligt. 1,5 per månad betyder att
-    # poolen kan mobiliseras fullt på omkring tre veckor — långsamt mot
-    # glykogenets tick, snabbt mot strukturens sista utväg.
+    # Fysiologin har ingen sådan proportionalitet. Lipolysens takt sätts av
+    # enzymatisk kapacitet, som skalar med ämnesomsättningen och inte med
+    # depåns storlek, och ett svältande däggdjur tömmer sitt fett nästan helt.
+    # Maximal fettoxidation hos däggdjur når 3–4 gånger basalomsättningen; två
+    # är den försiktiga änden och innebär att ett djur i vila kan täcka hela sin
+    # dränering ur fettet — uppmätt ligger dräneringen på 1,58 basalomsättningar
+    # i median och 1,93 vid p90 — medan ett kallt eller mycket aktivt djur inte
+    # kan det. Det är där svälten hör hemma.
     #
-    # Talet hänger ihop med reservtaket: vid det gamla taket, 0,215 kg, täcker
-    # 1,5 bara en fjärdedel av underhållet, och vid det nya, 1,18 kg, täcker det
-    # 136 procent. **De två går inte att flytta var för sig**, vilket är mätt
-    # tre gånger i följd under det här arbetet.
-    slow_mobil_frac: float = 1.5
+    # Gradvisheten ligger kvar, men i depåns *storlek* i stället för i en
+    # avtagande takt: reserven räcker så länge den räcker.
+    mobil_max_x_basal: float = 2.0
 
     # Späckets isolerande verkan: den andel av värmeledningen `K` som faller
     # bort vid full späckandel.
@@ -1180,19 +1185,32 @@ class Body:
         #
         # Uttaget fördelades tidigare i proportion till poolernas storlek, vilket
         # gjorde dem till en pool med två namn. Nu töms `M_fast` innan `M_slow`
-        # rörs, och `M_slow` får bara lämna ifrån sig `slow_mobil_frac · dt` av
-        # sitt eget innehåll per steg. Det ger fettets tidsskala: veckor, mellan
-        # glykogenets tick och strukturens sista utväg.
+        # rörs, och `M_slow` får bara lämna ifrån sig en begränsad mängd per
+        # steg. Det ger fettets tidsskala: mellan glykogenets tick och
+        # strukturens sista utväg.
+        #
+        # **Taket mäts mot ämnesomsättningen och inte mot depån.** Det var
+        # tidigare `M_slow · slow_mobil_frac · dt`, alltså proportionellt mot det
+        # fett som är kvar — en takt som kollapsar precis när den behövs, och
+        # som gör den sista fjärdedelen av depån asymptotiskt oåtkomlig. Uppmätt
+        # band den i 83 procent av agenttickarna trots att fettet fanns; se
+        # `AgentParams.mobil_max_x_basal` för mätningen och härledningen.
         #
         # Räcker inte taket returneras mindre än begärt. Anroparen ser det som
-        # ett kvarstående underskott, och det är riktigt: ett djur med fett kvar
-        # kan ändå svälta om det inte hinner mobilisera det.
+        # ett kvarstående underskott, och det är riktigt: ett djur kan svälta
+        # med fett kvar om dräneringen överstiger vad lipolysen hinner leverera.
+        # Skillnaden är att det nu sker när dräneringen är hög och inte när
+        # depån är låg.
         d_fast = min(take, float(self.M_fast))
         self.M_fast = float(self.M_fast) - d_fast
         rest = take - d_fast
         if rest > 0.0 and self.M_slow > 0.0:
             if strypt:
-                tak = float(self.M_slow) * float(self.AP.slow_mobil_frac) * float(dt)
+                AP = self.AP
+                M_carry = float(self.M) + Mr
+                P_basal = float(AP.k_basal) * (M_carry ** 0.75)
+                tak = (float(AP.mobil_max_x_basal) * P_basal * float(dt)
+                       / float(AP.E_labile_J_per_kg))
                 d_slow = min(rest, tak)
             else:
                 d_slow = min(rest, float(self.M_slow))
@@ -1332,7 +1350,7 @@ class Body:
 
         E_per_D = max(1e-9, float(AP.repair_E_per_D))
         E_need = R_des * E_per_D
-        E_paid = float(self.take_energy(E_need))
+        E_paid = float(self.take_energy(E_need, dt=dt))
         R = E_paid / E_per_D
     
         eta = float(AP.repair_eta0) * math.exp(-float(AP.repair_eta_W) * float(self.W))
@@ -1380,7 +1398,7 @@ class Body:
         self.M_slow = float(self.M_slow) * f
 
     def take_energy(self, amount: float, *, burn: bool = True,
-                    dt: float = 1.0) -> float:
+                    dt: float = 1.0, strypt: bool = True) -> float:
         """
         Ta ut energi ur reserven. Returnerar faktiskt uttag i joule.
 
@@ -1391,13 +1409,20 @@ class Body:
         `burn=True` betyder att massan oxideras och att dess näring utsöndras.
         `burn=False` används när massan i stället överförs någon annanstans —
         till en avkomma — och alltså inte lämnar systemet.
+
+        `strypt=False` för överföring och byggande, av samma skäl som i
+        `_take_reserve_mass`: taket gäller löpande förbrukning. **`dt` är inte
+        valfritt.** Utan det får anroparen ett tak som är `1/dt` gånger för
+        generöst — vid dagens kadens femtio gånger — och betalarna möter då
+        olika tak för samma pool. Reparationen, trimningen och reproduktionen
+        anropade utan `dt` fram till 0193 och stryptes därför aldrig.
         """
         amt = float(max(0.0, amount))
         if amt <= 0.0:
             return 0.0
 
         e_lab = float(self.AP.E_labile_J_per_kg)
-        take_kg = self._take_reserve_mass(amt / e_lab, dt)
+        take_kg = self._take_reserve_mass(amt / e_lab, dt, strypt=strypt)
         if take_kg <= 0.0:
             return 0.0
 
@@ -1759,7 +1784,7 @@ class Body:
             #
             #   för mycket snabbt    ingen vinterbuffert, ingen isolering
             #   för mycket långsamt  varm men trög — `M_slow` släpper bara
-            #                        `slow_mobil_frac · dt` per steg, och både
+            #                        mot ämnesomsättningen per steg, och både
             #                        tillväxt och dräktighet drar ur reserven,
             #                        så fett som ligger som fett finansierar
             #                        ingenting
@@ -2166,7 +2191,11 @@ class Body:
             # Att radera det vore att förstöra massa: djuret hann äta upp det.
             # Att i stället begränsa intaget vid källan är biologiskt renare men
             # rör födosöket, och tas när kalibreringen är stabil.
-            trim_kg = self._take_reserve_mass((Et - Ecap) / _E_labile)
+            # Ingen strypning: det här är utsöndring och inte mobilisering.
+            # Med taket blev reservtaket mjukt — överskottet låg kvar över cap
+            # tills lipolysen hann ikapp, vilket är precis det 0189 tog bort.
+            trim_kg = self._take_reserve_mass((Et - Ecap) / _E_labile,
+                                              strypt=False)
             if trim_kg > 0.0:
                 self._void(trim_kg, 0.0)
                 E_overflow = trim_kg * _E_labile
@@ -4499,7 +4528,8 @@ class Agent:
         M_target = float(getattr(self.pheno, "child_M", 0.0))
         return bool(self.body.start_gestation(M_target, n))
     
-    def pay_repro_cost(self, cost_E_J: float, *, transfer: bool = False) -> float:
+    def pay_repro_cost(self, cost_E_J: float, *, transfer: bool = False,
+                       dt: float = 1.0) -> float:
         """
         Dra energi från parent. Returnerar faktiskt betald energi (J).
         OBS: Den här är bara en transfer; pain/damage ska uppstå via
@@ -4508,9 +4538,16 @@ class Agent:
         `transfer=True` när massan går vidare till en avkomma i stället för att
         oxideras. Reproduktionens overhead brinner; barnets startreserv gör det
         inte.
+
+        Överföringen möter inte mobiliseringstaket — den bygger avkomma på
+        samma sätt som anabolismen bygger vävnad. Avgiften brinner och möter
+        det, med `dt` från steget. Före 0193 anropades båda utan `dt` och fick
+        därmed ett femtio gånger generösare tak än underhållet.
         """
         want_J = max(0.0, float(cost_E_J))
-        paid_J = float(self.body.take_energy(want_J, burn=not bool(transfer)))
+        paid_J = float(self.body.take_energy(want_J, burn=not bool(transfer),
+                                             dt=float(dt),
+                                             strypt=not bool(transfer)))
         return paid_J
     
     def init_newborn_state(
@@ -4557,7 +4594,8 @@ class Agent:
         Ecap = float(self.body.E_cap())
         if Et > Ecap:
             e_lab_c = float(self.AP.E_labile_J_per_kg)
-            trim_kg = self.body._take_reserve_mass((Et - Ecap) / e_lab_c)
+            trim_kg = self.body._take_reserve_mass((Et - Ecap) / e_lab_c,
+                                                   strypt=False)
             if trim_kg > 0.0:
                 self.body._void(trim_kg, 0.0)
     

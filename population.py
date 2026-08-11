@@ -1389,7 +1389,7 @@ class Population:
         # parning, och eftersom parningen kräver att två samtidigt är klara
         # kvadrerades effekten på hur ofta det kan ske.
         mating_cost = 0.05 * partner.body.E_cap()
-        partner.pay_repro_cost(mating_cost)
+        partner.pay_repro_cost(mating_cost, dt=float(ctx.dt))
         
         if p_slot >= 0:
             self._write_body_surface_to_store(p_slot, partner)
@@ -1477,7 +1477,8 @@ class Population:
         total_child_E = child_E_fast_J + child_E_slow_J
         # Överföring, inte förbränning: massan lämnar föräldern och hamnar i
         # barnet. Att bokföra den som bränd vore att utsöndra den två gånger.
-        paid_to_child = float(parent.pay_repro_cost(total_child_E, transfer=True))
+        paid_to_child = float(parent.pay_repro_cost(total_child_E, transfer=True,
+                                                    dt=float(ctx.dt)))
         
         if total_child_E > 1e-12:
             scale = paid_to_child / total_child_E
@@ -1487,7 +1488,7 @@ class Population:
         child_E_slow_J *= scale / n_kull
         
         repro_cost_J = float(parent.pheno.repro_cost) * float(parent.body.E_cap())
-        parent.pay_repro_cost(repro_cost_J)
+        parent.pay_repro_cost(repro_cost_J, dt=float(ctx.dt))
         
         self._write_body_surface_to_store(p_slot, parent)
 
@@ -4326,7 +4327,8 @@ class Population:
             mismatch_cost = float(getattr(predator.AP, "hunt_mismatch_cost", 2.0))
             cost_mult = 1.0 + (mismatch_cost - 1.0) * max(0.0, 1.0 - pred_diet)
             predator.body.take_energy(
-                cost_frac * hunt_eff * cost_mult * float(predator.body.E_cap()) * dt
+                cost_frac * hunt_eff * cost_mult * float(predator.body.E_cap()) * dt,
+                dt=dt,
             )
             self._write_body_surface_to_store(predator.store_slot, predator)
     
