@@ -308,10 +308,13 @@ def styrka_svalt(underskott_J: float, underhall_J: float) -> float:
 
 def massunderskott(m_rel: float, m_ok: float, m_crit: float) -> float:
     """
-    Massunderskott, 0–1: massan relativt förväntad massa för åldern.
+    Massunderskott, 0–1: massan relativt kroppens egen toppmassa.
 
     Noll vid `starve_mass_ok_frac` (0,85) och uppåt, ett vid
-    `starve_mass_crit_frac` (0,55) och neråt, linjärt emellan.
+    `starve_mass_crit_frac` (0,65) och neråt, linjärt emellan. Botten
+    sammanfaller sedan 0194 med dödströskeln `M_waste_frac`, så att full
+    svårighetsgrad är nåbar och rampen spänner precis det överlevbara
+    intervallet.
 
     Driver `dD_starve` och gör det fortfarande. Hette `styrka_svalt` tills
     p148 visade att den inte mäter svält: hela populationen låg stadigt på 69

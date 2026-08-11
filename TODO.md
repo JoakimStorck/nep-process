@@ -2578,8 +2578,10 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0191~~ | syntesarbetet härleds ur `anabolism_eff`; tre ärvda konstanter faller | budgeten | **klart**, se nedan — 0,13 → 86,7 kg |
 | ~~0192~~ | näringsbalansen sluter sig: golvet betalas, buffertarna räknas | balansen | **klart**, se nedan — 2,6e-07 → 1,9e-09 |
 | ~~0193~~ | fettets mobiliseringstak mättes mot depån i stället för mot ämnesomsättningen | svälten | **klart**, se nedan — reserv vid död 0,0108 → 0 kg |
-| — | `M_waste_frac = 0,075` — döden sker efter 93 % massförlust; koden själv säger 30–40 % | dödligheten | **öppen**, nästa (0194) |
-| — | `starve_mass_crit_frac = 0,55` ligger under dödströskeln som den ska ramp:a mot | dödligheten | **öppen**, hör ihop med 0194 |
+| ~~0194~~ | dödströskeln och svältskadans ramp sätts ihop mot toppmassan | dödligheten | **klart**, se nedan — massförlust 92,8 → 37,8 % |
+| — | `M_peak_tau = 12` mån är längre än den uppmätta livslängden; avklingningen är i praktiken av | dödligheten | **öppen**, mät efter 0194 |
+| — | `dD_starve` kan inte döda: 0,025/mån mot `D_max = 1` är fyrtio månader vid full svält | dödligheten | **öppen** |
+| — | tio procent av dödsfallen sker med fett kvar, för att taket binder vid hög dränering | svälten | **öppen**, bieffekt av 0193 |
 | — | reparationen är näst största posten och betalas till 80–86 %; `repair_E_per_D` saknar härledning | budgeten | **öppen** |
 | — | `sense_cost_L1..L3` ligger 1e6 fel i enhet — sensing är gratis | A2 | **öppen**, se 0190 |
 | — | `gestation_mass_burden` och `gestation_P_overhead_per_kg` finns inte i `AgentParams` | reproduktionen | **öppen**, se 0190 |
@@ -2691,6 +2693,75 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Dödströskeln och svältskadans ramp sätts ihop (0194)
+
+Två konstanter mätte samma storhet mot oförenliga trösklar. Döden inträffade vid
+`M_waste_frac = 0,075` av toppmassan; svältskadans ramp gick 0,85 → 0,55 och nådde
+alltså full svårighetsgrad i ett spann som djuret passerade och sedan levde vidare
+i under hela sin nedgång.
+
+**0,075 var det gamla absoluta villkoret omskrivet, inte fysiologi.** 0,14 kg mot
+en `M_target` kring 2 kg ger 0,07, och andelen bevarade magnituden i stället för
+att införa den riktiga storheten. Uppmätt dog djuren vid 6,9 procent av sin
+toppmassa — efter **93 procents massförlust**. Inget däggdjur når i närheten.
+
+Förlust av mager vävnad vid svältdöd ligger på 30–40 procent hos däggdjur.
+Modellens `M` *är* mager vävnad — reserven ligger utanför — så 0,65 svarar mot 35
+procents förlust och är den storhet litteraturen mäter. Totalmassans 30–50
+procent går inte att använda som ankare, eftersom modellens reservtak tillåter upp
+till 74 procent fett av `M` mot däggdjurens 5–15. `starve_mass_crit_frac` flyttas
+till samma tal, så att full svårighetsgrad sammanfaller med döden i stället för
+att ligga i ett spann som inte går att befinna sig i.
+
+**Mätt före.** Referensen ska vara toppmassan och inte den förväntade:
+populationen lever stadigt på 0,86 av `expected_mass` i median och 0,35 vid p10,
+så en tröskel vid 0,65 mot den storheten hade dödat en fjärdedel av alla levande
+agenttick mot tolv procent mot toppen. Att vara liten är inte att svälta — samma
+slutsats som p148 drog, och samma som 0180–0182 byggde på.
+
+Tröskeln dödar inte överlevare. Av 144 individer dippade 119 under 0,65 av sin
+topp; **åtta kom tillbaka över 0,85, och fyra av dem dog ändå.** Nedgången är i
+praktiken enkelriktad.
+
+**Uppmätt utfall.** `f6-256-mager`, 800 tick, frö 1, mot 0193:
+
+```
+                              0193       0194
+massförlust vid död, median   92,8 %     37,8 %      p10 35,6  p90 43,6
+M/M_peak vid död              0,069      0,622
+svältfas, median              0,82 mån   0,12 mån
+D vid död, median             0,199      0,037
+medianålder vid död            6,3 mån   15,9 mån
+dödsfall / födslar            97 / 83   116 / 58
+bestånd vid t=800               66         22
+kadavermassa                  1,33 kg   12,10 kg
+```
+
+Massförlusten ligger nu mitt i litteraturens band, och `M_waste_frac` är den
+bindande grinden i 99,1 procent av dödsfallen mot `M_min` i 0,9.
+
+**Individerna lever mer än dubbelt så länge, och beståndet är mindre.** Det är
+inte en motsägelse: den vandrande döden är borta. Ett djur som tidigare red ut en
+vinter på tio procent av sin kroppsmassa och sedan växte tillbaka dör nu, vilket
+är vad ett däggdjur gör. Beståndets känslighet för säsong har ökat därför att
+den tidigare okänsligheten var ett artefakt.
+
+Nyföddas dödlighet är inte problemet jag befarade: 2,6 procent dör före en
+månads ålder. Golvet `M_min` binder bara i 0,9 procent av dödsfallen.
+
+**Två bieffekter att följa.** Kadavermassan niodubblades, eftersom djuren nu dör
+med kropp kvar i stället för att ha bränt den. Och tio procent av dödsfallen sker
+med fett kvar — p90 för reserven vid död gick 3e-18 → 0,18 kg — vilket är
+mobiliseringstaket från 0193 som binder när dräneringen överstiger två
+basalomsättningar, alltså i kyla. Det är avsiktligt men bör mätas mot vintern.
+
+**Vad som blir läsbart först nu.** `M_peak_tau = 12` månader skulle enligt sin
+kommentar vara "kort mot ett liv". Uppmätt var medianlivslängden 6,3 månader före
+patchen och är 15,9 efter, och `M_peak / max(M) någonsin` har medianen 1,0000 —
+avklingningen är i praktiken avstängd. Med dödströskeln på 0,075 spelade det
+ingen roll; med 0,65 avgör den om en vinterkrympning blir en dödsdom. Den ska
+mätas härnäst, inte gissas.
 
 ### Fettet gick inte att komma åt (0193)
 

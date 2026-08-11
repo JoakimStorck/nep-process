@@ -398,8 +398,7 @@ class AgentParams:
     # Starvation / weakness dynamics
     # ------------------------
     M_crit: float = 0.50   # under detta försvagas rörelseförmågan
-    # **Dödströskeln vid avmagring**, som andel av vad kroppen *borde* väga för
-    # sin ålder.
+    # **Dödströskeln vid avmagring**, som andel av kroppens egen toppmassa.
     #
     # Villkoret var `M <= M_min` med `M_min = 0.14` — en absolut massa. Det
     # fungerade så länge en kull var en unge och `child_M` alltid låg över den.
@@ -411,12 +410,35 @@ class AgentParams:
     # 0,20 kg och en med 4,00 kg dog vid samma 0,14 — den ena vid sjuttio
     # procent av sin vuxenmassa, den andra vid tre och en halv.
     #
-    # Att magra ihjäl sig är att väga för lite **mot vad man borde väga**, och
-    # den storheten finns redan: `_M_expected`, von Bertalanffy-kurvan från
-    # `child_M` mot `M_target` vid `A_mature`. En nyfödd väger per definition
-    # sin förväntade massa och klarar sig; en vuxen som brutit ner halva sin
-    # kropp gör det inte, oavsett hur stor den var från början.
-    M_waste_frac: float = 0.075
+    # **Referensen är toppmassan och inte den förväntade.** 0180–0182 bytte till
+    # `_M_peak` sedan en tröskel mot ett tillväxtlöfte visat sig vara
+    # evolutionärt självmord: `A_mature` föll till sitt golv i varje lång
+    # körning. Uppmätt lever populationen stadigt på 0,86 av `expected_mass` i
+    # median och 0,35 vid p10 — en tröskel vid 0,65 mot den storheten hade dödat
+    # en fjärdedel av alla levande agenttick, mot tolv procent mot toppen. Att
+    # vara liten är inte att svälta.
+    #
+    # **Talet 0,075 var det gamla absoluta villkoret omskrivet, inte fysiologi.**
+    # 0,14 kg mot en `M_target` kring 2 kg ger 0,07, och andelen bevarade
+    # magnituden i stället för att införa den riktiga storheten. Uppmätt på
+    # `f6-256-mager` innebar det att djuren dog vid 6,9 procent av sin toppmassa,
+    # alltså efter **93 procents massförlust**. Inget däggdjur når i närheten.
+    #
+    # Verkligheten: förlust av mager vävnad vid svältdöd ligger på 30–40 procent
+    # av utgångsvärdet. Modellens `M` *är* mager vävnad — reserven ligger
+    # utanför — så 0,65 svarar mot 35 procents förlust och är den storhet
+    # litteraturen mäter. Totalmassans 30–50 procent går inte att använda som
+    # ankare här, eftersom modellens reservtak tillåter upp till 74 procent fett
+    # av `M` mot däggdjurens 5–15.
+    #
+    # Tröskeln dödar inte överlevare. Uppmätt över 144 individer dippade 119
+    # under 0,65 av sin topp; **åtta kom tillbaka över 0,85, och fyra av dem dog
+    # ändå**. Nedgången är i praktiken enkelriktad, så flytten avbryter en
+    # självförbränning som inte har någon motsvarighet i biologin snarare än att
+    # den avbryter en återhämtning.
+    #
+    # Hänger ihop med `starve_mass_crit_frac` av konstruktion: se den.
+    M_waste_frac: float = 0.65
 
     # Tidskonstant för toppmassans avklingning, i månader. Lång mot en säsong
     # och kort mot ett liv: en vinter ska inte skriva om vad kroppen är, men ett
@@ -928,15 +950,29 @@ class AgentParams:
     # energibalans — vilket ensamt räckte för att nå D_max på fem månader.
     k_cat_dmg:          float = 0.05
 
-    # Svältskada baserad på individens massa relativt förväntad massa för åldern.
-    # M_expected(age) = child_M  vid age=0
-    #                 = M_target  vid age=A_mature (sedan konstant)
-    # Massunderskott i relation till åldersnormen är i sig bevis på svält —
-    # en agent under kurvan har per definition inte haft tillräcklig energi att växa.
-    # Reservvillkor är därför överflödigt: reserven styr om agenten kan *komma ur*
-    # svältläget (via tillväxt), men massunderskottet är det direkta skadesignalet.
-    starve_mass_ok_frac:   float = 0.85   # ingen svältskada om M >= 85% av M_expected
-    starve_mass_crit_frac: float = 0.55   # maximal svältskada om M <= 55% av M_expected
+    # Svältskadans ramp, mot **toppmassan** och inte mot den förväntade — samma
+    # referens som dödströskeln sedan 0180–0182. Kommentaren här talade om
+    # `M_expected` långt efter att `Body.step` bytt storhet; se
+    # `styrning.massunderskott`.
+    #
+    # **`starve_mass_crit_frac` låg under dödströskeln.** Rampen gick 0,85 → 0,55
+    # medan döden inträffade vid 0,075, alltså full svårighetsgrad i ett spann
+    # som djuret passerade och sedan levde vidare i under hela sin nedgång.
+    # Med dödströskeln på 0,65 blev det motsatta problemet: rampens botten hade
+    # legat *under* döden och aldrig kunnat nås. Ett deklarerat spann som inte
+    # går att befinna sig i är samma fel som `traits_clip` gav fenotypen.
+    #
+    # De två sätts därför ihop: full svårighetsgrad sammanfaller nu exakt med
+    # döden, och rampen 0,85 → 0,65 spänner precis det överlevbara intervallet.
+    # Uppmätt ligger 19,1 procent av levande agenttick under 0,85 och 11,9
+    # procent under 0,65, så rampen har ett verkligt dynamiskt omfång.
+    #
+    # `starve_damage_gain` rörs inte, men den bär en kanal som inte kan döda:
+    # 0,025 per månad mot `D_max = 1` betyder fyrtio månader vid full svält, och
+    # ingen individ har någonsin nått `D_max`. Svältskadan står för en femtedel
+    # av skadebudgeten vid dödsögonblicket. Se `TODO.md`.
+    starve_mass_ok_frac:   float = 0.85   # ingen svältskada om M >= 85% av M_peak
+    starve_mass_crit_frac: float = 0.65   # maximal svältskada vid dödströskeln
     starve_damage_gain:    float = 0.025  # max extra D/s vid full svält (var 0.08 — för aggressivt)
 
     # Stokastisk dödsrisk — liten och tillståndsberoende ("olyckor").
@@ -2208,11 +2244,11 @@ class Body:
         # den kan inte göra ogjort att skadan under ticken översteg vad
         # kroppen bär. Att pröva mot self.D vore att låta klampen bestämma
         # över biologin.
-        # Avmagringsdöden mäts mot förväntad massa för åldern; se
-        # `AgentParams.M_waste_frac`. Faller `_M_expected` bort — den skrivs i
-        # tillväxtsteget — används golvet ensamt.
-        _M_exp_now = float(getattr(self, "_M_peak", 0.0))
-        _M_dod = max(_M_min, float(self.AP.M_waste_frac) * _M_exp_now) if _M_exp_now > 0.0 else _M_min
+        # Avmagringsdöden mäts mot kroppens egen toppmassa; se
+        # `AgentParams.M_waste_frac`. Har ingen topp hunnit sättas används golvet
+        # ensamt.
+        _M_top = float(getattr(self, "_M_peak", 0.0))
+        _M_dod = max(_M_min, float(self.AP.M_waste_frac) * _M_top) if _M_top > 0.0 else _M_min
         if float(D_raw) >= _D_max or float(self.M) <= _M_dod:
             self.death_cause = "damage" if float(D_raw) >= _D_max else "starvation"
             self.alive = False
