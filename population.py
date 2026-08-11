@@ -1425,7 +1425,35 @@ class Population:
         # totalen; `litter` är delningen.
         n_kull = max(1, int(getattr(b, "gest_n", 1)))
         child_M = float(b.gest_M) / n_kull
-        
+
+        # **Golvet skapade massa ur ingenting.** `init_newborn_state` klämde upp
+        # massan till `M_birth_min` utan att någon betalade mellanskillnaden —
+        # exakt det fel som kommentaren till `M_birth_min` säger att `M_min`
+        # gjorde, bara flyttat en rad ner. Med `litter` delas investeringen, och
+        # klämman slog i 12 till 41 procent av födslarna i p189m.
+        #
+        # Det syntes bara i näringsbalansen, och där dolde det sig i
+        # storleksordningen. På `f6-256` med 76 378 födslar blev det 5,52 kg
+        # obokförd näring och en monoton drift till 1,09e-04 relativt — hundra
+        # gånger toleransen, och sex invariantbrott per körning. Läckan skalar
+        # med födslarna, vilket är varför den var osynlig i de korta magra
+        # körningarna och dominerande i de långa täta.
+        #
+        # Golvet är rimligt som livskraftsgräns, men det måste ha en betalare.
+        # Bäraren fyller på ur sin egen reserv; massan överförs och bränns inte,
+        # och `d_nut` nedan släpper mellanskillnaden mellan reservens labila
+        # näringshalt och vävnadens eftersom den räknas på det påfyllda
+        # `child_M`. Räcker reserven inte föds ungen på den massa som faktiskt
+        # byggdes, och fysiologin får avgöra om den är livskraftig — vilket är
+        # vad kommentaren till `M_birth_min` säger att den ska göra.
+        #
+        # Uppmätt: `_step_births` gick från +1,18e-03 kg obokförd näring per
+        # 200 tick på `liten6` till −5,0e-11, alltså float64-brus.
+        brist = float(self.AP.M_birth_min) - child_M
+        if brist > 0.0:
+            betalt = float(b._take_reserve_mass(brist * n_kull, strypt=False))
+            child_M += betalt / n_kull
+
         b.abort_gestation()
         
         store.gestating[p_slot] = False

@@ -1048,25 +1048,47 @@ def nutrient_balance(pop) -> dict[str, float]:
 
     # Fauna: committad vävnad bär sin egen strukturandel, reserven och ett
     # eventuellt foster är labila.
+    #
+    # `in_transit` är näring som lämnat kroppen men ännu inte placerats i
+    # världen. `Body` har ingen världsreferens och bokför sina utflöden i egna
+    # buffertar som body-passet tömmer till cellen. Predationen ligger **efter**
+    # body-passet och hinner därför fylla på efter tickens sista tömning: vid
+    # tickens slut ligger den näringen i ingen pool alls.
+    #
+    # Utan termen mätte invarianten tömningens tidpunkt och inte modellen, och
+    # eftersom buffertens innehåll skalar med beståndet såg det ut som en drift
+    # som växte med populationen. Uppmätt på `liten6` över 299 tick: balansen
+    # drev −7,773e-04 kg medan buffertarna växte +7,816e-04 kg, och summan var
+    # +4,3e-06 kg med största enskilda tick 7,5e-08 — alltså float64-brus.
     in_fauna = 0.0
+    in_transit = 0.0
     for a in getattr(pop, "agents", ()):
-        if not a.body.alive:
+        b = a.body
+        kg_out = float(getattr(b, "out_excreta_kg", 0.0))
+        if kg_out > 0.0:
+            s_out = float(getattr(b, "out_excreta_struct_kg", 0.0)) / kg_out
+            in_transit += kg_out * (NUTRIENT_PER_KG_LABILE * (1.0 - s_out)
+                                    + NUTRIENT_PER_KG_STRUCT * s_out)
+        in_transit += float(getattr(b, "out_nutrient_kg", 0.0))
+
+        if not b.alive:
             continue
         slot = int(getattr(a, "store_slot", -1))
         s = float(store.structure[slot]) if slot >= 0 else 0.25
-        in_fauna += float(a.body.M) * nutrient_content(s)
-        in_fauna += a.body.M_reserve() * NUTRIENT_PER_KG_LABILE
-        if bool(a.body.gestating):
-            in_fauna += float(a.body.gest_M) * NUTRIENT_PER_KG_LABILE
+        in_fauna += float(b.M) * nutrient_content(s)
+        in_fauna += b.M_reserve() * NUTRIENT_PER_KG_LABILE
+        if bool(b.gestating):
+            in_fauna += float(b.gest_M) * NUTRIENT_PER_KG_LABILE
 
     added = float(getattr(world, "_nutrient_added_total", 0.0))
     lost = float(getattr(world, "_nutrient_lost_total", 0.0))
-    total = free + in_detritus + in_flora + in_fauna
+    total = free + in_detritus + in_flora + in_fauna + in_transit
 
     return {
         "free": free,
         "in_flora": in_flora,
         "in_fauna": in_fauna,
+        "in_transit": in_transit,
         "in_detritus": in_detritus,
         "in_litter": in_litter,
         "in_carcass": in_carcass,

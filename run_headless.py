@@ -1418,7 +1418,8 @@ def print_summary(pop: Population, d0: dict, nb0: dict, unika: int, worst_drift:
 
     print(f"\n  näring (kg)  fri {nb['free']:.2f}  flora {nb['in_flora']:.2f}  "
           f"fauna {nb['in_fauna']:.2f}  förna {nb.get('in_litter', nb['in_detritus']):.2f}  "
-          f"kadaver {nb.get('in_carcass', 0.0):.2f}")
+          f"kadaver {nb.get('in_carcass', 0.0):.2f}  "
+          f"i transit {nb.get('in_transit', 0.0):.4f}")
     tot_n = max(1e-12, nb['total'])
     print(f"               andelar   fri {nb['free'] / tot_n * 100:.0f} %  "
           f"flora {nb['in_flora'] / tot_n * 100:.0f} %  "

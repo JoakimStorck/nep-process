@@ -2576,8 +2576,9 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0189~~ | aptiten, reservtaket och fettets uttagstakt som en enhet | svälten | **klart**, se nedan — spillet 1249 → 91 kg |
 | ~~0190~~ | reservuttagen namngavs efter fel bildruta; dödsposten rapporterade noll | mätningen | **klart**, se nedan — bitidentisk körning |
 | ~~0191~~ | syntesarbetet härleds ur `anabolism_eff`; tre ärvda konstanter faller | budgeten | **klart**, se nedan — 0,13 → 86,7 kg |
-| — | `f6-256-mager` 800 tick: 52 → 39 djur men +51 % medelmassa; ett frö i en döende värld avgör inget | budgeten | **öppen**, se 0191 — kör `f6-256` |
-| — | `M_birth_min` skapar massa vid födseln — men den är inte hela näringsdriften | balansen | **öppen**, se 0190 |
+| ~~0192~~ | näringsbalansen sluter sig: golvet betalas, buffertarna räknas | balansen | **klart**, se nedan — 2,6e-07 → 1,9e-09 |
+| — | `M_waste_frac = 0,075` — svält är 99 % av all dödlighet och sker efter 92,5 % massförlust | dödligheten | **öppen**, högst prioritet |
+| — | reparationen är näst största posten och betalas till 80–86 %; `repair_E_per_D` saknar härledning | budgeten | **öppen** |
 | — | `sense_cost_L1..L3` ligger 1e6 fel i enhet — sensing är gratis | A2 | **öppen**, se 0190 |
 | — | `gestation_mass_burden` och `gestation_P_overhead_per_kg` finns inte i `AgentParams` | reproduktionen | **öppen**, se 0190 |
 | — | nyfödda utrustas mot `E_cap_per_M`, inte mot sin egen `reserve_cap` | livshistorien | **öppen**, se 0190 |
@@ -2688,6 +2689,61 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Näringsbalansen sluter sig (0192)
+
+Två fel i samma bevarandelag, ett i modellen och ett i mätningen. Ingen mekanism
+i övrigt ändras.
+
+**Golvet skapade massa.** `init_newborn_state` klämde upp den nyföddas massa till
+`M_birth_min` utan att någon betalade mellanskillnaden — samma fel som
+kommentaren till `M_birth_min` säger att `M_min` gjorde, bara flyttat en rad ner.
+Bäraren fyller nu på ur sin egen reserv; räcker den inte föds ungen på den massa
+som faktiskt byggdes.
+
+Läckan skalar med födslarna, vilket är varför den var osynlig i de korta magra
+körningarna och dominerande i de långa täta. På `f6-256` med 76 378 födslar gav
+den 5,52 kg obokförd näring och en monoton drift till **1,09e-04 relativt**,
+hundra gånger toleransen. **Samtliga sex referenskörningar i p190b och p191 föll
+på invariantsviten**, med fyra till sex brott var och drift som växte monotont
+med tiden — 1,49e-06 vid tick 1000 och 1,09e-04 vid tick 3000 i p190b/s3.
+
+**Mätningen såg inte hela modellen.** `Body` har ingen världsreferens och bokför
+sina utflöden i egna buffertar som body-passet tömmer till cellen. Predationen
+ligger **efter** body-passet och hinner därför fylla på efter tickens sista
+tömning: vid tickens slut låg den näringen i ingen pool alls. Eftersom buffertens
+innehåll skalar med beståndet såg det ut som en drift som växte med
+populationen. `nutrient_balance` räknar nu `in_transit`, och posten skrivs ut i
+näringsblocket så att den inte kan hålla massa i tysthet.
+
+**Uppmätt utfall.**
+
+```
+                       före 0192    efter 0192
+liten6 400 tick         5,82e-07      4,49e-09
+f6-256-mager 800 tick   2,60e-07      1,86e-09
+```
+
+Faktor 130 respektive 140, och båda ligger nu på float64-brus. `liten6` över 299
+tick: balansen drev −7,773e-04 kg medan buffertarna växte +7,816e-04 kg, och
+summan var +4,3e-06 kg med största enskilda tick 7,5e-08.
+
+**Så här hittades de.** Ett per-pass-prov visade att world- och florapassen är
+exakta till 4e-11 kg över 200 tick, alltså att hela läckan satt i faunan.
+`_step_births` gick från +1,18e-03 kg per 200 tick till −5,0e-11 när golvet fick
+sin betalare — det var beviset att rättelsen var rätt, och det var precis den
+mätning som saknades när samma rättelse förkastades i 0190. Passmätningens övriga
+poster visade sig vara artefakter av att mäta mitt i en tick: `_step_deaths` såg
+ut att skapa +7,10e-03 kg i en körning där **inget djur dog**. Det var buffertarna.
+
+Beteendeeffekten är liten, som väntat av en påfyllning på några gram per klämd
+födsel. `f6-256-mager` 800 tick frö 1: 39 → 42 djur, 72 → 83 födslar, 113 → 121
+dödsfall.
+
+**Konsekvens för tidigare körningar.** p190b och p191 bär båda läckan. Den är
+liten i absoluta tal — 0,14 till 5,5 kg näring av 5,1e+04 — och slutsatserna om
+0191 står, men körningarna är inte bevarandelagsrena och bör inte återanvändas
+som baslinje för något som mäter näring.
 
 ### Syntesarbetet härleds ur anabolismens verkningsgrad (0191)
 

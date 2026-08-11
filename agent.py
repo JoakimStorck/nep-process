@@ -4534,7 +4534,12 @@ class Agent:
         else:
             child_M = float(getattr(parent_pheno, "child_M", float(self.AP.M0) * 0.5))
     
-        child_M = max(float(self.AP.M_birth_min), child_M)
+        # **Ingen klämning här.** `max(M_birth_min, child_M)` skapade massa ur
+        # ingenting när kullen delades tunt, och `Agent` har ingen förälder att
+        # ta den ifrån. Påfyllningen mot golvet görs nu i `_try_birth`, där
+        # bäraren finns och kan betala. Kvar står bara att en massa på noll inte
+        # är en kropp.
+        child_M = max(0.0, float(child_M))
         self.body.M = float(child_M)
     
         # ---- Energy (J -> internal units via WF/WS) ----
