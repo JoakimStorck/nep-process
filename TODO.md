@@ -2581,6 +2581,8 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0194~~ | dödströskeln och svältskadans ramp sätts ihop mot toppmassan | dödligheten | **klart**, se nedan — massförlust 92,8 → 37,8 % |
 | ~~0195~~ | `sammandrag.py` läser dödspostens massa, reserv och skada; årstid mot ålder och fett | mätningen | **klart**, se nedan |
 | ~~0196~~ | reparationen lagade skada som inte fanns och kostade lika mycket oavsett kroppsstorlek | budgeten | **klart**, se nedan — 77 % av energin köpte ingenting |
+| ~~0197~~ | förnan var föda; `detritus` är nedbrytningssubstrat och inte mat | ekologin | **klart**, se nedan — 81,8 % av intaget försvinner |
+| — | `f6-256-mager` 800 tick: 36 → 15 djur; magra världen har inte flora nog utan förnan | ekologin | **öppen**, kör `f6-256` |
 | — | skade- och reparationssystemet är nästan inert: `D` har medianen 0,0000 och `repair_capacity` binder i 2 % av tickarna | selektionen | **öppen**, nästa |
 | — | barnets startreserv betalas till 43–74 %; föräldern har inte råd med den redan minimala gåvan | livshistorien | **öppen**, hör ihop med `E_cap_per_M` |
 | — | ett `cell_idx`-brott i p194/s3 vid tick 2000, en slot av 1,2 miljoner | invarianterna | **öppen** |
@@ -2698,6 +2700,67 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Förnan var inte föda (0197)
+
+`detritus` är nedbrytningssubstrat: dött organiskt material på väg mot
+`nutrient`, vars konsumenter är nedbrytare som modellen inte har. Djuren åt det
+ändå, och det var **81,8 procent av allt som ingesterades**.
+
+**Hur det smög sig in.** `prefer_detritus=True` var rimligt när `detritus` betydde
+kadaver. Sedan floran fick mortalitet och exkretionen började koncentrera
+strukturmaterial blev poolen förna, och matgrenen följde med utan att någon
+prövade om den hörde hemma. `c3b2cf2` noterade själv att *"flaggan var rimlig när
+detritus betydde kadaver"* och ersatte den med värdestyrt val; `b7ecd09` skilde
+kadavret från förnan, löste asätarnischen och skrev uttryckligen *"förnan är
+fortfarande ätbar; felet var att kadavret drunknade i den"*. Båda rättade rätt sak
+och lämnade grenen kvar. Det är ett fält som bytte innebörd medan dess läsare stod
+still — samma familj som `graze_search_a`, fast på en pool i stället för en
+konstant.
+
+Kadaver är något annat och stannar. Asätande är en verklig nisch, `carcass` är
+dess resurs, och `diet` är fortfarande en avvägning mellan verkningsgraderna.
+
+**Mätt före.** `f6-256-mager`, 500 tick, 51 373 födoanrop:
+
+```
+                     ingesterat    andel    värde per kilo (median)
+levande flora           8 665 kg    18,2 %        0,195
+förna                  39 000 kg    81,8 %        0,030
+kadaver                    23 kg     0,0 %        0,533
+```
+
+Förnans strukturandel har medianen 0,929, så den assimileras till tre procent.
+Djuren fyllde alltså magen med material de inte kunde tillgodogöra sig och
+exkreterade nästan allt tillbaka till samma pool — precis den självförstärkande
+slingan som `c3b2cf2` beskrev och trodde sig ha brutit.
+
+**Uppmätt utfall.** Samma scenario och frö efter borttagningen:
+
+```
+                       före        efter
+ingesterat          47 700 kg     7 962 kg      −83 %
+därav flora            18,2 %       99,8 %
+assimilerat ur flora  1 687 kg     1 776 kg      +5 %
+```
+
+Djuren får alltså **mer** näring ur en sjättedel av materialet. Hela skillnaden
+var passage.
+
+800 tick mot 0196: beståndet 36 → 15, födslar 109 → 52, dödsfall 153 → 117.
+Massförlusten vid död är oförändrad (37,1 mot 37,6 procent) och invariantsviten
+godkänd med drift 3,80e-10, den lägsta hittills.
+
+**Beståndet faller, och det är väntat.** Den magra världen har 250 000 kg flora
+mot 1,3 miljoner kg förna. Att ta bort fem sjättedelar av födan i en värld valt
+för att vara knapp ger färre djur; det säger ingenting om ändringen är rätt.
+`M_min` binder nu i 15,5 procent av dödsfallen mot 6,6 före, alltså fler mycket
+små djur som svälter. Om `f6-256` med fyra gånger tätare flora bär det är en fråga
+för nästa körning.
+
+Det är också först nu som Fas 2:s hypotes går att pröva: fram till den här
+patchen formade konsumenterna inte växtligheten, de levde på ett lager som
+primärproduktionen fyllt på i förväg.
 
 ### Reparationen lagade skada som inte fanns (0196)
 

@@ -1695,8 +1695,12 @@ class World:
                      reach: int = 1,
                      svept: float = 0.0) -> Tuple[float, float, float, float]:
         """
-        Reservkonsumtion i World: bara detritus. Levande föda hanteras av
-        Population via consume_food_hook.
+        Reservkonsumtion i World när ingen hook är satt: bara kadaver.
+
+        Förnan togs bort som födokälla i 0197 — `detritus` är
+        nedbrytningssubstrat och inte mat. Levande föda hanteras av Population
+        via `consume_food_hook`; utan hook finns bara kadaverpoolen, som World
+        äger själv.
 
         `reach` är betesgrannskapets radie i celler — fönstret tätheten skattas
         ur. `svept` är den yta organismen hinner beta av under ticket, i
@@ -1712,7 +1716,7 @@ class World:
         if not math.isfinite(amt) or amt <= 0.0:
             return 0.0, 0.0, 0.0, 0.0
     
-        got_d, e_d = self._consume_from_field(self.detritus, x, y, amt)
+        got_d, e_d = self._consume_from_field(self.carcass, x, y, amt)
         return 0.0, float(got_d), 0.0, float(e_d)
 
     def excrete_at(self, x: float, y: float, amount_kg: float, structure: float) -> float:

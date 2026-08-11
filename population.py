@@ -3169,11 +3169,23 @@ class Population:
         det är hela poängen: var den är, mot hur mycket mark den hinner möta.
         Se `Agent._svept_yta` och `AgentParams.forage_path_rate`.
 
-        Uppdelningen levande/detritus finns kvar därför att den är verklig i
+        **Förnan är inte föda.** `detritus` är nedbrytningssubstrat: dött
+        organiskt material på väg mot `nutrient`, och dess konsumenter är
+        nedbrytare som modellen inte har. Kadaver är något annat — asätande är
+        en verklig nisch och `carcass` är dess resurs.
+
+        De två delade en gång fält. `prefer_detritus=True` var rimligt när
+        `detritus` betydde kadaver; sedan floran fick mortalitet och exkretionen
+        började koncentrera strukturmaterial blev poolen förna, och matgrenen
+        följde med utan att någon prövade om den hörde hemma. `b7ecd09` skilde
+        kadavret från förnan och löste asätarnischen, men lämnade uttryckligen
+        förnan ätbar — *"felet var att kadavret drunknade i den"*.
+
+        Uppdelningen levande/dött finns kvar därför att den är verklig i
         anskaffningen: levande vävnad tillhör en organism som växer tillbaka
-        och senare kan försvara sig, medan detritus är en pool som bara
-        sönderfaller. Den finns inte i energiomvandlingen — där avgör
-        strukturandelen, oavsett varifrån materialet kom.
+        och senare kan försvara sig, medan ett kadaver bara sönderfaller. Den
+        finns inte i energiomvandlingen — där avgör strukturandelen, oavsett
+        varifrån materialet kom.
         """
         amt = float(amount)
         if not math.isfinite(amt) or amt <= 0.0:
@@ -3182,9 +3194,6 @@ class Population:
         cell = int(self.grid.cell_of(float(x), float(y)))
         herb_eff, scav_eff = diet_efficiency(float(diet))
 
-        v_detritus = assimilated_fraction(
-            float(self.world.detritus_structure[cell]), scav_eff
-        )
         v_carcass = assimilated_fraction(
             float(self.world.carcass_structure[cell]), scav_eff
         )
@@ -3203,9 +3212,6 @@ class Population:
             e_d += e
             return float(g)
 
-        def take_detritus(want: float) -> float:
-            return take_pool(self.world.detritus, want)
-
         def take_carcass(want: float) -> float:
             return take_pool(self.world.carcass, want)
 
@@ -3219,13 +3225,12 @@ class Population:
             e_l += e
             return float(g)
 
-        # Tre källor, tagna i värdeordning. Kadaver och förna är båda döda men
-        # inte längre samma sak: ett kadaver vid strukturandel 0,25 är värt
-        # mångdubbelt mer per kilo än förna vid 0,83, och det var just den
-        # skillnaden som försvann när de delade pool.
+        # Två källor, tagna i värdeordning. Uppmätt är kadavret värt 0,533 per
+        # ingesterat kilo i median mot florans 0,195, så en asätare väljer det
+        # när det finns — men det är fläckvis, kortlivat och beror av andras
+        # död, vilket är nischens egen avvägning.
         order = sorted(
-            ((v_flora, take_flora), (v_carcass, take_carcass),
-             (v_detritus, take_detritus)),
+            ((v_flora, take_flora), (v_carcass, take_carcass)),
             key=lambda kv: kv[0], reverse=True,
         )
         left = amt
