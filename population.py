@@ -589,9 +589,29 @@ class Population:
         M_sum = float(np.nansum(M)) if pop_n > 0 else 0.0
         gest_M_sum = float(np.nansum(G)) if pop_n > 0 else 0.0
         E_store_sum = float(np.nansum(E)) if pop_n > 0 else 0.0
-        e_body = float(getattr(self.AP, "E_body_J_per_kg", 0.0))
-        E_body_equiv = e_body * M_sum
-        E_gest_equiv = e_body * gest_M_sum
+
+        # **Mot individens egen sammansättning, inte mot en global konstant.**
+        # Posten var `E_body_J_per_kg · M_sum` med 7,0e6, alltså kroppsenergin
+        # vid en antagen strukturandel 0,25. 0175 ersatte det antagandet med
+        # `(1 − s)·E_labile`, och vid den strukturandel populationen faktiskt
+        # bär — uppmätt median 0,44 till 0,64 i p189m — överskattade den gamla
+        # formen kroppsenergin drygt två gånger. Fostret är labilt tills
+        # födseln och bär därför hela `E_labile`.
+        e_lab = float(self.AP.E_labile_J_per_kg)
+        if pop_n > 0:
+            S = np.fromiter(
+                (
+                    float(self.store.structure[int(a.store_slot)])
+                    if int(getattr(a, "store_slot", -1)) >= 0 else 0.25
+                    for a in alive
+                ),
+                dtype=np.float64,
+                count=pop_n,
+            )
+            E_body_equiv = float(np.nansum(M * (1.0 - S) * e_lab))
+        else:
+            E_body_equiv = 0.0
+        E_gest_equiv = e_lab * gest_M_sum
 
         flow_keys = [
             "food_bio_kg", "food_carcass_kg", "E_in_bio", "E_in_carcass", "E_in_total",

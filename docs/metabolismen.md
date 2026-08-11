@@ -137,13 +137,26 @@ termo        värmeproduktion för att hålla Tb
 gestation    overhead för att bära foster
 ```
 
-Räcker reserven inte kataboliseras egen vävnad ner till `M_min`. Bara den labila fraktionen kan mobiliseras: `dM · (1 − s) · catabolism_eff` blir reserv, resten exkreteras. Vid faunans typiska strukturandel 0,25 ger det samma utbyte som den gamla konstanten `E_body_J_per_kg`, vilket inte är en slump — 7,0e6 ≈ 9,302e6 · (1 − 0,25).
+Räcker reserven inte kataboliseras egen vävnad ner till `M_min`. Bara den labila fraktionen kan mobiliseras: `dM · (1 − s) · catabolism_eff` blir reserv, resten exkreteras. Vid faunans typiska strukturandel 0,25 ger det samma utbyte som den borttagna konstanten `E_body_J_per_kg`, vilket inte är en slump — 7,0e6 ≈ 9,302e6 · (1 − 0,25). Konstanten togs bort i 0191 sedan dess sista läsare visat sig vara en diagnostikpost.
 
 ### Tillväxt
 
 Tillväxt är **diskretionär** och körs efter dräneringarna och katabolismen. Den får bara ta av det som återstår och kan därför aldrig utlösa katabolism.
 
-Material tas ur reserven, ett kilo per byggt kilo, med `growth_E_per_kg` som syntesarbete ovanpå. De två är termer, inte alternativ: byggkostnaden är ATP för syntesen, materialet är det som blir vävnad. Eftersom reserven är labil och vävnaden bär struktur binder ett kilo vävnad mindre näring än ett kilo reserv — mellanskillnaden utsöndras som kvävehaltigt avfall.
+Material tas ur reserven, ett kilo per byggt kilo, med syntesarbetet ovanpå. De två är termer, inte alternativ: byggkostnaden är ATP för syntesen, materialet är det som blir vävnad. Eftersom reserven är labil och vävnaden bär struktur binder ett kilo vävnad mindre näring än ett kilo reserv — mellanskillnaden utsöndras som kvävehaltigt avfall.
+
+Syntesarbetet är sedan 0191 **härlett ur `anabolism_eff`** och inte satt. Reserven är ren labil massa med `E_labile` per kilo, och materialkravet är ett kilo per byggt kilo; verkningsgraden är då per definition kilo vävnad per kilo bunden reserv:
+
+```
+kg reserv per kg vävnad  =  1 / anabolism_eff        =  1,4286
+byggarbete               =  E_labile · (1/eff − 1)   =  3,987e6 J/kg
+```
+
+Talet som stod där var 10 000 J/kg, alltså en tusendel av det labila innehållet i det som byggdes. Det var inte fittat utan ärvt: motiveringen var *"0,002 kg/s × 10 000 J/kg ≈ 2/3 av basalmetabolismen"*, en kalibrering mot en `k_basal` som sedan flyttade 2,6 miljoner gånger vid bytet till månadsskalan. Se fällan om referensbyten nedan.
+
+Dräktigheten delar konstanten: fosterväv är samma sorts syntes. Dräktighetens *egen* overhead är en skild post, och den finns i dag inte — `gestation_P_overhead_per_kg` läses med `getattr`-default men saknas i `AgentParams`, så `E_out_gest_overhead` är exakt noll i varje körning.
+
+Rundturen är därmed prissatt. Att bygga ett kilo vävnad och sedan katabolisera tillbaka det ger `(1 − s)·catabolism_eff / (1/eff)` av det bundna, alltså 0,47 vid strukturandel 0,25 och 0,23 vid 0,64. Före 0191 var samma rundtur 0,675 respektive 0,32, och den futila cykeln nästan gratis — uppmätt kataboliserade populationen 1,25 kilo vävnad per byggt kilo.
 
 ### Förbränning och utsöndring
 
@@ -209,7 +222,9 @@ Vid ett enhetsbyte kan inte allt multipliceras med samma faktor. Storheterna del
 
 Det är just förhållandet mellan klass A och klass B som var trasigt: ämnesomsättningen var komprimerad nio gånger medan livslängden var komprimerad tvåhundratusen gånger. Att skala alla takter lika hade varit en nolloperation — det byter bara namn på tidsenheten.
 
-**Klass C — dimensionslösa, per massa eller per energi.** Verkningsgrader, strukturandelar, energitätheter, `growth_E_per_kg`, temperaturer, rumsliga radier. Rörs inte.
+**Klass C — dimensionslösa, per massa eller per energi.** Verkningsgrader, strukturandelar, energitätheter, syntesarbete per kilo, temperaturer, rumsliga radier. Rörs inte.
+
+Men ett klass C-tal kan ändå bli fel av ett kadensbyte, om dess *motivering* var en klass A-jämförelse. `growth_E_per_kg` rördes korrekt inte vid bytet till månadsskalan — och blev ändå en faktor 399 för litet, eftersom talet ursprungligen valdes för att motsvara en andel av basalmetabolismen. Det är referensen som flyttade, inte konstanten. Ett klass C-tal vars härledning innehåller ett klass A-tal måste räknas om även om det självt inte skalar.
 
 ---
 

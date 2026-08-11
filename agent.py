@@ -216,12 +216,22 @@ class AgentParams:
     # Materialets strukturandel avgör hur stor den labila fraktionen är; se
     # docs/substratets-struktur.md.
     E_labile_J_per_kg: float = 9.302e6
-    E_body_J_per_kg: float = 7.0e6
+    # `E_body_J_per_kg = 7,0e6` är borttagen. Den var kroppens energiinnehåll per
+    # kilo vid en antagen strukturandel 0,25, och 0175 ersatte den med
+    # `(1 − s)·E_labile`, alltså individens egen sammansättning. Efter det hade
+    # den två läsare kvar: det aldrig lästa `_build_E_kg` och en diagnostikpost i
+    # pop-loggen som överskattade kroppsenergin drygt två gånger vid den
+    # strukturandel populationen faktiskt bär. Båda är rättade i 0191.
 
     # Conversion efficiencies
     # Matsmältningens verkningsgrad härleds ur substratets strukturandel via
     # phenotype.digestion_efficiency(). De tidigare skilda konstanterna för
     # växt och kadaver kodade som typskillnad det som är en materialegenskap.
+    # **Anabolismens verkningsgrad.** Andelen av den reservmassa som binds i ett
+    # bygge som faktiskt blir vävnad; resten dissiperas som syntesarbete. Sedan
+    # 0191 är den den enda källan till byggkostnaden för både somatisk tillväxt
+    # och foster — se `Body.step`, avsnitt (0C). Verkligt intervall hos däggdjur
+    # är 0,5 till 0,75.
     anabolism_eff: float = 0.70
     catabolism_eff: float = 0.90
 
@@ -895,13 +905,11 @@ class AgentParams:
     # Föräldern kataboliserar ~0.2 kg kroppsmassa under gestationen (M: 1.0→0.8). ✓
     gestation_growth_kg_per_s: float = 0.085
 
-    # Energikostnad för att bygga fetal vävnad (J/kg).
-    # OBS: Detta är INTE samma som E_body_J_per_kg (energidensitet vid katabolism).
-    # Anabolisk byggkostnad ≈ metaboliskt arbete för syntes, ej lagrad energi i vävnaden.
-    # Kalibrering: 0.002 kg/s × 10 000 J/kg = 20 J/s ≈ 2/3 av basalmetabolismen.
-    # Det gör gestation energimässigt rimlig utan att tömma föräldern på sekunder.
-    gestation_E_per_kg: float = 10_000.0  # J/kg (var implicit E_body_J_per_kg = 7 000 000)
-    growth_E_per_kg:    float = 10_000.0  # J/kg somatisk tillväxt (samma princip som gestation)
+    # `gestation_E_per_kg` och `growth_E_per_kg` är borttagna. Båda stod på
+    # 10 000 J/kg, alltså en tusendel av det labila innehållet i det som byggdes,
+    # och båda är sedan 0191 härledda ur `anabolism_eff` i stället — se
+    # `Body.step`, avsnitt (0C), för härledningen och för varför talet 10 000
+    # var ärvt från en referens som flyttat.
     # Skada per relativ massförlust via katabolism. Var 1,0, vilket innebar
     # att varje mobilisering av egen vävnad kostade skada i proportion till
     # sin storlek — att bränna en procent av kroppen tog en procent av hela
@@ -1626,7 +1634,6 @@ class Body:
         # ---------------------------------------------------------
         AP = self.AP
         _E_labile     = float(AP.E_labile_J_per_kg)
-        _E_body       = float(AP.E_body_J_per_kg)
         _ana_eff      = max(1e-9, float(getattr(AP, 'anabolism_eff', 1.0)))
         _cat_eff      = max(0.0, float(getattr(AP, 'catabolism_eff', 1.0)))
         _k_basal      = float(AP.k_basal)
@@ -1666,9 +1673,42 @@ class Body:
         # sammansättning och hur mycket näring vävnaden binder per kilo.
         _structure    = min(1.0, max(0.0, float(getattr(pheno, "structure", 0.25))))
         _nut_tissue   = nutrient_content(_structure)
-        _build_E_kg        = _E_body / _ana_eff
-        _gest_build_E_kg   = float(getattr(AP, 'gestation_E_per_kg', 10_000.0))
-        _growth_build_E_kg = float(getattr(AP, 'growth_E_per_kg',    10_000.0))
+        # --- Syntesarbetet per kilo byggd vävnad ---------------------------
+        #
+        # **Härlett ur `anabolism_eff`, inte satt.** Reserven är ren labil massa
+        # med `E_labile` per kilo, och materialkravet är ett kilo per byggt
+        # kilo. Verkningsgraden är då per definition kilo vävnad per kilo
+        # bunden reserv, alltså
+        #
+        #     kg reserv per kg vävnad  =  1 / anabolism_eff
+        #     byggarbete               =  E_labile · (1/anabolism_eff − 1)
+        #
+        # vilket vid 0,70 blir 3,987e6 J/kg. Det tal som stod här var 10 000,
+        # alltså **0,107 procent av det labila innehållet i det som byggs** och
+        # en faktor 399 fel. Uppmätt på `f6-256-mager` över 400 tick kostade
+        # tillväxten 0,133 kg mot materialets 123,5.
+        #
+        # Talet 10 000 var inte fittat utan ärvt: kommentaren motiverade det med
+        # *"0,002 kg/s × 10 000 J/kg = 20 J/s ≈ 2/3 av basalmetabolismen"* — en
+        # kalibrering mot en `k_basal` som sedan flyttade 2,6 miljoner gånger vid
+        # bytet till månadsskalan. `growth_E_per_kg` är klass C och skulle inte
+        # skalas, men dess *referens* var klass A. Samma familj som `wear_a0`.
+        #
+        # `_build_E_kg = E_body_J_per_kg / anabolism_eff` beräknades redan här
+        # och **lästes aldrig** — rätt konstant fanns i filen utan mottagare.
+        # Uttrycket bar dessutom `E_body_J_per_kg = 7,0e6`, som 0175 ersatte med
+        # `(1 − s)·E_labile`; det talet är därför ute ur mekaniken helt.
+        #
+        # Verkligheten: netto tillväxtverkningsgrad hos däggdjur ligger på 0,5
+        # till 0,75, fettinlagring högre och proteininlagring lägre. 0,70 är
+        # mitt i, och det är värdet som redan stod i `AgentParams`.
+        #
+        # Dräktigheten delar konstanten. Fosterväv är samma sorts syntes, och
+        # dräktighetens *egen* overhead är en skild post — som i dag inte finns,
+        # eftersom `gestation_P_overhead_per_kg` saknas i `AgentParams`.
+        _build_E_kg        = _E_labile * (1.0 / _ana_eff - 1.0)
+        _gest_build_E_kg   = _build_E_kg
+        _growth_build_E_kg = _build_E_kg
     
         # Reservmassa som lämnat poolerna utan att brännas: inbyggd i vävnad
         # eller överförd till foster. Behövs för att energiledgern ska sluta.

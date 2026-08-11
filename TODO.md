@@ -2575,8 +2575,9 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0187~~ | bärarrollen blir en ärftlig allokering i stället för massa | selektionen | **klart**, se nedan — `M_target` stannar |
 | ~~0189~~ | aptiten, reservtaket och fettets uttagstakt som en enhet | svälten | **klart**, se nedan — spillet 1249 → 91 kg |
 | ~~0190~~ | reservuttagen namngavs efter fel bildruta; dödsposten rapporterade noll | mätningen | **klart**, se nedan — bitidentisk körning |
+| ~~0191~~ | syntesarbetet härleds ur `anabolism_eff`; tre ärvda konstanter faller | budgeten | **klart**, se nedan — 0,13 → 86,7 kg |
+| — | `f6-256-mager` 800 tick: 52 → 39 djur men +51 % medelmassa; ett frö i en döende värld avgör inget | budgeten | **öppen**, se 0191 — kör `f6-256` |
 | — | `M_birth_min` skapar massa vid födseln — men den är inte hela näringsdriften | balansen | **öppen**, se 0190 |
-| — | anabolismen kostar 1/930 av materialet; `anabolism_eff` har noll läsare | budgeten | **öppen**, nästa (0191) |
 | — | `sense_cost_L1..L3` ligger 1e6 fel i enhet — sensing är gratis | A2 | **öppen**, se 0190 |
 | — | `gestation_mass_burden` och `gestation_P_overhead_per_kg` finns inte i `AgentParams` | reproduktionen | **öppen**, se 0190 |
 | — | nyfödda utrustas mot `E_cap_per_M`, inte mot sin egen `reserve_cap` | livshistorien | **öppen**, se 0190 |
@@ -2687,6 +2688,83 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Syntesarbetet härleds ur anabolismens verkningsgrad (0191)
+
+Reserven är ren labil massa med `E_labile` per kilo, och materialkravet är ett
+kilo per byggt kilo. Verkningsgraden är då per definition kilo vävnad per kilo
+bunden reserv:
+
+```
+kg reserv per kg vävnad  =  1 / anabolism_eff        =  1,4286
+byggarbete               =  E_labile · (1/eff − 1)   =  3,987e6 J/kg
+```
+
+Talet som stod där var 10 000 J/kg för både `growth_E_per_kg` och
+`gestation_E_per_kg`, alltså **0,107 procent av det labila innehållet i det som
+byggdes** och en faktor 399 fel.
+
+**Det var inte fittat utan ärvt.** Kommentaren motiverade det med *"0,002 kg/s ×
+10 000 J/kg = 20 J/s ≈ 2/3 av basalmetabolismen"* — en kalibrering mot en
+`k_basal` som sedan flyttade 2,6 miljoner gånger vid bytet till månadsskalan.
+`growth_E_per_kg` är klass C och rördes korrekt inte vid kadensbytet; det var
+dess *referens* som var klass A. Det är en ny variant av en känd fälla, och den
+är nu skriven in i `docs/metabolismen.md`: **ett klass C-tal vars härledning
+innehåller ett klass A-tal måste räknas om även om det självt inte skalar.**
+
+Rätt konstant fanns redan i filen. `_build_E_kg = E_body_J_per_kg /
+anabolism_eff` beräknades varje kroppssteg och **lästes aldrig**;
+`anabolism_eff = 0,70` hade därmed noll läsare. 0,70 ligger mitt i däggdjurens
+0,5–0,75, och patchen väljer alltså inget nytt tal — den ger ett befintligt en
+mottagare.
+
+Tre konstanter faller ur mekaniken: `growth_E_per_kg`, `gestation_E_per_kg` och
+`E_body_J_per_kg`. Den sistnämnda ersattes redan av `(1 − s)·E_labile` i 0175 och
+hade sedan dess två läsare kvar — det aldrig lästa `_build_E_kg` och
+pop-loggens `E_body_equiv`, som överskattade kroppsenergin drygt två gånger vid
+den strukturandel populationen faktiskt bär. Diagnostiken följer nu individens
+egen sammansättning.
+
+**Mätt före, och det ändrade vad patchen är.** `f6-256-mager`, 400 tick, frö 1:
+materialgrinden `M_reserve / kg_per_kg` binder i **0,4 procent** av
+tillväxtstegen, före såväl som efter. Begärd tillväxt faller 126,08 → 126,01 kg,
+alltså 0,06 procent. Patchen bromsar alltså inte tillväxten — den prissätter
+den. Utan den mätningen hade jag skrivit ett commitmeddelande om en broms som
+inte finns.
+
+**Uppmätt utfall.** `f6-256-mager`, 800 tick, frö 1, mot 0190 som baslinje:
+
+```
+                        0190      0191
+bestånd vid t=800        52        39
+massa fauna kg         33,85     38,26      medelmassa 0,651 -> 0,981 kg
+födslar / dödsfall     81/109    72/113
+agenttick              64709     61717
+tillväxt: material     203,1     204,9      per agenttick +6 %
+tillväxt: byggarbete    0,218     86,69      3,3 % strypta
+trimning               276,9     259,4      -6 %
+underhåll strypta      25,0 %    25,7 %
+uttag per agenttick   0,0493    0,0541      +9,8 %
+näringsdrift         2,92e-07  2,60e-07
+```
+
+Kvoten byggarbete/material är 0,4286 på fyra värdesiffror, alltså exakt
+`1/eff − 1`. Invariantsviten godkänd; `liten6` 400 tick likaså.
+
+Byggkostnaden är nu sjätte största posten och 2,6 procent av alla reservuttag.
+Att den stryps i 3,3 procent av anropen är nytt och hör ihop med `slow_mobil_frac`
+— den betalas via `take_energy(..., dt=dt)` och möter därför samma
+mobiliseringstak som underhållet.
+
+**Det som inte gick att avgöra.** Beståndet faller från 52 till 39 men
+medelmassan stiger 51 procent, och båda körningarna är på väg mot utdöende.
+Skillnaden i antal ligger nästan helt i födslarna (−9) och knappt alls i
+dödsfallen (+4), medan dräktighetens material *steg* 4,22 → 4,71 kg på fler
+anrop — alltså fler dräktigheter som inte fullföljdes. Den högre medelmassan är
+sannolikt urvalsartefakt: färre överlevare, och de tyngsta överlever.
+
+Ett frö i en värld som kollapsar i båda fallen avgör ingenting. `f6-256` med tre
+frön och minst 2 000 tick är den prövning som gäller, och den är utestående.
 
 ### Instrumenten som rapporterade fel (0190)
 
