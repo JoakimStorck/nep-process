@@ -2583,6 +2583,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0196~~ | reparationen lagade skada som inte fanns och kostade lika mycket oavsett kroppsstorlek | budgeten | **klart**, se nedan — 77 % av energin köpte ingenting |
 | ~~0197~~ | förnan var föda; `detritus` är nedbrytningssubstrat och inte mat | ekologin | **klart**, se nedan — 81,8 % av intaget försvinner |
 | ~~0198~~ | etableringens mätpunkter: landningsträngsel, etablerarnas frömassa, pooler hos omogna | mätningen | **klart**, se nedan — fröregnet faller vid trängsel 2,3; 79 % av poolen hos plantor som inte kan tömma den |
+| ~~0199~~ | `SLUT`-raden klockar uppstarten och totalen, inte bara tickloopen; `--world-every`-hjälpen anger rätt enhet | mätningen | **klart**, se nedan — uppstarten var 135 s mot loopens 3,3 vid f6-256 |
 | — | `f6-256-mager` 800 tick: 36 → 15 djur; magra världen har inte flora nog utan förnan | ekologin | **öppen**, kör `f6-256` |
 | — | skade- och reparationssystemet är nästan inert: `D` har medianen 0,0000 och `repair_capacity` binder i 2 % av tickarna | selektionen | **öppen**, nästa |
 | — | barnets startreserv betalas till 43–74 %; föräldern har inte råd med den redan minimala gåvan | livshistorien | **öppen**, hör ihop med `E_cap_per_M` |
@@ -2701,6 +2702,29 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Klockan svarade på fel fråga (0199)
+
+`SLUT`-raden mätte tickloopen och kallade det körtid. Vid liten skala är det
+nästan samma tal; vid f6-256 är det inte det: uppstarten — terränggenerering,
+sådd av 1,3 miljoner plantor och invariantprovet vid tick 0, som körs
+ovillkorligt över hela beståndet — tog 135 sekunder i sandlådan mot loopens
+3,3 för en tick. p198-körningens `SLUT: 40000 tick på 2848.4s` utelämnade
+alltså någon minut som faktiskt förflöt.
+
+Raden redovisar nu tre tal: `uppstart`, loopens tid som förr (pausjusterad
+när servern kört), och `totalt` som deras summa. Tolkstart och importer,
+ett par sekunder, ligger utanför vad filen kan mäta om sig själv. Stämpeln
+sitter i `_run_inner`, så `--seeds 1,2,3` får en riktig uppstartstid per
+frö i stället för en delad.
+
+I samma ärende — körskriptets självrapportering — rättas
+`--world-every`-hjälpens enhet: den sade *simulerade sekunder*, enheten är
+simulerade **månader**. Felet är inte kosmetiskt; p198 kördes med
+`--world-every 100` i tron att talet var tick och fick 8 världsloggrader i
+stället för 400. Mönstret är taxonomins "instrument med fel enhetsetikett",
+och instrument som tyst levererar en femtiondel av sin data är släkt med
+instrument som tyst rapporterar noll.
 
 ### Etableringens mätpunkter (0198)
 

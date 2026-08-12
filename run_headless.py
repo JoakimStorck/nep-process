@@ -1060,7 +1060,9 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--world-log", type=str, default=None,
                     help="skriv world.jsonl för live_world_plot.py (flora och näring)")
     ap.add_argument("--world-every", type=float, default=2.0,
-                    help="loggintervall i simulerade sekunder för --world-log")
+                    help="loggintervall för --world-log i simulerade månader "
+                         "(modellens tidsenhet), inte tick eller sekunder: "
+                         "2.0 = var 100:e tick vid dt=0.02")
     return ap.parse_args()
 
 
@@ -1615,6 +1617,11 @@ def apply_scenario(a: argparse.Namespace) -> None:
 
 
 def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
+    # Klockan för hela körningen, inte bara tickloopen. Uppstarten — terräng,
+    # sådd och invariantprovet vid tick 0 — är vid f6-256-skala minuter
+    # (uppmätt 135 s mot loopens 3,3 för en tick i sandlådan), och en klocka
+    # som utelämnar den svarar fel på frågan "hur länge körde det".
+    t_run_start = time.perf_counter()
     pop = build_population(a, seed, hub=hub)
 
     timer: PassTimer | None = None
@@ -1891,9 +1898,16 @@ def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
                 f"(resten näring)",
                 flush=True,
             )
+        # Tre tal i stället för ett: uppstarten (allt före första ticken,
+        # inklusive sådd och tick-0-kontrollen), loopen (som förr, pausjusterad
+        # när servern kört), och deras summa. Väggtiden för processen är
+        # summan plus tolkstart och importer, ett par sekunder som ligger
+        # utanför det den här filen kan mäta om sig själv.
+        t_setup = t0 - t_run_start
         print(
             f"SLUT: {tick} tick på {elapsed:.1f}s "
             f"({elapsed / max(tick, 1) * 1000.0:.2f} ms/tick), "
+            f"uppstart {t_setup:.1f}s, totalt {t_setup + elapsed:.1f}s, "
             f"{'invariantsvit godkänd' if failures == 0 else f'{failures} invariantbrott'}",
             flush=True,
         )
