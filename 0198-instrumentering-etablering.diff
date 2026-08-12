@@ -1,0 +1,217 @@
+diff --git a/TODO.md b/TODO.md
+index 91c0b44..c653692 100644
+--- a/TODO.md
++++ b/TODO.md
+@@ -2582,6 +2582,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
+ | ~~0195~~ | `sammandrag.py` läser dödspostens massa, reserv och skada; årstid mot ålder och fett | mätningen | **klart**, se nedan |
+ | ~~0196~~ | reparationen lagade skada som inte fanns och kostade lika mycket oavsett kroppsstorlek | budgeten | **klart**, se nedan — 77 % av energin köpte ingenting |
+ | ~~0197~~ | förnan var föda; `detritus` är nedbrytningssubstrat och inte mat | ekologin | **klart**, se nedan — 81,8 % av intaget försvinner |
++| ~~0198~~ | etableringens mätpunkter: landningsträngsel, etablerarnas frömassa, pooler hos omogna | mätningen | **klart**, se nedan — fröregnet faller vid trängsel 2,3; 79 % av poolen hos plantor som inte kan tömma den |
+ | — | `f6-256-mager` 800 tick: 36 → 15 djur; magra världen har inte flora nog utan förnan | ekologin | **öppen**, kör `f6-256` |
+ | — | skade- och reparationssystemet är nästan inert: `D` har medianen 0,0000 och `repair_capacity` binder i 2 % av tickarna | selektionen | **öppen**, nästa |
+ | — | barnets startreserv betalas till 43–74 %; föräldern har inte råd med den redan minimala gåvan | livshistorien | **öppen**, hör ihop med `E_cap_per_M` |
+@@ -2701,6 +2702,35 @@ Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
+ står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
+ skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+ 
++### Etableringens mätpunkter (0198)
++
++Instrumentering inför florarevisionen, ingen dynamikändring — banan verifierad
++bitidentisk mot 0197 i `liten6` 400 tick, seed 1.
++
++Tre saker som revisionens frågor inte gick att svara på ur befintliga loggar:
++
++- **Trängseln där fröna landar**, som fröviktade kvantiler
++  (`flora_seed_crowd_p10/median/p90`). Etableringens halvmättnad växer med
++  `exp(2·crowd)`, och spridningsskalan är ett par cellbredder, så fröregnet
++  möter beståndens täthet och inte världsmedlets. Uppmätt i rökprovet: median
++  2,34 mot ett världsmedel under 1 — halvmättnaden i landningscellerna är
++  alltså `0,05·e^4,7 ≈ 5 kg`, inte de 0,05 formeln lovar på öppen mark.
++- **Etablerarnas frömassa** (`flora_est_seed_mass`, summa). Tillsammans med
++  det redan derivable flödesmedlet `dispersed_mass/seeds` (0,88 g i p197, mot
++  beståndsmedlets 47 g — fröregnet domineras totalt av småfröna) ger den
++  selektionens tre viktningar på samma axel.
++- **Poolerna hos omogna** (`flora_pool_immature`, `flora_reserve_immature`,
++  `flora_carbon_immature`). Allokeringen viks av från inkomsten oavsett
++  mognad; i rökprovet låg 79 % av reproduktionspoolens näring hos plantor som
++  inte passerar storleksgrinden och alltså inte kan tömma den.
++
++Kvantilerna glesas med jämn stride över 20 000 frön så att partitioneringen
++inte kostar i varje tick; overhead ej mätbar mot baslinjen i `liten6`.
++
++Scenariot `f6-256-utan-fauna` läggs till för mättnadsmätningen: samma värld
++som `f6-256` men noll djur, eftersom ingen körning hittills nått stationärt
++tillstånd och florans jämviktsläge och jämvikts*tid* är okända.
++
+ ### Förnan var inte föda (0197)
+ 
+ `detritus` är nedbrytningssubstrat: dött organiskt material på väg mot
+diff --git a/population.py b/population.py
+index feb7c50..d5bc2e6 100644
+--- a/population.py
++++ b/population.py
+@@ -355,6 +355,17 @@ class Population:
+     _last_flora_died_age: int = 0
+     _last_flora_died_starve: int = 0
+     _last_flora_seeds: int = 0
++    # Var fröna landar och vilka som etablerar sig. Trängseln i
++    # landningscellerna är den storhet etableringens halvmättnad växer med,
++    # och utan kvantilerna går selektionen på frömassan inte att attribuera:
++    # medeltätheten i världen säger ingenting om tätheten där fröregnet
++    # faktiskt faller. `est_seed_mass` är summan av etablerarnas frömassa,
++    # så att etableringsviktad frömassa kan ställas mot flödesviktad
++    # (`dispersed_mass / seeds`) och beståndsmedlet (`mean_seed_mass`).
++    _last_flora_seed_crowd_p10: float = 0.0
++    _last_flora_seed_crowd_med: float = 0.0
++    _last_flora_seed_crowd_p90: float = 0.0
++    _last_flora_est_seed_mass: float = 0.0
+     # Andel växande plantor där ljuset är den knappare resursen. Är den nära
+     # noll eller ett är den ena resursen inert och kalibreringen fel.
+     _last_flora_light_limited: float = 0.0
+@@ -795,6 +806,13 @@ class Population:
+                 "flora_mass_p90": float(flora_info["flora_mass_p90"]),
+                 "flora_pool_total": float(flora_info["flora_pool_total"]),
+                 "flora_carbon_pool_total": float(flora_info["flora_carbon_pool_total"]),
++                "flora_pool_immature": float(flora_info["flora_pool_immature"]),
++                "flora_reserve_immature": float(flora_info["flora_reserve_immature"]),
++                "flora_carbon_immature": float(flora_info["flora_carbon_immature"]),
++                "flora_est_seed_mass": float(getattr(self, "_last_flora_est_seed_mass", 0.0)),
++                "flora_seed_crowd_p10": float(getattr(self, "_last_flora_seed_crowd_p10", 0.0)),
++                "flora_seed_crowd_median": float(getattr(self, "_last_flora_seed_crowd_med", 0.0)),
++                "flora_seed_crowd_p90": float(getattr(self, "_last_flora_seed_crowd_p90", 0.0)),
+                 "flora_mean_root_alloc": float(flora_info["flora_mean_root_alloc"]),
+                 "flora_mean_maturity": float(flora_info["flora_mean_maturity"]),
+                 "flora_mature_frac": float(flora_info["flora_mature_frac"]),
+@@ -2943,6 +2961,14 @@ class Population:
+         """
+         dt = float(self.WP.dt)
+         BK = float(self.WP.B_K)
++
++        # Nollställs varje anrop, till skillnad från de äldre `_last_`-fälten:
++        # ett tick utan frön ska läsas som noll frön, inte som förra tickens.
++        self._last_flora_seed_crowd_p10 = 0.0
++        self._last_flora_seed_crowd_med = 0.0
++        self._last_flora_seed_crowd_p90 = 0.0
++        self._last_flora_est_seed_mass = 0.0
++
+         if BK <= 0.0 or dt <= 0.0:
+             return 0, 0.0
+ 
+@@ -3046,6 +3072,21 @@ class Population:
+         grid.wrap_pos_inplace(px, py)
+         targets = grid.cell_of_many(px, py).astype(np.int64, copy=False)
+ 
++        # Trängseln fröregnet faktiskt möter, som kvantiler och inte som
++        # världsmedel: spridningsskalan är ett par cellbredder, så fröna faller
++        # i beståndens egna celler och möter en annan täthet än medelcellen.
++        # Vid stora fröregn glesas dragningen med jämn stride — kvantiler på
++        # tjugotusen av hundratusen är samma tal på tre siffror, och
++        # percentilens partitionering ska inte få kosta i varje tick.
++        tc = crowd[targets]
++        if tc.size > 20000:
++            tc = tc[:: tc.size // 20000 + 1]
++        if tc.size:
++            q10, q50, q90 = np.percentile(tc, (10.0, 50.0, 90.0))
++            self._last_flora_seed_crowd_p10 = float(q10)
++            self._last_flora_seed_crowd_med = float(q50)
++            self._last_flora_seed_crowd_p90 = float(q90)
++
+         pr = establish_p(prov, crowd[targets])
+         wins = self.rng.random(midx.size) < pr
+ 
+@@ -3107,6 +3148,7 @@ class Population:
+                         float(store.mass[child_slot]) * self._slot_energy_per_kg(child_slot),
+                     ))
+             established += 1
++            self._last_flora_est_seed_mass += float(seed_m[j])
+ 
+         if established > 0 or dispersed_mass > 0.0:
+             self._flora_summary_cache = None
+@@ -3292,6 +3334,9 @@ class Population:
+                 "flora_mass_p90": 0.0,
+                 "flora_pool_total": 0.0,
+                 "flora_carbon_pool_total": 0.0,
++                "flora_pool_immature": 0.0,
++                "flora_reserve_immature": 0.0,
++                "flora_carbon_immature": 0.0,
+                 "flora_mean_root_alloc": nan,
+                 "flora_mean_maturity": nan,
+                 "flora_mature_frac": nan,
+@@ -3328,6 +3373,30 @@ class Population:
+             # och kostar en bråkdel; det är sorteringen som är dyr.
+             **(self._flora_quantiles(store, fl) if getattr(self, "_flora_want_quantiles", False) else {}),
+             "flora_carbon_pool_total": float(np.sum(store.flora_carbon_pool[fl], dtype=np.float64)),
++            # Poolerna hos plantor som ännu inte kan reproducera sig. Masken
++            # är reproduktionsgrindens egen storleksgren, med båda leden —
++            # `flora_mature_frac` ovan bär bara mognadströskeln och behålls
++            # oförändrad för seriens skull. Allokeringen viks av från
++            # inkomsten oavsett mognad, så det som ligger här är avsatt
++            # kapital ägaren inte kan använda: det tar sig ut ur systemet
++            # antingen genom att plantan hinner växa förbi grinden eller
++            # genom att det återförs till cellen vid hennes död. Hur stor
++            # andel av poolstocken som står så avgör om förmogen allokering
++            # är en detalj eller en näringsshunt.
++            **(lambda _imm: {
++                "flora_pool_immature": float(np.sum(
++                    store.flora_repro_pool[fl][_imm], dtype=np.float64)),
++                "flora_reserve_immature": float(np.sum(
++                    store.flora_reserve[fl][_imm], dtype=np.float64)),
++                "flora_carbon_immature": float(np.sum(
++                    store.flora_carbon_pool[fl][_imm], dtype=np.float64)),
++            })(store.mass[fl].astype(np.float64) < np.maximum(
++                FLORA_REPRO_MASS_MULT
++                * store.flora_seed_mass[fl].astype(np.float64),
++                store.flora_maturity[fl].astype(np.float64)
++                * np.maximum(1e-12,
++                             store.flora_adult_mass[fl].astype(np.float64)),
++            )),
+             "flora_mean_root_alloc": float(np.mean(store.flora_root_alloc[fl], dtype=np.float64)),
+             "flora_mean_maturity": float(np.mean(store.flora_maturity[fl], dtype=np.float64)),
+             "flora_mature_frac": float(np.mean(
+diff --git a/scenarios/f6-256-utan-fauna.yaml b/scenarios/f6-256-utan-fauna.yaml
+new file mode 100644
+index 0000000..ff09cbf
+--- /dev/null
++++ b/scenarios/f6-256-utan-fauna.yaml
+@@ -0,0 +1,41 @@
++# f6-256 utan fauna: florans jämviktsmätning.
++#
++# Ingen körning har hittills nått stationärt tillstånd — fri näring steg
++# fortfarande vid t=60 i p197 och förnan föll ännu mot sin flödesjämvikt.
++# Innan någon florapatch kan dömas behövs två tal: var jämvikten ligger och
++# hur lång tid den tar. Faunan tas bort så att betning och kadaver inte
++# blandar sig i mätningen; allt annat är identiskt med `f6-256`, inklusive
++# terrängfröet, så att jämvikten mäts i samma landskap som huvudserien.
++#
++# Mättnadskriteriet är detsamma som alltid: fri näring och antal plantor ska
++# **båda** ligga still. Förnans initialstock (`detritus_init · bördighet`,
++# 84,6 kg/cell) ligger ~3,5 gånger över flödesjämvikten, och det är dess
++# strukturfraktion (halveringstid ~60 månader = 3 000 tick) som sätter
++# relaxationstiden — räkna med tiotusentals tick, inte tusentals.
++namn: f6-256-utan-fauna
++varld:
++  bredd: 256
++  hojd: 256
++  bordighet: 4.0
++  latitud: 48.0
++  kontinentalitet: 0.55
++  terrang:
++    seed: 1
++    lambda_max_frac: 0.75
++    lambda_min: 3.0
++    beta: 2.4
++    hav_andel: 0.20
++    hav_lutning: 1.0
++flora:
++  sadd: bordighet
++  plantmassa: 1.32
++fauna:
++  antal: 0
++  insatts_vid: start
++  flackar: 3
++  flackradie: 20.0
++  max_antal: 64
++fysiologi:
++  fartskala: 0.5
++  sociability: 0.8
++  sociability_sd: 0.5

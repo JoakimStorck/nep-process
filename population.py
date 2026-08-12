@@ -355,6 +355,17 @@ class Population:
     _last_flora_died_age: int = 0
     _last_flora_died_starve: int = 0
     _last_flora_seeds: int = 0
+    # Var fröna landar och vilka som etablerar sig. Trängseln i
+    # landningscellerna är den storhet etableringens halvmättnad växer med,
+    # och utan kvantilerna går selektionen på frömassan inte att attribuera:
+    # medeltätheten i världen säger ingenting om tätheten där fröregnet
+    # faktiskt faller. `est_seed_mass` är summan av etablerarnas frömassa,
+    # så att etableringsviktad frömassa kan ställas mot flödesviktad
+    # (`dispersed_mass / seeds`) och beståndsmedlet (`mean_seed_mass`).
+    _last_flora_seed_crowd_p10: float = 0.0
+    _last_flora_seed_crowd_med: float = 0.0
+    _last_flora_seed_crowd_p90: float = 0.0
+    _last_flora_est_seed_mass: float = 0.0
     # Andel växande plantor där ljuset är den knappare resursen. Är den nära
     # noll eller ett är den ena resursen inert och kalibreringen fel.
     _last_flora_light_limited: float = 0.0
@@ -795,6 +806,13 @@ class Population:
                 "flora_mass_p90": float(flora_info["flora_mass_p90"]),
                 "flora_pool_total": float(flora_info["flora_pool_total"]),
                 "flora_carbon_pool_total": float(flora_info["flora_carbon_pool_total"]),
+                "flora_pool_immature": float(flora_info["flora_pool_immature"]),
+                "flora_reserve_immature": float(flora_info["flora_reserve_immature"]),
+                "flora_carbon_immature": float(flora_info["flora_carbon_immature"]),
+                "flora_est_seed_mass": float(getattr(self, "_last_flora_est_seed_mass", 0.0)),
+                "flora_seed_crowd_p10": float(getattr(self, "_last_flora_seed_crowd_p10", 0.0)),
+                "flora_seed_crowd_median": float(getattr(self, "_last_flora_seed_crowd_med", 0.0)),
+                "flora_seed_crowd_p90": float(getattr(self, "_last_flora_seed_crowd_p90", 0.0)),
                 "flora_mean_root_alloc": float(flora_info["flora_mean_root_alloc"]),
                 "flora_mean_maturity": float(flora_info["flora_mean_maturity"]),
                 "flora_mature_frac": float(flora_info["flora_mature_frac"]),
@@ -2943,6 +2961,14 @@ class Population:
         """
         dt = float(self.WP.dt)
         BK = float(self.WP.B_K)
+
+        # Nollställs varje anrop, till skillnad från de äldre `_last_`-fälten:
+        # ett tick utan frön ska läsas som noll frön, inte som förra tickens.
+        self._last_flora_seed_crowd_p10 = 0.0
+        self._last_flora_seed_crowd_med = 0.0
+        self._last_flora_seed_crowd_p90 = 0.0
+        self._last_flora_est_seed_mass = 0.0
+
         if BK <= 0.0 or dt <= 0.0:
             return 0, 0.0
 
@@ -3046,6 +3072,21 @@ class Population:
         grid.wrap_pos_inplace(px, py)
         targets = grid.cell_of_many(px, py).astype(np.int64, copy=False)
 
+        # Trängseln fröregnet faktiskt möter, som kvantiler och inte som
+        # världsmedel: spridningsskalan är ett par cellbredder, så fröna faller
+        # i beståndens egna celler och möter en annan täthet än medelcellen.
+        # Vid stora fröregn glesas dragningen med jämn stride — kvantiler på
+        # tjugotusen av hundratusen är samma tal på tre siffror, och
+        # percentilens partitionering ska inte få kosta i varje tick.
+        tc = crowd[targets]
+        if tc.size > 20000:
+            tc = tc[:: tc.size // 20000 + 1]
+        if tc.size:
+            q10, q50, q90 = np.percentile(tc, (10.0, 50.0, 90.0))
+            self._last_flora_seed_crowd_p10 = float(q10)
+            self._last_flora_seed_crowd_med = float(q50)
+            self._last_flora_seed_crowd_p90 = float(q90)
+
         pr = establish_p(prov, crowd[targets])
         wins = self.rng.random(midx.size) < pr
 
@@ -3107,6 +3148,7 @@ class Population:
                         float(store.mass[child_slot]) * self._slot_energy_per_kg(child_slot),
                     ))
             established += 1
+            self._last_flora_est_seed_mass += float(seed_m[j])
 
         if established > 0 or dispersed_mass > 0.0:
             self._flora_summary_cache = None
@@ -3292,6 +3334,9 @@ class Population:
                 "flora_mass_p90": 0.0,
                 "flora_pool_total": 0.0,
                 "flora_carbon_pool_total": 0.0,
+                "flora_pool_immature": 0.0,
+                "flora_reserve_immature": 0.0,
+                "flora_carbon_immature": 0.0,
                 "flora_mean_root_alloc": nan,
                 "flora_mean_maturity": nan,
                 "flora_mature_frac": nan,
@@ -3328,6 +3373,30 @@ class Population:
             # och kostar en bråkdel; det är sorteringen som är dyr.
             **(self._flora_quantiles(store, fl) if getattr(self, "_flora_want_quantiles", False) else {}),
             "flora_carbon_pool_total": float(np.sum(store.flora_carbon_pool[fl], dtype=np.float64)),
+            # Poolerna hos plantor som ännu inte kan reproducera sig. Masken
+            # är reproduktionsgrindens egen storleksgren, med båda leden —
+            # `flora_mature_frac` ovan bär bara mognadströskeln och behålls
+            # oförändrad för seriens skull. Allokeringen viks av från
+            # inkomsten oavsett mognad, så det som ligger här är avsatt
+            # kapital ägaren inte kan använda: det tar sig ut ur systemet
+            # antingen genom att plantan hinner växa förbi grinden eller
+            # genom att det återförs till cellen vid hennes död. Hur stor
+            # andel av poolstocken som står så avgör om förmogen allokering
+            # är en detalj eller en näringsshunt.
+            **(lambda _imm: {
+                "flora_pool_immature": float(np.sum(
+                    store.flora_repro_pool[fl][_imm], dtype=np.float64)),
+                "flora_reserve_immature": float(np.sum(
+                    store.flora_reserve[fl][_imm], dtype=np.float64)),
+                "flora_carbon_immature": float(np.sum(
+                    store.flora_carbon_pool[fl][_imm], dtype=np.float64)),
+            })(store.mass[fl].astype(np.float64) < np.maximum(
+                FLORA_REPRO_MASS_MULT
+                * store.flora_seed_mass[fl].astype(np.float64),
+                store.flora_maturity[fl].astype(np.float64)
+                * np.maximum(1e-12,
+                             store.flora_adult_mass[fl].astype(np.float64)),
+            )),
             "flora_mean_root_alloc": float(np.mean(store.flora_root_alloc[fl], dtype=np.float64)),
             "flora_mean_maturity": float(np.mean(store.flora_maturity[fl], dtype=np.float64)),
             "flora_mature_frac": float(np.mean(

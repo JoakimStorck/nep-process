@@ -2582,6 +2582,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0195~~ | `sammandrag.py` läser dödspostens massa, reserv och skada; årstid mot ålder och fett | mätningen | **klart**, se nedan |
 | ~~0196~~ | reparationen lagade skada som inte fanns och kostade lika mycket oavsett kroppsstorlek | budgeten | **klart**, se nedan — 77 % av energin köpte ingenting |
 | ~~0197~~ | förnan var föda; `detritus` är nedbrytningssubstrat och inte mat | ekologin | **klart**, se nedan — 81,8 % av intaget försvinner |
+| ~~0198~~ | etableringens mätpunkter: landningsträngsel, etablerarnas frömassa, pooler hos omogna | mätningen | **klart**, se nedan — fröregnet faller vid trängsel 2,3; 79 % av poolen hos plantor som inte kan tömma den |
 | — | `f6-256-mager` 800 tick: 36 → 15 djur; magra världen har inte flora nog utan förnan | ekologin | **öppen**, kör `f6-256` |
 | — | skade- och reparationssystemet är nästan inert: `D` har medianen 0,0000 och `repair_capacity` binder i 2 % av tickarna | selektionen | **öppen**, nästa |
 | — | barnets startreserv betalas till 43–74 %; föräldern har inte råd med den redan minimala gåvan | livshistorien | **öppen**, hör ihop med `E_cap_per_M` |
@@ -2700,6 +2701,35 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Etableringens mätpunkter (0198)
+
+Instrumentering inför florarevisionen, ingen dynamikändring — banan verifierad
+bitidentisk mot 0197 i `liten6` 400 tick, seed 1.
+
+Tre saker som revisionens frågor inte gick att svara på ur befintliga loggar:
+
+- **Trängseln där fröna landar**, som fröviktade kvantiler
+  (`flora_seed_crowd_p10/median/p90`). Etableringens halvmättnad växer med
+  `exp(2·crowd)`, och spridningsskalan är ett par cellbredder, så fröregnet
+  möter beståndens täthet och inte världsmedlets. Uppmätt i rökprovet: median
+  2,34 mot ett världsmedel under 1 — halvmättnaden i landningscellerna är
+  alltså `0,05·e^4,7 ≈ 5 kg`, inte de 0,05 formeln lovar på öppen mark.
+- **Etablerarnas frömassa** (`flora_est_seed_mass`, summa). Tillsammans med
+  det redan derivable flödesmedlet `dispersed_mass/seeds` (0,88 g i p197, mot
+  beståndsmedlets 47 g — fröregnet domineras totalt av småfröna) ger den
+  selektionens tre viktningar på samma axel.
+- **Poolerna hos omogna** (`flora_pool_immature`, `flora_reserve_immature`,
+  `flora_carbon_immature`). Allokeringen viks av från inkomsten oavsett
+  mognad; i rökprovet låg 79 % av reproduktionspoolens näring hos plantor som
+  inte passerar storleksgrinden och alltså inte kan tömma den.
+
+Kvantilerna glesas med jämn stride över 20 000 frön så att partitioneringen
+inte kostar i varje tick; overhead ej mätbar mot baslinjen i `liten6`.
+
+Scenariot `f6-256-utan-fauna` läggs till för mättnadsmätningen: samma värld
+som `f6-256` men noll djur, eftersom ingen körning hittills nått stationärt
+tillstånd och florans jämviktsläge och jämvikts*tid* är okända.
 
 ### Förnan var inte föda (0197)
 

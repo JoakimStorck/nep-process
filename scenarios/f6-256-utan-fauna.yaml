@@ -1,0 +1,41 @@
+# f6-256 utan fauna: florans jämviktsmätning.
+#
+# Ingen körning har hittills nått stationärt tillstånd — fri näring steg
+# fortfarande vid t=60 i p197 och förnan föll ännu mot sin flödesjämvikt.
+# Innan någon florapatch kan dömas behövs två tal: var jämvikten ligger och
+# hur lång tid den tar. Faunan tas bort så att betning och kadaver inte
+# blandar sig i mätningen; allt annat är identiskt med `f6-256`, inklusive
+# terrängfröet, så att jämvikten mäts i samma landskap som huvudserien.
+#
+# Mättnadskriteriet är detsamma som alltid: fri näring och antal plantor ska
+# **båda** ligga still. Förnans initialstock (`detritus_init · bördighet`,
+# 84,6 kg/cell) ligger ~3,5 gånger över flödesjämvikten, och det är dess
+# strukturfraktion (halveringstid ~60 månader = 3 000 tick) som sätter
+# relaxationstiden — räkna med tiotusentals tick, inte tusentals.
+namn: f6-256-utan-fauna
+varld:
+  bredd: 256
+  hojd: 256
+  bordighet: 4.0
+  latitud: 48.0
+  kontinentalitet: 0.55
+  terrang:
+    seed: 1
+    lambda_max_frac: 0.75
+    lambda_min: 3.0
+    beta: 2.4
+    hav_andel: 0.20
+    hav_lutning: 1.0
+flora:
+  sadd: bordighet
+  plantmassa: 1.32
+fauna:
+  antal: 0
+  insatts_vid: start
+  flackar: 3
+  flackradie: 20.0
+  max_antal: 64
+fysiologi:
+  fartskala: 0.5
+  sociability: 0.8
+  sociability_sd: 0.5
