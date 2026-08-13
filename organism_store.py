@@ -61,6 +61,7 @@ _NON_SLOT_ARRAYS = frozenset({
     "flora_claim_cell",
     "flora_claim_share",
     "_flora_cells_prev",
+    "_ids_prev",
     "_csr_cursor",
 })
 
@@ -186,6 +187,7 @@ class OrganismStore:
     flora_claim_cell: np.ndarray = field(init=False)
     flora_claim_share: np.ndarray = field(init=False)
     _flora_cells_prev: np.ndarray = field(init=False)
+    _ids_prev: np.ndarray = field(init=False)
     # Cellmedlemskapet har ändrats sedan senaste indexbygge. Sätts av
     # alloc/clear och av rörelse som faktiskt byter cell.
     _index_dirty: bool = field(init=False, default=True)
@@ -335,8 +337,35 @@ class OrganismStore:
 
         self.id_lookup_cap = cap + 1
         self.id_to_slot_arr = np.full(self.id_lookup_cap, -1, dtype=np.int32)
+        self._ids_prev = np.zeros(0, dtype=np.int64)
 
         self.n = 0
+
+    def _clear_prev_id_entries(self) -> None:
+        """
+        Nolla förra byggets poster i `id_to_slot_arr` och glöm listan.
+
+        Motstycket till florafältens `_flora_cells_prev`: uppslagsvidden är
+        högsta id någonsin och får inte bestämma byggkostnaden. Posterna som
+        nollas är exakt de som skrevs förra gången, så tabellen är -1 överallt
+        utom hos de levande — se induktionsresonemanget vid anropsplatsen.
+
+        Valet av metod är uppmätt, inte principiellt. Sekventiell `fill` går
+        i minnesbandbredd och växer med tabellvidden: ~0,35 ms per miljon id
+        i sandlådan. Riktad nollning är spridda skrivningar i slotordning och
+        kostar per post oavsett vidd: ~2,4 ms vid 350 000 poster, flat upp
+        till 20 miljoner id. Kurvorna korsas därmed vid ungefär tjugo gånger
+        posterna, och det är tröskeln. Båda grenarna lämnar tabellen bitlik,
+        så valet är enbart en kostnadsfråga — och den avgörande egenskapen är
+        inte millisekunderna i dag utan att kostnaden får ett tak: utan den
+        riktade grenen växte varje bygge linjärt med ackumulerade födslar,
+        utan gräns, körningen igenom.
+        """
+        if self.id_lookup_cap <= 20 * max(1, self._ids_prev.size):
+            self.id_to_slot_arr.fill(-1)
+        elif self._ids_prev.size:
+            self.id_to_slot_arr[self._ids_prev] = np.int32(-1)
+        self._ids_prev = np.zeros(0, dtype=np.int64)
 
     def _ensure_id_lookup_capacity(self, max_id_needed: int) -> None:
         if max_id_needed < self.id_lookup_cap:
@@ -654,12 +683,12 @@ class OrganismStore:
         self.idx_starts = np.zeros(1, dtype=np.int64)
 
         if n <= 0:
-            self.id_to_slot_arr.fill(-1)
+            self._clear_prev_id_entries()
             return
 
         live = np.flatnonzero(self.alive[:n])
         if live.size == 0:
-            self.id_to_slot_arr.fill(-1)
+            self._clear_prev_id_entries()
             return
 
         # --- id -> slot ---
@@ -667,12 +696,25 @@ class OrganismStore:
         max_live_id = int(ids.max())
         if max_live_id >= 0:
             self._ensure_id_lookup_capacity(max_live_id)
-        self.id_to_slot_arr.fill(-1)
+        # Nollställ bara det som sattes förra bygget — samma mönster som
+        # florafälten ovan. `fill(-1)` gick över hela uppslagsvidden, och den
+        # dimensioneras efter högsta id någonsin: id återanvänds aldrig, så
+        # kostnaden växte med ackumulerade födslar i stället för med de
+        # levande — 0,30 ms per bygge vid 1,5 miljoner utdelade id, 2,05 vid
+        # tio, utan tak. Induktionen som gör det riktigt: varje bygge nollar
+        # exakt förra byggets poster innan det skriver sina egna, så allt
+        # utanför den aktuella mängden är -1 — antingen orört sedan
+        # allokeringen (kapacitetsväxten fyller sin svans med -1), eller
+        # nollat av bygget efter det som satte det. Ingen annan kod skriver
+        # tabellen.
+        self._clear_prev_id_entries()
         ok_id = ids >= 0
         if np.any(ok_id):
-            self.id_to_slot_arr[ids[ok_id]] = live[ok_id].astype(
+            set_ids = ids[ok_id]
+            self.id_to_slot_arr[set_ids] = live[ok_id].astype(
                 self.id_to_slot_arr.dtype, copy=False
             )
+            self._ids_prev = set_ids
 
         # --- celltillhörighet ---
         cells = self.cell_idx[live].astype(np.int64, copy=False)

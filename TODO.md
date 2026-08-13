@@ -2584,6 +2584,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0197~~ | förnan var föda; `detritus` är nedbrytningssubstrat och inte mat | ekologin | **klart**, se nedan — 81,8 % av intaget försvinner |
 | ~~0198~~ | etableringens mätpunkter: landningsträngsel, etablerarnas frömassa, pooler hos omogna | mätningen | **klart**, se nedan — fröregnet faller vid trängsel 2,3; 79 % av poolen hos plantor som inte kan tömma den |
 | ~~0199~~ | `SLUT`-raden klockar uppstarten och totalen, inte bara tickloopen; `--world-every`-hjälpen anger rätt enhet | mätningen | **klart**, se nedan — uppstarten var 135 s mot loopens 3,3 vid f6-256 |
+| ~~0200~~ | id-uppslagets nollning slutar växa med ackumulerade födslar | prestanda | **klart**, se nedan — bitidentisk bana; kostnaden får tak |
 | — | `f6-256-mager` 800 tick: 36 → 15 djur; magra världen har inte flora nog utan förnan | ekologin | **öppen**, kör `f6-256` |
 | — | skade- och reparationssystemet är nästan inert: `D` har medianen 0,0000 och `repair_capacity` binder i 2 % av tickarna | selektionen | **öppen**, nästa |
 | — | barnets startreserv betalas till 43–74 %; föräldern har inte råd med den redan minimala gåvan | livshistorien | **öppen**, hör ihop med `E_cap_per_M` |
@@ -2702,6 +2703,33 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Id-nollningen växte med historien (0200)
+
+`rebuild_spatial_index` nollställde id-uppslaget med `fill(-1)` över hela
+uppslagsvidden — som dimensioneras efter **högsta id någonsin**. Id
+återanvänds aldrig, så kostnaden växte med ackumulerade födslar i stället
+för med de levande: 0,35 ms per miljon utdelade id och bygge i sandlådan,
+utan tak. En 80 000-tickskörning med ~130 födslar per tick slutar vid ~10
+miljoner id; kostnaden är liten i dag och obegränsad i morgon. Mönstret ur
+taxonomin: en struktur som skalar med historien i stället för med nuet.
+
+Nu nollas i stället förra byggets poster — samma `_prev`-mönster som
+florafälten redan använder, med induktionen dokumenterad vid anropsplatsen:
+varje bygge nollar exakt förra byggets poster innan det skriver sina egna,
+och ingen annan kod skriver tabellen. Metodvalet är en uppmätt hybrid:
+sekventiell `fill` växer ~0,35 ms per miljon id, riktad nollning i
+slotordning är flat ~2,4 ms vid 350 000 poster, så kurvorna korsas vid
+ungefär tjugo gånger posterna och tröskeln ligger där. Ett ärligt
+förbehåll: vid dagens id-tal är skillnaden ände mot ände inte mätbar över
+sandlådans brus (±5 ms mellan omgångar vid 30–45 ms per bygge) — talen ovan
+är isolerade mätningar av de två operationerna, och patchens värde är taket,
+inte millisekunderna i dag.
+
+Verifierat i tre steg: egenskapstest med 300 churnrundor inklusive ett
+id-hopp till 5 miljoner som tvingar båda grenarna och kapacitetsväxten,
+tabellen bitlik `fill(-1)`-referensen i varje runda; bitidentisk bana mot
+0199 i `liten6` 400 tick seed 1; invariantsvit godkänd.
 
 ### Klockan svarade på fel fråga (0199)
 
