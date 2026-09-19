@@ -2591,7 +2591,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | — | faunan bär sig inte i `f6-256`: utdöd vid månad ~84 före 0202 och ~24 efter, 93 av 94 döda av svält | ekologin | **öppen**, nästa — trolig huvudorsak i `docs/revision-faunans-balans.md` (M1, F1, M3) |
 | ~~0210~~ | poploggens energi som flöden över loggintervallet, med poster för allt som ändrar reserven utanför `Body.step`; populationens energi stänger | mätningen | **klart**, se nedan — bitidentisk bana; resten 9e-15 |
 | ~~0211~~ | `docs/sammansattning-och-vatten.md`: torrsubstans och vatten som två tillstånd, kemisk sammansättning, fiberjäsning, djurens vätskebalans | planen | **klart**, designskiss — serien i sex steg står i dokumentet |
-| — | termoregleringen räknar inte den metaboliska värmen: 0,6–1,2 × basal ovanpå underhållet | budgeten | **öppen** — revisionen M1 |
+| ~~0212~~ | termoregleringen räknar av den metaboliska värmen; bara det som fattas produceras särskilt | budgeten | **klart**, se nedan — termo 0,5 → 0,02 × basal; faunan lever längre men bär sig inte |
 | — | mobiliseringstaket gäller per anrop, inte per tick; dräktigheten går före underhållet och kataboliserar modern till `M_min` | budgeten | **öppen** — revisionen M5, L2 |
 | — | växtföda ger en tredjedel av sin energi (våt vävnads 9,3 MJ/kg på torrsubstans, cellulosa noll); fettet har samma täthet som labil vävnad | födobudgeten | **öppen**, principbeslut — revisionen F1, M3 |
 | — | startdjuren sätts in med 6 % reserv: 14 av 80 svälter inom en månad; nyfödda har ~3 ticks reserv | utgångsläget | **öppen** — revisionen, mätkörningen, L6 |
@@ -2725,6 +2725,48 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Den metaboliska värmen värmer kroppen (0212)
+
+Dynamikändring. Revisionen (M1) fann att termoregleringen betalade hela
+värmeförlusten `K·(Tb_set − Tenv)` ovanpå basal, beräkning, sensing och
+rörelse, fast all den energin blir värme i kroppen. Värmen från
+ämnesomsättningen försvann, och termoposten var 0,6–1,2 × basal vid 15 till
+−5 °C.
+
+Nu täcker den metaboliska värmen — basal, beräkning, sensing och rörelse,
+kända när termoregleringen räknas — värmebehovet först, och bara det som
+fattas produceras särskilt: `P_gen = min(P_need − min(P_met, P_need), Pmax)`.
+Temperaturekvationen får `P_gen + P_met_used` som värmetillförsel, så kroppen
+hålls vid börvärdet som förut. Den nedre kritiska temperaturen hamnar där
+basalvärmen möter förlusten, ~5 °C vid 2 kg.
+
+Två förenklingar, båda uttalade i koden: överskottsvärme avges fritt, som den
+i praktiken gjorde förut (modellen har inget övre regleringssvar; avgivningen
+blir en vattenkostnad med vätskebalansen i `docs/sammansattning-och-vatten.md`),
+och byggarbetets värme räknas senare i steget och ingår inte.
+
+**Utfall**, tre frön per scenario, HEAD mot 0212, med 0210:s energiflöden
+(`runs/p212`):
+
+```
+f6-256, 1 200 tick     termo/basal   födslar         utdöd vid mån       djurmånader
+  HEAD                 0,50–0,53     14 / 34 / 42    22 / 20 / 19        485 / 698 / 437
+  0212                 0,02–0,03     52 / 63 / 44    lever (6 / 2 / 1)   847 / 1059 / 595
+liten6, 3 000 tick
+  HEAD                 0,32–0,37     728 / 28 / 17   42 / 11 / 11        1028 / 207 / 170
+  0212                 0,00–0,01     142 / 33 / 23   20 / 23 / 20        502 / 334 / 239
+```
+
+Faunan lever längre i fem av sex jämförelser; `liten6` frö 1 på HEAD var en
+avvikare (42 månader, 728 födslar mot 11 månader i de andra fröna). Men den
+bär sig inte: beståndet krymper i alla körningar. Termoregleringen var en av
+revisionens tre stora poster; de två andra — växtfödans energi och fettets
+täthet — hör till serien i designskissen.
+
+`isolering_max` och `isolering_halv` härleddes mot den gamla termokostnaden
+och är inte omprövade. Rökprovet och invariantsviten godkända i alla tolv
+körningar.
 
 ### Populationens energi stänger (0210)
 

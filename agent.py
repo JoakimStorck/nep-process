@@ -1935,7 +1935,24 @@ class Body:
         Cth = max(1e-9, _heatcap * M_eff)
 
         P_need = max(0.0, K * (_Tb_set - Tenv)) if Tb < _Tb_set else 0.0
-        P_gen  = min(P_need, _thermo_Pmax * M_eff)
+
+        # **Den metaboliska värmen täcker först (0212).** Basal, beräkning,
+        # sensing och rörelse blir värme i kroppen; bara det som fattas mot
+        # värmeförlusten behöver produceras särskilt. Tidigare betalades hela
+        # `K·(Tb_set − Tenv)` ovanpå, och värmen från ämnesomsättningen
+        # försvann — termoposten var 0,6–1,2 × basal vid 15 till −5 °C
+        # (revisionen, M1). Med den här bokföringen ligger den nedre kritiska
+        # temperaturen där basalvärmen möter förlusten, ~5 °C vid 2 kg.
+        #
+        # Överskottsvärme avges fritt, som den i praktiken gjorde förut:
+        # modellen har ännu inget övre regleringssvar, och kroppen hålls vid
+        # börvärdet. Avgivningen blir en vattenkostnad när vätskebalansen
+        # finns (docs/sammansattning-och-vatten.md). Byggarbetets värme räknas
+        # senare i steget och ingår inte här.
+        P_met = ((out_basal + out_compute + out_sense + out_loco) / dt
+                 if dt > 0.0 else 0.0)
+        P_met_used = P_met if P_met < P_need else P_need
+        P_gen  = min(P_need - P_met_used, _thermo_Pmax * M_eff)
 
         out_thermo = dt * P_gen
 
@@ -1946,9 +1963,9 @@ class Body:
         # klass av fel som den newtonska rörelsedynamiken, där relaxationen
         # mot terminalhastighet också är mycket kortare än tidssteget.
         #
-        # Lösningen på dT/dt = (P_gen - K·(T - Tenv))/Cth är exakt för
+        # Lösningen på dT/dt = (P_gen + P_met_used - K·(T - Tenv))/Cth är exakt för
         # konstant P_gen över steget och ovillkorligt stabil.
-        T_inf = Tenv + (P_gen / K if K > 1e-30 else 0.0)
+        T_inf = Tenv + ((P_gen + P_met_used) / K if K > 1e-30 else 0.0)
         decay = math.exp(-K * dt / Cth) if Cth > 1e-30 else 0.0
         self.Tb = T_inf + (Tb - T_inf) * decay
 
