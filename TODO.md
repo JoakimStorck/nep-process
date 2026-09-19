@@ -2599,7 +2599,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | — | ~~fröregnet halveras på ~100 mån~~ (falsifierat i p201: bottnar kring 220 frön/tick); 95 % av reproduktionspoolen hos omogna | florarevisionen | **öppen**, se p198 och p201 |
 | — | sammanfattningen saknar väg för en körning utan fauna: massakvot 2,9e17, "ingen omsättning alls" | mätningen | **öppen**, se p198 |
 | — | världsloggens `nutrient_in_flora` är bara vävnaden; reserven och reproduktionspoolen, 56 % av florans näring, saknas | mätningen | **öppen**, se p201 |
-| — | **mål: halverad körtid.** ms/tick i `f6-256-utan-fauna` vid jämvikt efter 0202 (~250 000 plantor), fast frö, mätt på den här maskinen på ledig maskin. Baslinje 49,6 ms/tick (p203-trad, standardens 24 trådar), mål ~25. Fauna-varianten läggs till när faunan bär sig | prestanda | **pågår** — efter 0204: 43,2 (p205); nästa är tillväxtskalet och spatialindexet, se mätningen efter 0205 |
+| — | **mål: halverad körtid.** ms/tick i `f6-256-utan-fauna` vid jämvikt efter 0202 (~250 000 plantor), fast frö, mätt på den här maskinen på ledig maskin. Baslinje 49,6 ms/tick (p203-trad, standardens 24 trådar), mål ~25. Fauna-varianten läggs till när faunan bär sig | prestanda | **pågår** — efter 0208: 35,5 (p208, −28,5 %); kärnan är hälften, se p208 |
 | — | `f6-256-mager` 800 tick: 36 → 15 djur; magra världen har inte flora nog utan förnan | ekologin | **öppen**, kör `f6-256` |
 | — | skade- och reparationssystemet är nästan inert: `D` har medianen 0,0000 och `repair_capacity` binder i 2 % av tickarna | selektionen | **öppen**, nästa |
 | — | barnets startreserv betalas till 43–74 %; föräldern har inte råd med den redan minimala gåvan | livshistorien | **öppen**, hör ihop med `E_cap_per_M` |
@@ -2718,6 +2718,42 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Tickens delar efter 0208 (p208)
+
+*Mätning, `runs/p208-jamvikt`: samma skript som p205 — `f6-256-utan-fauna`
+till tick 15 000, tre fönster om 1 000 tick vid ~248 000 plantor, ledig
+maskin. Ingen kodändring.*
+
+```
+pass                          p205     p208    skillnad   andel
+totalt                        43,2     35,5     −7,7
+tillväxtkärnan                17,1     17,8     +0,7       50 %
+tillväxtskalet (rest)          7,9      4,4     −3,5       12 %
+spridningen                    7,25     4,9     −2,3       14 %
+  etableringsloopen            1,6      1,5
+spatialindexet                 7,2      4,6     −2,6       13 %
+världen                        3,6      3,6      0         10 %
+```
+
+Mot baslinjen 49,6 ms är ticken 28,5 % snabbare; samma skript ger −29 % vid
+varje avläst tick under inkörningen. Till målet ~25 ms återstår ~10,5 ms,
+och kärnan är nu hälften av ticken.
+
+**Kärnans egna delar**, mätta på kopior av kärnan med identiska indata vid
+214 000 plantor (15,0 ms): `pow` i livslängden 1,4 ms, `exp` i
+temperaturgrinden ~1,0, `exp` i skuggan ~1,0, resten ~11,7 — tolv
+tillfälliga n-arrayer, radarrayerna och indirekta läsningar över åtta svep.
+Livslängden beror bara på strukturandelen, som är fast under en plantas liv,
+och en förberäknad livslängd ger **bitidentiska** utdata när den räknas med
+samma njit-hjälpare. De två `exp` beror på tickens temperatur respektive
+grannarnas bladarea och går inte att förberäkna.
+
+**Bedömning.** Bitidentiska patchar som syns härifrån — livslängden,
+`excrete_cells`, etableringsloopen, världens transport — räcker till
+uppskattningsvis ~30 ms. De sista ~5 ms kräver antingen att kärnans svep
+struktureras om, eller att kärnans aritmetik får avvika från numpy-vägen i
+sista biten; det senare är ett principbeslut och inte en prestandapatch.
 
 ### Spridningens helsvep i kärnor (0208)
 
