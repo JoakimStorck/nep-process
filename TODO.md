@@ -2586,12 +2586,13 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0199~~ | `SLUT`-raden klockar uppstarten och totalen, inte bara tickloopen; `--world-every`-hjälpen anger rätt enhet | mätningen | **klart**, se nedan — uppstarten var 135 s mot loopens 3,3 vid f6-256 |
 | ~~0200~~ | id-uppslagets nollning slutar växa med ackumulerade födslar | prestanda | **klart**, se nedan — bitidentisk bana; kostnaden får tak |
 | ~~0201~~ | förlustvägarna redovisas var för sig; sammanfattningens näringsrad räknar i månader | mätningen | **klart**, se nedan — bitidentisk bana; i `liten6` går 78 % av förlusten som förna till havet |
-| — | mättnadskörningen om: `f6-256-utan-fauna` 80 000 tick, `--world-every 12` | jämvikten | **öppen**, efter 0201 |
+| ~~—~~ | mättnadskörningen om: `f6-256-utan-fauna` 80 000 tick, `--world-every 12` | jämvikten | **klart**, `runs/p201`, se nedan — floran står nästan still, näringen inte |
 | 0202 | `nutrient_init` och `detritus_init` härleds ur dagens förlustvägar, inte ur 0086:s identitet | inkörningen | **öppen**, efter körningen |
 | — | sådden skapar plantor som inte bär sig: 20 % svälter ihjäl vid första ticken | sådden | **öppen**, se p198 |
-| — | fröregnet halveras på ~100 mån medan beståndet står still; 96 % av reproduktionspoolen hos omogna | florarevisionen | **öppen**, se p198 |
+| — | ~~fröregnet halveras på ~100 mån~~ (falsifierat i p201: bottnar kring 220 frön/tick); 95 % av reproduktionspoolen hos omogna | florarevisionen | **öppen**, se p198 och p201 |
 | — | sammanfattningen saknar väg för en körning utan fauna: massakvot 2,9e17, "ingen omsättning alls" | mätningen | **öppen**, se p198 |
-| — | **mål: halverad körtid.** ms/tick i `f6-256` med och utan fauna, efter inkörningen (~300 000 plantor), fast frö och tickfönster, mätt på den här maskinen; baslinje ~60–70 ms/tick att fastställa | prestanda | **öppen**, efter 0202 — profilera först och räkna Amdahl innan något byggs (jfr 0117); en patch i taget med bitprov |
+| — | världsloggens `nutrient_in_flora` är bara vävnaden; reserven och reproduktionspoolen, 56 % av florans näring, saknas | mätningen | **öppen**, se p201 |
+| — | **mål: halverad körtid.** ms/tick i `f6-256` med och utan fauna, efter inkörningen (~300 000 plantor), fast frö och tickfönster, mätt på den här maskinen; baslinje utan fauna 70 ms/tick (median p198/p201, tick 15–30k, ledig maskin), med fauna ej mätt | prestanda | **öppen**, efter 0202 — profilera först och räkna Amdahl innan något byggs (jfr 0117); en patch i taget med bitprov |
 | — | `f6-256-mager` 800 tick: 36 → 15 djur; magra världen har inte flora nog utan förnan | ekologin | **öppen**, kör `f6-256` |
 | — | skade- och reparationssystemet är nästan inert: `D` har medianen 0,0000 och `repair_capacity` binder i 2 % av tickarna | selektionen | **öppen**, nästa |
 | — | barnets startreserv betalas till 43–74 %; föräldern har inte råd med den redan minimala gåvan | livshistorien | **öppen**, hör ihop med `E_cap_per_M` |
@@ -2710,6 +2711,94 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Floran står still, näringen inte (p201)
+
+*Analys av `runs/p201`: `f6-256-utan-fauna`, 80 000 tick = 1 600 månader,
+seed 1, 0201-koden. Konsol och världslogg var tolfte månad, alltså samma
+årsfas i varje rad. Ingen kodändring.*
+
+Banan är tick för tick densamma som p198 fram till tick 40 000 (antalet
+plantor identiskt i varje jämförd rad), eftersom 0199–0201 inte rör
+dynamiken.
+
+**Näringen, ur ledgern.** Totalen räknas som tillfört minus förlorat —
+världsloggens `nutrient_in_flora` visade sig vara enbart vävnaden, se nedan.
+
+```
+mån    N tot   fri   flora  förna   förlust kg/mån   löst  förna  miner
+ 240   40 018 22 575 10 495  6 947       77,8          78 %   17 %    5 %
+ 601   21 322  5 736 10 345  5 241       47,6          64 %   30 %    6 %
+ 961   14 643  2 337  8 232  4 075       24,5          49 %   42 %    9 %
+1322   12 308  1 513  7 201  3 594       16,8          38 %   51 %   11 %
+1562   11 570  1 257  6 879  3 434       14,7          34 %   54 %   12 %
+```
+
+Förlusten och vägarnas andelar gäller de senaste tio åren före raden.
+Tillförseln är 12,06 kg/mån genom hela körningen.
+
+**Jämvikten är inte nådd efter 133 år.** Förlusten ligger fortfarande 22 %
+över tillförseln. p198:s extrapolation — 11 200 kg, tidskonstant 335 månader
+— höll väl i första halvan (14 804 förutsagt mot 14 777 uppmätt vid månad
+948) men svansen är långsammare: anpassningen ger asymptot 10 940, 10 790
+och 10 570 kg och tidskonstant 353, 379 och 429 månader när den startas vid
+månad 600, 800 respektive 1 000. Relaxationen är alltså inte en enda
+exponential. Bästa bedömning: jämvikten ligger kring **10 300–10 600 kg**,
+och sådden på 53 930 kg är **drygt fem gånger** den.
+
+**Förlustvägarna byter plats under förloppet.** Så länge den sådda förnan
+mineraliseras och fyller den fria poolen dominerar urlakningen, 78 % vid
+månad 240. När poolen tömts tar sedimentet över: 54 % sediment, 34 % löst
+och 12 % mineralisering vid slutet. **Mineraliseringsvägen, den enda
+0086:s identitet räknade med, har aldrig burit mer än 12 %.** Näringen går
+omkring tolv mineraliseringsvarv per förlust vid slutet, inte de hundra
+identiteten förutsätter.
+
+**Floran står nästan still.** Över de sista 360 månaderna: biomassan
+2,63e5 → 2,59e5 kg (−1,5 %), antalet plantor 277 000 → 270 000 (−2,6 %).
+Asymptoterna ligger nära: 2,56e5 kg och ~266 000 plantor. Florans näring
+är 6 840 kg, varav **56 % i reserv och reproduktionspool** och resten i
+vävnad.
+
+**Fröregnet bottnade — p198:s förutsägelse var fel.** p198 såg frön per
+tick halveras på omkring hundra månader och förutsade att antalet plantor
+skulle börja falla på allvar. Uppmätt bottnar fröregnet kring 220 per tick
+från månad ~1 000 och ligger sedan still (219, 225, 256), etableringen
+ligger kring 95 per tick mot dödlighetens ~90. Fallet var en del av
+relaxationen, inte en trend.
+
+Mognadsandelen ligger kvar på 11–12 % och storleksgrinden binder fortsatt;
+95 % av reproduktionspoolen ligger hos omogna. Selektionen har nästan
+planat ut: frömassan 0,207 → 0,212 över de sista 500 månaderna,
+temperaturoptimum stilla på 11,0 °C, vuxenmassan sjunker långsamt 24,3 →
+24,0 kg och rotallokeringen kryper 0,639 → 0,646.
+
+**Jämviktens sammansättning**, anpassad från månad 1 000 (vid slutet inom
+parentes):
+
+```
+fri näring     ~1 000 kg     (1 234)
+flora           6 375 kg     (6 839)   2,58e5 kg biomassa, ~266 000 plantor
+förna           3 224 kg     (3 410)   7,06e5 kg, strukturandel 0,91
+```
+
+Mot sådden: fri 9 240, flora 21 390 (1,38e6 kg i 1,3 miljoner plantor),
+förna 23 270 kg (5,55e6 kg). Förnan såddes drygt sju gånger för hög,
+floran drygt tre gånger.
+
+**Mätfel på vägen.** Världsloggens `nutrient_in_flora` summerar bara
+vävnaden (`mass · nutrient_content(structure)`). Ledgern räknar dessutom
+`flora_reserve` och `flora_repro_pool`, och med dem stänger summan mot
+tillfört minus förlorat på 3e-8 kg. Loggfältet saknar alltså 56 % av
+florans näring vid slutet; läsare som summerar loggens pooler får en värld
+som förlorat en tredjedel av sin näring. Samma familj som 0190:s
+"instrument som tyst rapporterar noll".
+
+**Körtidsbaslinjen.** Uppstarten tog 40,8 s på den här maskinen, mot 135 s
+i sandlådan (0199). Maskinen delades med tre externa processer från tick
+~33 000, och ms/tick därefter (72–77) duger inte som baslinje; fram till
+dess ligger p201 och p198 inom en procent av varandra, median 70 ms/tick
+vid ~320 000 plantor.
 
 ### Förlusten har tre vägar (0201)
 
