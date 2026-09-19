@@ -305,6 +305,39 @@ class BodyBatch:
 # ändå ingen skada när fläcken är en ö.
 _TORR_FORSOK = 8
 
+# Faunans energiflöden i poploggen (0210): kroppens egna flöden ur `last_flux`,
+# summerade över loggintervallet för varje djur som fullföljde sitt steg.
+_EFL_FLOW_KEYS = (
+    "food_bio_kg", "food_carcass_kg", "E_in_bio", "E_in_carcass", "E_in_total",
+    "E_loss_digest_bio", "E_loss_digest_carcass", "E_loss_basal", "E_loss_compute",
+    "E_loss_sense", "E_loss_loco", "E_loss_thermo", "E_loss_gest_overhead",
+    "E_build_growth", "E_build_gestation", "E_loss_repair", "E_from_catabolism",
+    "E_loss_catabolism", "dM_growth", "dM_gestation", "dM_catabolism",
+)
+# Ledgerns egna termer, som `last_flux` saknar: energin som lagrades ur
+# intaget, dräneringarna som helhet, materialet som flyttades ur reserven in i
+# vävnad och foster, och överskottet över reservtaket. Med dem stänger
+# `E_step_store` mot kroppens ledger:
+#   E_step_store = E_store + E_from_catabolism − E_out_drain − E_build_gestation
+#                  − E_loss_repair − E_material − E_overflow − E_build_growth
+_EFL_LEDGER_KEYS = ("E_store", "E_out_drain", "E_material", "E_overflow")
+# Reservens förändringar, i J, som tillsammans ska vara lika med förändringen
+# av `E_store_sum` mellan två poster. Tecknet är reservens: negativt är uttag.
+#   E_step_store        Body.step för djur som fullföljde steget
+#   E_step_store_dying  Body.step för djur som dog i steget (odelat)
+#   E_mating            parningskostnaden, partnern
+#   E_birth_parent      bäraren vid födseln: påfyllning, gåva, reproduktionskostnad
+#   E_newborn           ungarnas startreserv
+#   E_attack            angriparens kostnad
+#   E_founders          startdjurens reserv vid insättning
+#   E_death             reserven som lämnar beståndet vid döden (till kadavret)
+# `E_unaccounted` är förändringen minus posternas summa och ska vara noll på
+# avrundning när; allt annat är en väg som inte bokförs.
+_EFL_POSTS = (
+    "E_step_store", "E_step_store_dying", "E_mating", "E_birth_parent",
+    "E_newborn", "E_attack", "E_founders", "E_death",
+)
+
 
 @dataclass
 class Population:
@@ -417,6 +450,15 @@ class Population:
         self._recent_sample_ids = []
         self._births_total = 0
         self._deaths_total = 0
+        # Faunans energiflöden sedan förra levererade poploggposten (0210).
+        # Posten byggdes av `last_flux`, alltså av den senaste tickens flöden,
+        # och såg ut som ett flöde över loggintervallet utan att vara det.
+        # Här summeras varje tick, och reservens förändringar utanför
+        # `Body.step` bokförs som egna poster, så att populationens energi
+        # kan stängas: se `_emit_population`.
+        self._efl: dict[str, float] = {}
+        self._efl_ticks = 0
+        self._efl_E_prev = 0.0
         # Kumulativt antal dödsfall där ingen dödsorsak sattes. Ska förbli noll;
         # se check_death_cause_set i invariants.py.
         self._deaths_without_cause = 0
@@ -575,7 +617,15 @@ class Population:
             ),
         )
 
+    def _efl_add(self, key: str, value: float) -> None:
+        self._efl[key] = self._efl.get(key, 0.0) + float(value)
+
     def _emit_population(self, t: float, births: int, deaths: int) -> None:
+        # Energiflödena ackumuleras tills posten faktiskt levereras; byggs den
+        # inte nu fortsätter summeringen till nästa gång någon vill ha den.
+        self._efl_ticks += 1
+        if not self._emit_wanted("population", t):
+            return
         # Räkna bara levande för statistik + pop (mer semantiskt korrekt)
         alive = [a for a in self.agents if a.body.alive]
         pop_n = int(len(alive))
@@ -625,22 +675,21 @@ class Population:
             E_body_equiv = 0.0
         E_gest_equiv = e_lab * gest_M_sum
 
-        flow_keys = [
-            "food_bio_kg", "food_carcass_kg", "E_in_bio", "E_in_carcass", "E_in_total",
-            "E_loss_digest_bio", "E_loss_digest_carcass", "E_loss_basal", "E_loss_compute",
-            "E_loss_sense", "E_loss_loco", "E_loss_thermo", "E_loss_gest_overhead",
-            "E_build_growth", "E_build_gestation", "E_loss_repair", "E_from_catabolism",
-            "E_loss_catabolism", "dM_growth", "dM_gestation", "dM_catabolism",
-        ]
-        flow_sums = {k: 0.0 for k in flow_keys}
-        for a in alive:
-            fl = getattr(getattr(a, "body", None), "last_flux", None)
-            if isinstance(fl, dict):
-                for k in flow_keys:
-                    try:
-                        flow_sums[k] += float(fl.get(k, 0.0))
-                    except Exception:
-                        pass
+        # Flöden summerade över alla tick sedan förra levererade posten, inte
+        # den senaste tickens (0210). Posterna utanför `Body.step` och resten
+        # beskrivs vid `_EFL_POSTS`.
+        flow_sums = {k: self._efl.get(k, 0.0) for k in _EFL_FLOW_KEYS}
+        for k in _EFL_LEDGER_KEYS:
+            flow_sums[k] = self._efl.get(k, 0.0)
+        posts = {k: self._efl.get(k, 0.0) for k in _EFL_POSTS}
+        dE_store = E_store_sum - self._efl_E_prev
+        flow_sums.update(posts)
+        flow_sums["E_store_delta"] = dE_store
+        flow_sums["E_unaccounted"] = dE_store - sum(posts.values())
+        flow_sums["flow_ticks"] = float(self._efl_ticks)
+        self._efl = {}
+        self._efl_ticks = 0
+        self._efl_E_prev = E_store_sum
 
         # Skadeinflödets termer, summerade över levande. Att veta vilken term
         # som faktiskt bygger skadan är förutsättningen för att kunna byta
@@ -1411,7 +1460,9 @@ class Population:
         # parning, och eftersom parningen kräver att två samtidigt är klara
         # kvadrerades effekten på hur ofta det kan ske.
         mating_cost = 0.05 * partner.body.E_cap()
+        _E_pre = float(partner.body.E_total())
         partner.pay_repro_cost(mating_cost, dt=float(ctx.dt))
+        self._efl_add("E_mating", float(partner.body.E_total()) - _E_pre)
         
         if p_slot >= 0:
             self._write_body_surface_to_store(p_slot, partner)
@@ -1471,6 +1522,7 @@ class Population:
         #
         # Uppmätt: `_step_births` gick från +1,18e-03 kg obokförd näring per
         # 200 tick på `liten6` till −5,0e-11, alltså float64-brus.
+        _E_parent_pre = float(b.E_total())
         brist = float(self.AP.M_birth_min) - child_M
         if brist > 0.0:
             betalt = float(b._take_reserve_mass(brist * n_kull, strypt=False))
@@ -1511,6 +1563,7 @@ class Population:
         
         repro_cost_J = float(parent.pheno.repro_cost) * float(parent.body.E_cap())
         parent.pay_repro_cost(repro_cost_J, dt=float(ctx.dt))
+        self._efl_add("E_birth_parent", float(b.E_total()) - _E_parent_pre)
         
         self._write_body_surface_to_store(p_slot, parent)
 
@@ -1535,6 +1588,7 @@ class Population:
                 # i stället för att begränsa kullen.
                 break
             ungar.append(child)
+            self._efl_add("E_newborn", float(child.body.E_total()))
 
             # Fostret bars som labil vävnad. Vid födseln får barnet sin egen
             # strukturandel, och vävnaden binder mindre näring per kilo än
@@ -1967,6 +2021,7 @@ class Population:
 
             self._emit_birth(self.t, a, parent=None)
             self.agents.append(a)
+            self._efl_add("E_founders", float(a.body.E_total()))
             made += 1
 
         if made > 0 and int(getattr(self, "_tick", 0)) > 0:
@@ -4308,6 +4363,7 @@ class Population:
         
             slot = int(body_slots[i])
             age_s = float(self.store.age[slot]) if slot >= 0 else 0.0
+            _E_pre = float(a.body.E_total())
             
             a.body.step(
                 ctx,
@@ -4327,6 +4383,23 @@ class Population:
             )
 
             self._flush_body_outputs(a)
+
+            # Ett djur som dör i steget lämnar det före ledgern, och dess
+            # `last_flux` är då förra tickens. Reservens förändring bokförs
+            # ändå, men odelad.
+            _dE = float(a.body.E_total()) - _E_pre
+            if a.body.alive:
+                self._efl_add("E_step_store", _dE)
+                fl = a.body.last_flux
+                if isinstance(fl, dict):
+                    for k in _EFL_FLOW_KEYS:
+                        self._efl_add(k, float(fl.get(k, 0.0)))
+                led = a.body.last_ledger
+                if isinstance(led, dict):
+                    for k in _EFL_LEDGER_KEYS:
+                        self._efl_add(k, float(led.get(k, 0.0)))
+            else:
+                self._efl_add("E_step_store_dying", _dE)
 
             self._write_alive_to_store(slot, a.body.alive)
             self._write_body_surface_to_store(slot, a)
@@ -4414,10 +4487,12 @@ class Population:
     
             mismatch_cost = float(getattr(predator.AP, "hunt_mismatch_cost", 2.0))
             cost_mult = 1.0 + (mismatch_cost - 1.0) * max(0.0, 1.0 - pred_diet)
+            _E_pre = float(predator.body.E_total())
             predator.body.take_energy(
                 cost_frac * hunt_eff * cost_mult * float(predator.body.E_cap()) * dt,
                 dt=dt,
             )
+            self._efl_add("E_attack", float(predator.body.E_total()) - _E_pre)
             self._write_body_surface_to_store(predator.store_slot, predator)
     
             dD = dmg_per_s * max(0.25, score) * hunt_eff * (float(predator.body.M) ** 0.5) * dt
@@ -4505,6 +4580,7 @@ class Population:
                 # värre än inget instrument, eftersom posten såg fullständig ut.
                 deaths += 1
 
+                self._efl_add("E_death", -float(body.E_total()))
                 self._emit_death(
                     self.t,
                     a,

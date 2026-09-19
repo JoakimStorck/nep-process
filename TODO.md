@@ -2589,7 +2589,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~—~~ | mättnadskörningen om: `f6-256-utan-fauna` 80 000 tick, `--world-every 12` | jämvikten | **klart**, `runs/p201`, se nedan — floran står nästan still, näringen inte |
 | ~~0202~~ | `nutrient_init` och `detritus_init` kalibreras mot p201:s jämvikt, inte mot 0086:s identitet | inkörningen | **klart**, se nedan — näringen inom 1–3 % av jämvikten från tick 0; faunan dör ut snabbare |
 | — | faunan bär sig inte i `f6-256`: utdöd vid månad ~84 före 0202 och ~24 efter, 93 av 94 döda av svält | ekologin | **öppen**, nästa — trolig huvudorsak i `docs/revision-faunans-balans.md` (M1, F1, M3) |
-| — | poploggens energifält är en ticks ögonblicksbild, inte flöden; populationens energi saknar poster för födsel och död | mätningen | **öppen**, först — revisionen I1 |
+| ~~0210~~ | poploggens energi som flöden över loggintervallet, med poster för allt som ändrar reserven utanför `Body.step`; populationens energi stänger | mätningen | **klart**, se nedan — bitidentisk bana; resten 9e-15 |
 | — | termoregleringen räknar inte den metaboliska värmen: 0,6–1,2 × basal ovanpå underhållet | budgeten | **öppen** — revisionen M1 |
 | — | mobiliseringstaket gäller per anrop, inte per tick; dräktigheten går före underhållet och kataboliserar modern till `M_min` | budgeten | **öppen** — revisionen M5, L2 |
 | — | växtföda ger en tredjedel av sin energi (våt vävnads 9,3 MJ/kg på torrsubstans, cellulosa noll); fettet har samma täthet som labil vävnad | födobudgeten | **öppen**, principbeslut — revisionen F1, M3 |
@@ -2724,6 +2724,52 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Populationens energi stänger (0210)
+
+Instrumentering, ingen dynamikändring. Revisionen av faunans balans
+(`docs/revision-faunans-balans.md`, I1) fann att poploggens energifält summerade
+varje djurs `last_flux` — flödena i **den senaste ticken** — och såg ut som
+flöden över loggintervallet utan att vara det. En första läsning gav därför en
+basalmetabolism femtio gånger under Kleiber. Populationens energi gick inte
+heller att stänga: födslar, död och allt som ändrar reserven utanför
+`Body.step` saknades.
+
+Nu summeras flödena varje tick, för varje djur som fullföljde sitt steg, och
+posten nollställs först när den faktiskt levereras (`_emit_wanted`); byggs den
+inte fortsätter summeringen. Reservens förändringar bokförs som poster, mätta
+som `E_total` före och efter på varje ställe där reserven ändras:
+`E_step_store` (steget, fullföljt), `E_step_store_dying` (steget, djuret dog i
+det — odelat, eftersom döden lämnar steget före ledgern), `E_mating`,
+`E_birth_parent` (påfyllning, gåva och reproduktionskostnad), `E_newborn`,
+`E_attack`, `E_founders` och `E_death`. `E_unaccounted` är förändringen av
+`E_store_sum` minus posternas summa. Därtill ledgerns egna termer som
+`last_flux` saknade: `E_store`, `E_out_drain`, `E_material` och
+`E_overflow`, samt `flow_ticks`.
+
+**Utfall.** `liten6` 3 000 tick (födslar, parningar, attacker) och `f6-256`
+1 200 tick (utdöende), post varje månad:
+
+```
+populationens rest, relativt                       6e-15 / 9e-15
+ledgerformeln mot E_step_store                     3e-15
+dräneringen mot förlustposternas summa             2e-15
+```
+
+`E_material` var det som saknades mellan flödena och reservens förändring —
+71 MJ första månaden i `f6-256` — och `E_overflow`, överskottet över
+reservtaket som utsöndras, var 192 MJ, 7 % av intaget. Hoppet i
+`E_store_sum` första månaden (112 → 468 MJ) är startdjuren som fyller sina
+reserver: `E_step_store` +368 MJ.
+
+Skadetermerna (`dD_*`, `effort`, `rest`, `speed_n`) är fortfarande den
+senaste tickens; de rör inte energin och lämnas till en egen patch om de
+behövs. `genopheno_analyze.py` beskrev redan fälten som "MJ per djur och
+loggsteg", vilket nu stämmer.
+
+Bitprov mot `8accae8`: utskrifterna identiska; alla 87 tillståndsarrayer och
+ledgersummor bitvis lika i `liten6` 400 och 3 000 tick och `f6-256` med
+fauna 600 tick. Poplogg-posten byggs nu bara när den efterfrågas.
 
 ### Livslängden räknas vid födseln (0209)
 
