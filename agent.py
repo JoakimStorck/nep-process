@@ -1991,7 +1991,7 @@ class Body:
         Qloss = K * (0.5 * (Tb + float(self.Tb)) - Tenv)
     
         # ---------------------------------------------------------
-        # (2C) Gestation (Väg 2): overhead + build energy
+        # (2C) Gestation (Väg 2): overhead; fostret byggs i (3A)
         # ---------------------------------------------------------
         out_gest_overhead = 0.0   # J
         out_gest_build = 0.0      # J actually paid this tick for fetal tissue
@@ -2005,39 +2005,7 @@ class Body:
             Pg_over = _gest_over * M_eff
             out_gest_overhead = dt * Pg_over
 
-            M_tgt = max(0.0, float(self.gest_M_target))
-            M_cur = max(0.0, float(self.gest_M))
-
-            if M_tgt > 0.0 and M_cur < M_tgt:
-                dM_want = min(_gest_rate * dt, M_tgt - M_cur)
-
-                if dM_want > 0.0:
-                    # Fostervävnad byggs av moderns reservmassa, ett kilo per
-                    # kilo. Byggkostnaden är syntesarbetet ovanpå materialet,
-                    # inte i stället för det — de är två termer.
-                    kg_per_kg = 1.0 + (_gest_build_E_kg / _E_labile)
-                    need_kg = dM_want * kg_per_kg
-                    have_kg = self.M_reserve()
-
-                    if have_kg < need_kg:
-                        # Katabolisera egen vävnad för att fylla på reserven.
-                        yield_kg = max(1e-12, (1.0 - _structure) * _cat_eff)
-                        free = max(0.0, float(self.M) - _M_min)
-                        dM_cat_gest = min((need_kg - have_kg) / yield_kg, free)
-                        if dM_cat_gest > 0.0:
-                            E_from_M_gest = self._catabolize(dM_cat_gest, _structure)
-                        have_kg = self.M_reserve()
-
-                    build_kg = min(dM_want, have_kg / kg_per_kg)
-                    if build_kg > 0.0:
-                        out_gest_build = float(self.take_energy(build_kg * _gest_build_E_kg, dt=dt))
-                        # Fostret är ännu odifferentierad, labil vävnad; dess
-                        # struktur läggs på först vid födseln.
-                        dM_gest = self._take_reserve_mass(build_kg, dt, strypt=False)
-                        E_material += dM_gest * _E_labile
-                        if dM_gest > 0.0:
-                            self.gest_M = M_cur + dM_gest
-                            self.gest_E_J = float(self.gest_E_J) + out_gest_build
+            # Fostret byggs i (3A), efter underhållet — se där.
     
         # ---------------------------------------------------------
         # (2C.5) Aktiv juvenil tillväxt mot M_target
@@ -2069,7 +2037,7 @@ class Body:
         # ---------------------------------------------------------
         # (2D) Pay drains ONCE
         # ---------------------------------------------------------
-        # OBS: out_gest_build ingår INTE — redan betald i sektion (2C).
+        # OBS: out_gest_build ingår INTE — fostret betalas i (3A), efter dräneringarna.
         E_out_drain = (
             out_basal + out_compute + out_sense + out_loco + out_thermo
             + out_gest_overhead
@@ -2124,6 +2092,65 @@ class Body:
             paid2      = float(self.take_energy(deficit, dt=dt))
             deficit    = max(0.0, deficit - paid2)
             E_paid_drain += paid2
+
+        # ---------------------------------------------------------
+        # (3A) Fostret — efter underhållet (0214)
+        # ---------------------------------------------------------
+        # Fostret byggdes i (2C), före dräneringarna, och saknades reserven
+        # kataboliserades moderns vävnad ned till `M_min` — utan skada och
+        # förbi avmagringsdödens tröskel (revisionen L2). En diskretionär
+        # utgift låg alltså bland de obligatoriska, samma fälla som
+        # tillväxten hade före (3B).
+        #
+        # Nu gäller moderns prioritet: underhållet först, fostret sedan, egen
+        # tillväxt sist. Fostret byggs bara när underhållet är fullt betalt.
+        # Verkliga mödrar mobiliserar egen vävnad för fostret, och det får
+        # hon göra här — med katabolismens vanliga skada, och bara ned till
+        # strikt ovanför tröskeln där avmagringen dödar. Att graviditeten då
+        # avstannar och inte avbryts är en öppen fråga (resorption), inte en
+        # del av rättelsen.
+        if bool(self.gestating) and deficit <= 0.0:
+            M_tgt = max(0.0, float(self.gest_M_target))
+            M_cur = max(0.0, float(self.gest_M))
+
+            if M_tgt > 0.0 and M_cur < M_tgt:
+                dM_want = min(_gest_rate * dt, M_tgt - M_cur)
+
+                if dM_want > 0.0:
+                    # Fostervävnad byggs av moderns reservmassa, ett kilo per
+                    # kilo. Byggkostnaden är syntesarbetet ovanpå materialet,
+                    # inte i stället för det — de är två termer.
+                    kg_per_kg = 1.0 + (_gest_build_E_kg / _E_labile)
+                    need_kg = dM_want * kg_per_kg
+                    have_kg = self.M_reserve()
+
+                    if have_kg < need_kg:
+                        _M_top = float(getattr(self, "_M_peak", 0.0))
+                        _M_golv = (max(_M_min, float(AP.M_waste_frac) * _M_top)
+                                   if _M_top > 0.0 else _M_min)
+                        free = max(0.0, float(self.M) - _M_golv)
+                        yield_kg = max(1e-12, (1.0 - _structure) * _cat_eff)
+                        dM_cat_gest = min((need_kg - have_kg) / yield_kg, free)
+                        if dM_cat_gest >= free:
+                            # Lika med tröskeln är död i (5); stanna strikt över.
+                            dM_cat_gest = free * (1.0 - 1e-9)
+                        if dM_cat_gest > 0.0:
+                            E_from_M_gest = self._catabolize(dM_cat_gest, _structure)
+                            _k_cat_dmg = float(getattr(AP, 'k_cat_dmg', 1.0))
+                            dD_cat = _k_cat_dmg * dM_cat_gest / max(float(self.M), 1e-9)
+                            self.D = clamp(float(self.D) + dD_cat, 0.0, _D_max)
+                        have_kg = self.M_reserve()
+
+                    build_kg = min(dM_want, have_kg / kg_per_kg)
+                    if build_kg > 0.0:
+                        out_gest_build = float(self.take_energy(build_kg * _gest_build_E_kg, dt=dt))
+                        # Fostret är ännu odifferentierad, labil vävnad; dess
+                        # struktur läggs på först vid födseln.
+                        dM_gest = self._take_reserve_mass(build_kg, dt, strypt=False)
+                        E_material += dM_gest * _E_labile
+                        if dM_gest > 0.0:
+                            self.gest_M = M_cur + dM_gest
+                            self.gest_E_J = float(self.gest_E_J) + out_gest_build
 
         # ---------------------------------------------------------
         # (3B) Somatisk tillväxt — ur det som faktiskt återstår

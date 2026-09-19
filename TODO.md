@@ -2593,7 +2593,8 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0211~~ | `docs/sammansattning-och-vatten.md`: torrsubstans och vatten som två tillstånd, kemisk sammansättning, fiberjäsning, djurens vätskebalans | planen | **klart**, designskiss — serien i sex steg står i dokumentet |
 | ~~0212~~ | termoregleringen räknar av den metaboliska värmen; bara det som fattas produceras särskilt | budgeten | **klart**, se nedan — termo 0,5 → 0,02 × basal; faunan lever längre men bär sig inte |
 | ~~0213~~ | mobiliseringstaket gäller per tick, delat av alla strypta uttag | budgeten | **klart**, se nedan — rättelse; utfallet inom frönas spridning |
-| — | dräktigheten går före underhållet och kataboliserar modern till `M_min` | budgeten | **öppen**, nästa — revisionen L2 |
+| ~~0214~~ | fostret byggs efter underhållet; katabolism för fostret med skada och strikt över avmagringströskeln | budgeten | **klart**, se nedan — rättelse; utfallet inom frönas spridning |
+| — | en graviditet som avstannar avbryts aldrig (ingen resorption) | reproduktionen | **öppen**, se 0214 |
 | — | växtföda ger en tredjedel av sin energi (våt vävnads 9,3 MJ/kg på torrsubstans, cellulosa noll); fettet har samma täthet som labil vävnad | födobudgeten | **öppen**, principbeslut — revisionen F1, M3 |
 | — | startdjuren sätts in med 6 % reserv: 14 av 80 svälter inom en månad; nyfödda har ~3 ticks reserv | utgångsläget | **öppen** — revisionen, mätkörningen, L6 |
 | ~~0203~~ | passtidtagningen delar upp `_step_world_and_flora` i världens delpass, florans tre system och spatialindexet | mätningen | **klart**, se nedan — bitidentisk bana; hydro väntar på trådar under last |
@@ -2726,6 +2727,41 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Fostret efter underhållet (0214)
+
+Dynamikändring, en rättelse. Fostret byggdes i (2C), före dräneringarna, och
+saknades reserven kataboliserades moderns vävnad ned till `M_min` = 0,01 kg —
+utan `k_cat_dmg`-skada och förbi avmagringsdödens tröskel 0,65 · `M_peak`
+(revisionen L2). En diskretionär utgift låg bland de obligatoriska; samma
+fälla som tillväxten hade innan den flyttades till (3B).
+
+Fostrets byggande ligger nu i (3A), efter underhållet och katabolismen och före
+moderns egen tillväxt: underhåll, foster, egen tillväxt. Det byggs bara när
+underhållet är fullt betalt. Modern får mobilisera egen vävnad för fostret, som
+verkliga mödrar gör, men med katabolismens vanliga skada och bara ned till
+strikt ovanför tröskeln där avmagringen dödar. Dräktighetens overhead ligger
+kvar bland dräneringarna.
+
+**Utfall**, tre frön, HEAD (0213) mot 0214 (`runs/p214`):
+
+```
+f6-256, 1 200 tick   födslar        djurmånader       döda dräktiga / döda
+  HEAD               24 / 57 / 46   715 / 879 / 607   4/102  5/135  9/124
+  0214               23 / 62 / 45   707 / 951 / 600   1/102  4/140  7/124
+liten6, 3 000 tick   utdöd vid mån
+  HEAD               25 / 22 / 19   378 / 285 / 212   6/86   4/66   1/62
+  0214               33 / 35 / 16   382 / 354 / 175   5/73   5/73   2/56
+```
+
+Andelen döda som var dräktiga ändras knappt, och faunans öde ligger inom
+frönas spridning. Mödrar dör fortfarande dräktiga — av svält i underhållet,
+inte av att fostret tömmer dem. En rättelse, inte en orsak.
+
+Öppen fråga: en graviditet som avstannar, när modern inte har något över,
+fortsätter i väntan i stället för att avbrytas. Verkliga däggdjur resorberar
+eller aborterar vid svår svält; det är en ny mekanism och egen patch.
+Invariantsviten godkänd i alla tolv körningar.
 
 ### Mobiliseringstaket per tick (0213)
 
