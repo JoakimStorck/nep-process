@@ -1423,21 +1423,39 @@ def print_summary(pop: Population, d0: dict, nb0: dict, unika: int, worst_drift:
 
     # Takterna avgör om världen ackumulerar eller dräneras, och på vilken
     # tidsskala. Totalerna ensamma döljer det: en stock som ser stabil ut över
-    # några hundra sekunder kan ha en tidskonstant på timmar.
+    # några hundra månader kan ha en tidskonstant på decennier.
     # Se docs/naringens-ekonomi.md.
-    sim_h = float(pop.t) / 3600.0
-    if sim_h > 0.0:
-        add_h = (nb["added"] - nb0["added"]) / sim_h
-        lost_h = (nb["lost"] - nb0["lost"]) / sim_h
-        net_h = add_h - lost_h
-        loss_frac = max(1e-12, float(pop.WP.nutrient_loss_frac))
-        cyc_h = (lost_h / loss_frac) / max(1e-12, nb["total"])
-        line = (f"               takt: +{add_h:.5f} -{lost_h:.5f} = {net_h:+.5f} kg/h")
-        if abs(net_h) > 1e-12:
-            line += f"   tidskonstant {abs(nb['total'] / net_h):.0f} h"
+    #
+    # `pop.t` räknas i månader. Raden delade tidigare med 3 600 som om den
+    # vore sekunder och redovisade kg/h — en kvarleva från före omskalningen.
+    sim_mo = float(pop.t)
+    if sim_mo > 0.0:
+        add_mo = (nb["added"] - nb0["added"]) / sim_mo
+        lost_mo = (nb["lost"] - nb0["lost"]) / sim_mo
+        net_mo = add_mo - lost_mo
+        line = (f"               takt: +{add_mo:.5f} -{lost_mo:.5f} = {net_mo:+.5f} kg/mån")
+        if abs(net_mo) > 1e-12:
+            line += f"   tidskonstant {abs(nb['total'] / net_mo):.0f} mån"
         print(line)
-        print(f"               omsättning {cyc_h:.1f} varv/h, "
-              f"{1.0 / loss_frac:.0f} varv innan förlust")
+
+        # Förlusten per väg. Omsättningen härleds bara ur mineraliseringens
+        # väg: `nutrient_loss_frac` gäller det som frigörs vid nedbrytningen,
+        # så dess förlust delat med andelen är det mineraliserade flödet.
+        # Förr antogs all förlust gå den vägen, vilket inte stämt sedan
+        # urlakningen och sedimenttransporten kom.
+        ways = (("löst", "lost_dissolved"), ("förna", "lost_sediment"),
+                ("mineralisering", "lost_mineral"))
+        lost_run = max(1e-12, nb["lost"] - nb0["lost"])
+        parts = []
+        for name, k in ways:
+            v = nb[k] - nb0[k]
+            parts.append(f"{name} {v:.5f} ({100.0 * v / lost_run:.0f} %)")
+        print(f"               förlust   {'  '.join(parts)}")
+        loss_frac = max(1e-12, float(pop.WP.nutrient_loss_frac))
+        mineralized = (nb["lost_mineral"] - nb0["lost_mineral"]) / loss_frac
+        cyc_mo = mineralized / sim_mo / max(1e-12, nb["total"])
+        print(f"               omsättning {cyc_mo:.3f} varv/mån, "
+              f"{mineralized / lost_run:.0f} varv innan förlust")
     print(f"               drift {nb['unaccounted'] / max(1e-12, abs(nb['total'])):.2e} rel "
           f"(störst under körningen {worst_drift:.2e})")
 
@@ -1880,7 +1898,7 @@ def _run_inner(a: argparse.Namespace, seed: int, hub) -> int:
                     f"[näring] fri per landcell: rygg {_lo:.4f}  dal {_hi:.4f}  "
                     f"kvot {_hi / max(1e-12, _lo):.2f}x   "
                     f"vittrat {float(w._nutrient_added_total):.1f} kg  "
-                    f"urlakat {float(w._nutrient_lost_total):.1f} kg",
+                    f"förlorat {float(w._nutrient_lost_total):.1f} kg",
                     flush=True,
                 )
             _wet = _dr.sea | (np.asarray(w.water) > float(w.WP.submerged_threshold))

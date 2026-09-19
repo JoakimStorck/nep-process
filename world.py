@@ -655,6 +655,16 @@ class World:
         # balansen mäts mot dessa och inte mot total massa.
         self._nutrient_added_total = 0.0
         self._nutrient_lost_total = 0.0
+        # Förlusten per väg. Summan ovan förblir den bokförda storheten —
+        # balansen och invarianterna läser den — och vägarna ackumuleras vid
+        # samma skrivställe, så att det går att se vilken sänka som dominerar.
+        # Löst: urlakning och havscellernas tömning (hydro.leach_pass).
+        # Sediment: förna som transporteras ut i havet (sediment_pass).
+        # Mineralisering: `nutrient_loss_frac` av det som frigörs vid
+        # nedbrytningen (denitrifikation och liknande).
+        self._nutrient_lost_dissolved = 0.0
+        self._nutrient_lost_sediment = 0.0
+        self._nutrient_lost_mineral = 0.0
 
         # Aktiveringar och avaktiveringar samlas och slås ihop en gång per tick.
         # Att göra dem direkt mot arrayen kostade O(n) per händelse, vilket dög
@@ -1325,8 +1335,10 @@ class World:
         to_sea_str = float(self._sed_acc[1])
         if to_sea > 0.0:
             lab = to_sea - to_sea_str
-            self._nutrient_lost_total += (lab * NUTRIENT_PER_KG_LABILE
-                                          + to_sea_str * NUTRIENT_PER_KG_STRUCT)
+            lost = (lab * NUTRIENT_PER_KG_LABILE
+                    + to_sea_str * NUTRIENT_PER_KG_STRUCT)
+            self._nutrient_lost_total += lost
+            self._nutrient_lost_sediment += lost
         return to_sea, float(self._sed_acc[2])
 
     def leaching_pass(self) -> tuple[float, float]:
@@ -1345,6 +1357,7 @@ class World:
         )
         lost = float(self._leach_acc[0])
         self._nutrient_lost_total += lost
+        self._nutrient_lost_dissolved += lost
         return lost, float(self._leach_acc[1])
 
     def add_nutrient(self, cell: int, amount: float) -> float:
@@ -1522,6 +1535,7 @@ class World:
         released = d_rel + c_rel
         retained = 1.0 - float(self.WP.nutrient_loss_frac)
         self._nutrient_lost_total += released * (1.0 - float(retained))
+        self._nutrient_lost_mineral += released * (1.0 - float(retained))
         return d_dec + c_dec, released * float(retained)
 
     def update_flux(

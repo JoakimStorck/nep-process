@@ -2585,7 +2585,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0198~~ | etableringens mätpunkter: landningsträngsel, etablerarnas frömassa, pooler hos omogna | mätningen | **klart**, se nedan — fröregnet faller vid trängsel 2,3; 79 % av poolen hos plantor som inte kan tömma den |
 | ~~0199~~ | `SLUT`-raden klockar uppstarten och totalen, inte bara tickloopen; `--world-every`-hjälpen anger rätt enhet | mätningen | **klart**, se nedan — uppstarten var 135 s mot loopens 3,3 vid f6-256 |
 | ~~0200~~ | id-uppslagets nollning slutar växa med ackumulerade födslar | prestanda | **klart**, se nedan — bitidentisk bana; kostnaden får tak |
-| 0201 | förlustvägarna redovisas var för sig; sammanfattningens näringsrad räknar i månader | mätningen | **öppen**, nästa — se p198 nedan |
+| ~~0201~~ | förlustvägarna redovisas var för sig; sammanfattningens näringsrad räknar i månader | mätningen | **klart**, se nedan — bitidentisk bana; i `liten6` går 78 % av förlusten som förna till havet |
 | — | mättnadskörningen om: `f6-256-utan-fauna` 80 000 tick, `--world-every 12` | jämvikten | **öppen**, efter 0201 |
 | 0202 | `nutrient_init` och `detritus_init` härleds ur dagens förlustvägar, inte ur 0086:s identitet | inkörningen | **öppen**, efter körningen |
 | — | sådden skapar plantor som inte bär sig: 20 % svälter ihjäl vid första ticken | sådden | **öppen**, se p198 |
@@ -2709,6 +2709,51 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Förlusten har tre vägar (0201)
+
+Instrumentering, ingen dynamikändring. `_nutrient_lost_total` var en summa
+av tre sänkor som inte gick att skilja åt i efterhand, och p198 kunde därför
+inte säga vilken som bestämmer jämvikten. Vägarna ackumuleras nu var för sig
+vid samma skrivställen som summan:
+
+- **löst** — urlakningen till havet och havscellernas tömning
+  (`hydro.leach_pass`),
+- **förna** — sediment som transporteras ut i havet (`sediment_pass`),
+- **mineralisering** — `nutrient_loss_frac` av det som frigörs vid
+  nedbrytningen.
+
+Summan är orörd och förblir den bokförda storheten; balansen och
+invarianterna läser den. Vägarna skrivs till världsloggen
+(`nutrient_lost_dissolved`, `_sediment`, `_mineral`), till
+`nutrient_balance()` och till sammanfattningen.
+
+I samma ärende rättas sammanfattningens näringstakt, som delade `pop.t` med
+3 600 som om den vore sekunder: "+2713 kg/h" var 0,754 kg/mån, och
+"tidskonstant 0 h" var 108 månader. Omsättningsraden antog att all förlust
+gick via `nutrient_loss_frac` och skrev därför alltid "100 varv innan
+förlust"; den härleds nu ur mineraliseringsvägen ensam och delas med den
+uppmätta totala förlusten. Slutradens "urlakat" var summan av alla tre
+vägarna och heter nu "förlorat".
+
+`liten6` 400 tick, seed 1:
+
+```
+förlust   löst 46,16 (19 %)  förna 187,30 (78 %)  mineralisering 5,61 (2 %)
+omsättning 0,022 varv/mån, 2 varv innan förlust
+```
+
+**Sedimentet dominerar, och näringen hinner bara två varv.** Det är en
+enda körning i den lilla världen under dess inkörning, inte ett
+jämviktsvärde — men det säger att 0086:s identitet, som härledde
+utgångstillståndet ur mineraliseringsvägen ensam, räknade med en sänka som
+står för två procent. f6-256-fördelningen mäts i mättnadskörningen som
+följer.
+
+Bitprov mot `bd87b78`: loggraderna identiska utom de tre avsedda raderna i
+sammanfattningen; världsloggen identisk fält för fält utöver de tre nya.
+Vägarnas summa skiljer sig från den bokförda summan med 3e-13 kg
+(avrundning). Invariantsviten godkänd.
 
 ### Mättnaden låg längre bort än scenariot trodde (p198)
 

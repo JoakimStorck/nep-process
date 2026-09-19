@@ -856,6 +856,9 @@ class Population:
                 "detritus_cells": int(np.count_nonzero(det)),
                 "nutrient_added": float(getattr(self.world, "_nutrient_added_total", 0.0)),
                 "nutrient_lost": float(getattr(self.world, "_nutrient_lost_total", 0.0)),
+                "nutrient_lost_dissolved": float(getattr(self.world, "_nutrient_lost_dissolved", 0.0)),
+                "nutrient_lost_sediment": float(getattr(self.world, "_nutrient_lost_sediment", 0.0)),
+                "nutrient_lost_mineral": float(getattr(self.world, "_nutrient_lost_mineral", 0.0)),
             })
         self._emit("world", t, payload)
 

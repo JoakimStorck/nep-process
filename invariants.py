@@ -1095,6 +1095,9 @@ def nutrient_balance(pop) -> dict[str, float]:
         "total": total,
         "added": added,
         "lost": lost,
+        "lost_dissolved": float(getattr(world, "_nutrient_lost_dissolved", 0.0)),
+        "lost_sediment": float(getattr(world, "_nutrient_lost_sediment", 0.0)),
+        "lost_mineral": float(getattr(world, "_nutrient_lost_mineral", 0.0)),
         "unaccounted": total - (added - lost),
     }
 
