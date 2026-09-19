@@ -2591,6 +2591,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | — | faunan bär sig inte i `f6-256`: utdöd vid månad ~84 före 0202 och ~24 efter, 93 av 94 döda av svält | ekologin | **öppen**, nästa — se 0202; hör ihop med 0197 och `f6-256-mager` |
 | ~~0203~~ | passtidtagningen delar upp `_step_world_and_flora` i världens delpass, florans tre system och spatialindexet | mätningen | **klart**, se nedan — bitidentisk bana; hydro väntar på trådar under last |
 | ~~0204~~ | hydrokärnorna `soil_pass` och `derive_water` blir seriella | prestanda | **klart**, se nedan — −6,8 ms/tick (−14 %); banan oberoende av kärnantalet |
+| ~~0205~~ | passtidtagningen ser in i florapassen och spatialindexet: kärnan, skalets världsanrop, slotfrisläppning, etablering | mätningen | **klart**, se nedan — bitidentisk bana; mätningen vid jämvikt följer |
 | — | sådden skapar plantor som inte bär sig: 20 % svälter ihjäl vid första ticken, 23 % efter 0202 | sådden | **öppen**, se p198 och 0202 |
 | — | ~~fröregnet halveras på ~100 mån~~ (falsifierat i p201: bottnar kring 220 frön/tick); 95 % av reproduktionspoolen hos omogna | florarevisionen | **öppen**, se p198 och p201 |
 | — | sammanfattningen saknar väg för en körning utan fauna: massakvot 2,9e17, "ingen omsättning alls" | mätningen | **öppen**, se p198 |
@@ -2714,6 +2715,28 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Passtidtagningen ser in i florapassen (0205)
+
+Instrumentering, ingen dynamikändring. Efter 0204 är tillväxten 58 % av
+ticken, spridningen och spatialindexet 17 % var, och Amdahl-räkningen kräver
+att veta vad i dem som kostar innan något byggs. Anropen inuti passen
+wrappas nu under sina föräldrar i `--pass-timing`:
+
+- `_growth_system_flora`: `flora_growth.growth_kernel`,
+  `world.temperature_of_cells`, `world.excrete_cells`,
+  `_release_flora_slot`, `store.set_flora_claims`, `_flora_cell_buffers`;
+- `_dispersal_system_flora`: `_add_or_create_flora_in_cell`,
+  `world.add_nutrient`, `world.take_nutrient`;
+- `store.rebuild_spatial_index`: `_clear_prev_id_entries`.
+
+Kärnan slås upp som modulattribut vid varje anrop, så omslaget träffar den
+men inte gathers i argumentlistan: skalets egen tid — gathers, scatters,
+allokeringar och slumptal — är föräldern minus raderna under den. Metoder
+som anropas från flera pass står under det första och summerar alla anrop.
+Ingen kod i `population.py` eller `organism_store.py` är rörd.
+
+Bitprov mot `901a590`: noll skillnad utan flaggan; med flaggan identisk bana.
 
 ### Hydrokärnorna blir seriella (0204)
 

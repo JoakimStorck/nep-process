@@ -830,6 +830,30 @@ _FLORA_SUBPASSES = (
     "_growth_system_flora",
     "_dispersal_system_flora",
 )
+# Anropen inuti florapassen och spatialindexet, som (ägare, metod). Ägaren
+# "fg" är modulen `flora_growth`: kärnan slås upp som modulattribut vid varje
+# anrop, så omslaget träffar den men inte gathers i argumentlistan — skalets
+# egen tid är föräldern minus raderna under den. Metoder som anropas från
+# flera pass (`excrete_cells` från både tillväxten och spridningen) står under
+# det första och summerar alla anrop; anropskolumnen visar hur många.
+_FLORA_INNER = {
+    "_growth_system_flora": (
+        ("fg", "growth_kernel"),
+        ("world", "temperature_of_cells"),
+        ("world", "excrete_cells"),
+        ("pop", "_release_flora_slot"),
+        ("store", "set_flora_claims"),
+        ("pop", "_flora_cell_buffers"),
+    ),
+    "_dispersal_system_flora": (
+        ("pop", "_add_or_create_flora_in_cell"),
+        ("world", "add_nutrient"),
+        ("world", "take_nutrient"),
+    ),
+    "rebuild_spatial_index": (
+        ("store", "_clear_prev_id_entries"),
+    ),
+}
 
 _INNER_CLASSES_DONE = False
 
@@ -883,10 +907,21 @@ class PassTimer:
                     self._wrap(pop.world, sub, f"    world.{sub}")
                 for sub in _FLORA_SUBPASSES:
                     self._wrap(pop, sub, f"  {sub}")
+                    self._wrap_inner(pop, sub)
                 # Anropas två gånger per tick; det andra anropet, utanför det
                 # här passet, är ett no-op via smutsflaggan och räknas med.
                 self._wrap(pop.store, "rebuild_spatial_index",
                            "  store.rebuild_spatial_index")
+                self._wrap_inner(pop, "rebuild_spatial_index")
+
+    def _wrap_inner(self, pop: Population, parent: str) -> None:
+        import flora_growth
+
+        owners = {"pop": ("", pop), "world": ("world.", pop.world),
+                  "store": ("store.", pop.store), "fg": ("flora_growth.", flora_growth)}
+        for key, name in _FLORA_INNER.get(parent, ()):
+            prefix, owner = owners[key]
+            self._wrap(owner, name, f"    {prefix}{name}")
 
     def install_inner(self) -> None:
         """
