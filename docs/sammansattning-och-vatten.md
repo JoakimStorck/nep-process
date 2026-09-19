@@ -86,8 +86,20 @@ fettväv          M_slow: ~85 % lipid, lite vatten och protein
 ```
 
 Dagens tre pooler (`M`, `M_fast`, `M_slow`) får en kemisk tolkning i stället
-för en gemensam energitäthet. Strukturandelen hos djur (ben, keratin, kitin)
-blir den del av den magra vävnaden som inte är omsättbar.
+för en gemensam energitäthet.
+
+**Aska** är en operationell storhet: det som återstår när organiskt material
+förbränns fullständigt, alltså mineralämnena — kalcium, fosfor, kalium,
+magnesium, svavel och spårämnen. Den är en av de fem posterna i
+proximatanalys (vatten, aska, protein, fett, kolhydrat). Hos däggdjur är
+askan mest skelettmineral: ben är ~60 % mineral, ~30 % kollagen — som räknas
+som protein — och ~10 % vatten, och helkroppsaskan är 3–5 % av levande vikt,
+alltså 12–20 % av den magra torrsubstansen. Skalbärare ligger mycket högre.
+
+**Axeln `s` betyder samma sak i båda riken men har olika kemi.** Den är den
+strukturella, icke omsättbara andelen av torrsubstansen: hos växter organisk
+— cellulosa, hemicellulosa och lignin — och hos djur mineralisk. Växtaska är
+bara 5–10 % av torrsubstansen och räknas inte särskilt.
 
 ---
 
