@@ -191,9 +191,10 @@ class PopParams:
     # behöva växa dit från fel håll.
     #
     # Tätheten är dessutom självbegränsande sedan sådden betalas ur marken: en
-    # cell med `nutrient_init` = 0,117 kg fri näring räcker till omkring fem
-    # plantor av den här storleken, vilket är samma storleksordning som
-    # jämviktens 5,45 per cell. Plantor som inte får betalt krymps.
+    # cell med `nutrient_init` = 0,117 kg fri näring (värdet före 0202)
+    # räckte till omkring fem plantor av den här storleken, vilket är samma
+    # storleksordning som jämviktens 5,45 per cell. Plantor som inte får
+    # betalt krymps.
     flora_init_plant_mass: float = 1.32
     #
     # Efter Steg 4b betyder talet vad det säger. Bördigheten ligger i

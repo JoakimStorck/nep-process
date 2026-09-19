@@ -25,12 +25,26 @@ from __future__ import annotations
 from dataclasses import dataclass, field, asdict
 from typing import Any
 
-# Bördighetens basvärden vid faktor 1. Härledda i 0086 ur identiteten
-# mineralisering = nutrient_input · n_cells / nutrient_loss_frac, och verifierade
-# mot en floraköring: 3 391 kg näring i systemet mot förutsagda 3 395.
+# Bördighetens basvärden vid faktor 1.
+#
+# `_NUTRIENT_INIT_BASE` och `_DETRITUS_INIT_BASE` är **kalibrerade** mot den
+# uppmätta jämvikten i p201 (`f6-256-utan-fauna`, 80 000 tick, bördighet 4),
+# anpassad från månad 1 000: fri näring ~975 kg, flora 6 375 kg, förna
+# 7,06e5 kg — över 65 536 celler och delat med bördigheten. Florans andel
+# läggs i den fria poolen som i 0086, eftersom sådden betalas därifrån.
+#
+# De ersätter 0086:s identitet `mineralisering = nutrient_input · n_cells /
+# nutrient_loss_frac` (0,117 och 21,16), som bara kände mineraliseringens
+# förlustväg. Sedan urlakningen och sedimenttransporten kom bär den vägen
+# högst 12 % av förlusten, och sådden hamnade drygt fem gånger över
+# jämvikten — se p198, 0201 och p201 i TODO.md.
+#
+# Förbehåll: förlusten per varv bestäms av terrängens hydrologi, så värdena
+# är jämvikt för f6-256:s terräng och en approximation för andra. Att de
+# skalar linjärt med bördigheten är antaget, inte mätt.
 _NUTRIENT_INPUT_BASE = 4.6e-5
-_NUTRIENT_INIT_BASE = 0.117
-_DETRITUS_INIT_BASE = 21.16
+_NUTRIENT_INIT_BASE = 0.0280
+_DETRITUS_INIT_BASE = 2.69
 
 # Sentinel: låt simuleringen själv upptäcka när floran nått jämvikt, i stället
 # för att gissa ett tickvärde. Jämvikten infaller olika sent vid olika

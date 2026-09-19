@@ -2587,8 +2587,9 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0200~~ | id-uppslagets nollning slutar växa med ackumulerade födslar | prestanda | **klart**, se nedan — bitidentisk bana; kostnaden får tak |
 | ~~0201~~ | förlustvägarna redovisas var för sig; sammanfattningens näringsrad räknar i månader | mätningen | **klart**, se nedan — bitidentisk bana; i `liten6` går 78 % av förlusten som förna till havet |
 | ~~—~~ | mättnadskörningen om: `f6-256-utan-fauna` 80 000 tick, `--world-every 12` | jämvikten | **klart**, `runs/p201`, se nedan — floran står nästan still, näringen inte |
-| 0202 | `nutrient_init` och `detritus_init` härleds ur dagens förlustvägar, inte ur 0086:s identitet | inkörningen | **öppen**, efter körningen |
-| — | sådden skapar plantor som inte bär sig: 20 % svälter ihjäl vid första ticken | sådden | **öppen**, se p198 |
+| ~~0202~~ | `nutrient_init` och `detritus_init` kalibreras mot p201:s jämvikt, inte mot 0086:s identitet | inkörningen | **klart**, se nedan — näringen inom 1–3 % av jämvikten från tick 0; faunan dör ut snabbare |
+| — | faunan bär sig inte i `f6-256`: utdöd vid månad ~84 före 0202 och ~24 efter, 93 av 94 döda av svält | ekologin | **öppen**, nästa — se 0202; hör ihop med 0197 och `f6-256-mager` |
+| — | sådden skapar plantor som inte bär sig: 20 % svälter ihjäl vid första ticken, 23 % efter 0202 | sådden | **öppen**, se p198 och 0202 |
 | — | ~~fröregnet halveras på ~100 mån~~ (falsifierat i p201: bottnar kring 220 frön/tick); 95 % av reproduktionspoolen hos omogna | florarevisionen | **öppen**, se p198 och p201 |
 | — | sammanfattningen saknar väg för en körning utan fauna: massakvot 2,9e17, "ingen omsättning alls" | mätningen | **öppen**, se p198 |
 | — | världsloggens `nutrient_in_flora` är bara vävnaden; reserven och reproduktionspoolen, 56 % av florans näring, saknas | mätningen | **öppen**, se p201 |
@@ -2711,6 +2712,86 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Utgångsläget sås vid jämvikten (0202)
+
+Dynamikändring. `_NUTRIENT_INIT_BASE` och `_DETRITUS_INIT_BASE` i
+`scenario.py` — och motsvarande standardvärden i `WorldParams` — kalibreras
+mot den uppmätta jämvikten i p201 i stället för att härledas ur 0086:s
+identitet, som bara kände mineraliseringens förlustväg:
+
+```
+                          före     0202
+nutrient_init (bas)      0,117    0,0280   fri + flora vid jämvikt, per cell och bördighet
+detritus_init (bas)      21,16    2,69     förna vid jämvikt, kg per cell och bördighet
+detritus_structure_init   0,93    0,91     förnans sammansättning i p201
+```
+
+Florans andel läggs i den fria poolen som i 0086, eftersom sådden betalas
+därifrån; sådden krymper därmed av sig själv, 1,38e6 → 3,13e5 kg i f6-256.
+Konstanterna är markerade som kalibrerade, och förbehållen står i
+kommentaren: förlusten per varv bestäms av terrängens hydrologi, så värdena
+är jämvikt för f6-256:s terräng, och att de skalar linjärt med bördigheten
+är antaget.
+
+**`f6-256-utan-fauna`, 20 000 tick (`runs/p202`):**
+
+```
+mån     N tot   fri  flora  förna  förlust/mån  plantor   M_flora    p201 samma mån: N, plantor
+   0   10 739 2 494  4 842  3 403      —        241 617   3,13e5        53 930  1 048 668
+  60   10 624 2 271  4 675  3 679    13,96      139 519   2,13e5        50 932    343 924
+ 180   10 487 1 530  5 463  3 494    13,05      216 079   2,49e5        44 287    216 929
+ 396   10 341 1 010  5 994  3 337    12,53      251 224   2,37e5        29 780    331 677
+```
+
+Den totala näringen ligger inom 1–3 % av p201:s jämviktsbedömning
+(10 300–10 600 kg) från första ticken och rör sig 0,1 % per år; förlusten är
+4 % över tillförseln vid slutet, mot 22 % efter 1 600 månader i p201.
+Förlustvägarna står redan i jämviktens fördelning — 57 % sediment, 29 %
+löst, 14 % mineralisering. **Inkörningen av näringen är borta.**
+
+Floran landar nära men inte inom fem procent: 2,37e5 kg mot p201:s 2,56e5
+(−7 %) och 251 000 plantor mot ~266 000 (−6 %), med en dal till 140 000
+plantor vid månad 60. Sådden lägger ut plantor på 1,32 kg medan jämviktens
+median är 0,3, och storleksfördelningen byggs om genom fröregn och
+etablering. Den genetiska sammansättningen relaxerar dessutom på egen
+tidsskala och startar om från utgångsgenotypen: frömassan är 0,156 vid
+slutet mot p201:s 0,212, och fröregnet 912 per tick mot 220. **Näringen är
+i jämvikt; floran har kvar sin evolutionära inkörning**, och den går inte
+att så bort med näringsparametrar.
+
+**`liten6`, 20 000 tick (`runs/p202l`):** 672 kg sådd näring planar ut kring
+~200 kg, förlusten 15 % över tillförseln vid slutet. 0202 sår alltså
+fortfarande omkring tre gånger för högt i den terrängen, mot omkring
+sjutton gånger före (3 370 kg, räknat ur de gamla basvärdena) —
+terrängberoendet syns, som förutsagt.
+
+**Faunan.** I `liten6` dog faunan ut vid månad 36–48. Referensen på ren HEAD
+höll faunan vid liv över 3 000 tick (78 djur), men bara på en sådd flora
+fyra gånger större som själv rasade 86 600 → 6 700 kg på 60 månader.
+
+`f6-256` med fauna, 5 000 tick, samma frö:
+
+```
+mån      0202 (p202f)          ren HEAD (p202f-ref)
+        djur  plantor           djur  plantor
+ 12        4  193 090             23  802 935
+ 24        0  165 261             10  625 965
+ 48        0  142 594              3  408 516
+ 84        0                       0  264 441
+```
+
+93 av 94 döda i p202f dog av svält, vid en flora på 2,5e5 kg — samma som
+världen bär på lång sikt. **Faunan bär sig inte i `f6-256` med eller utan
+0202;** den har levt på den övergående överskottsfloran, och 0202 flyttar
+bara utdöendet från månad ~84 till ~24. Det är samma fråga som den öppna
+raden om `f6-256-mager` efter 0197, när förnan slutade vara föda — och den
+är nu nästa punkt i kön.
+
+Sådden skapar fortfarande plantor som inte bär sig: 72 965 av 314 752,
+23 %, dör av svält vid första ticken (20 % före).
+
+Rökprov `liten6` 400 tick, seed 1: invariantsviten godkänd.
 
 ### Floran står still, näringen inte (p201)
 

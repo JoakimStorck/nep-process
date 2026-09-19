@@ -201,14 +201,24 @@ class WorldParams:
     #
     # Skalar linjärt med `nutrient_input`: fördubblad bördighet fördubblar alla
     # tre.
-    nutrient_init: float = 0.117
-    detritus_init: float = 21.16
+    #
+    # **0202: identiteten ovan gäller inte längre.** Den kände bara
+    # `nutrient_loss_frac`, men sedan urlakningen och sedimenttransporten kom
+    # bär mineraliseringsvägen högst 12 % av förlusten och näringen går
+    # omkring tolv varv per förlust i stället för hundra. Talen är i stället
+    # kalibrerade mot den uppmätta jämvikten i p201 — se `scenario.py`, som
+    # äger basvärdena; standardvärdena här är samma bas vid bördighet 1.
+    nutrient_init: float = 0.0280
+    detritus_init: float = 2.69
     # Strukturandel i den sådda förnan. Behövs för att `detritus_structure`
     # styr nedbrytningstakten — sås detritus utan den bryts allt ner som labilt
-    # material och hela poolen mineraliseras på nio månader. 0,93 är den
-    # uppmätta jämviktssammansättningen: strukturell förna bryts ner 6,7 gånger
-    # långsammare och anrikas därför i poolen, oavsett vad floran fäller.
-    detritus_structure_init: float = 0.93
+    # material och hela poolen mineraliseras på nio månader. Strukturell förna
+    # bryts ner 6,7 gånger långsammare och anrikas därför i poolen, oavsett vad
+    # floran fäller.
+    #
+    # 0,91 är förnans jämviktssammansättning i p201, ur dess näring per kilo
+    # (3 224 kg på 7,06e5 kg). Var 0,93, uppmätt i 0086:s platta värld.
+    detritus_structure_init: float = 0.91
 
     rain_input_base: float = 0.0
     spring_input_base: float = 0.0
