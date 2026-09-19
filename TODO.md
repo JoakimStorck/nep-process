@@ -2591,6 +2591,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | — | sådden skapar plantor som inte bär sig: 20 % svälter ihjäl vid första ticken | sådden | **öppen**, se p198 |
 | — | fröregnet halveras på ~100 mån medan beståndet står still; 96 % av reproduktionspoolen hos omogna | florarevisionen | **öppen**, se p198 |
 | — | sammanfattningen saknar väg för en körning utan fauna: massakvot 2,9e17, "ingen omsättning alls" | mätningen | **öppen**, se p198 |
+| — | **mål: halverad körtid.** ms/tick i `f6-256` med och utan fauna, efter inkörningen (~300 000 plantor), fast frö och tickfönster, mätt på den här maskinen; baslinje ~60–70 ms/tick att fastställa | prestanda | **öppen**, efter 0202 — profilera först och räkna Amdahl innan något byggs (jfr 0117); en patch i taget med bitprov |
 | — | `f6-256-mager` 800 tick: 36 → 15 djur; magra världen har inte flora nog utan förnan | ekologin | **öppen**, kör `f6-256` |
 | — | skade- och reparationssystemet är nästan inert: `D` har medianen 0,0000 och `repair_capacity` binder i 2 % av tickarna | selektionen | **öppen**, nästa |
 | — | barnets startreserv betalas till 43–74 %; föräldern har inte råd med den redan minimala gåvan | livshistorien | **öppen**, hör ihop med `E_cap_per_M` |
