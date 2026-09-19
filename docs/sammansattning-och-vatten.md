@@ -1,8 +1,9 @@
 # Designskiss — sammansättning och vatten
 
 *September 2026. Underlag för serien efter revisionen av faunans balans
-(`docs/revision-faunans-balans.md`, fynd F1 och M3). Status: förslag, inte
-beslut — uppdateras eller markeras som ersatt när serien byggs.*
+(`docs/revision-faunans-balans.md`, fynd F1 och M3). Status: genomgången
+2026-09-19; besluten står under "Beslut vid genomgången" och ersätter de
+öppna frågorna. Uppdateras eller markeras som ersatt när serien byggs.*
 
 *Reviderar enaxelbeslutet i `docs/substratets-struktur.md` och utvidgar de
 tre valutorna i `docs/metabolismen.md` med en fjärde.*
@@ -71,8 +72,8 @@ lignin          smälts inte av någon
 
 Strukturandelen `s` står kvar som summan av fiber och lignin. Det nya är
 **ligninets andel av strukturen**, som skiljer ett segt gräs (lignin ~5 % av
-torrsubstansen) från ved (~25 %). Öppen fråga nedan: egen axel, eller härledd
-ur `s`.
+torrsubstansen) från ved (~25 %). Den härleds ur `s`: graden av vedartad
+struktur är lignininnehållet, så andelen växer med `s`.
 
 ### Djur
 
@@ -114,8 +115,32 @@ Två följder som rör nuvarande kod:
 - **Protein kostar vatten och näring när det bränns.** Kväveöverskottet måste
   utsöndras som urea, och det kräver urin. Här möts näringen och vattnet.
 
-Näringen i modellen är i dag ett gemensamt "N+P". Tabellen räknar kväve; om
-fosfor ska skiljas ut är en öppen fråga.
+Modellens enda näring **definieras som kväve** i djurens kemi: protein bär
+16 %, fett och kolhydrat inget. Kväve och fosfor delas inte upp. I världen
+beter sig näringen som en blandning — vittringen som fosfor, urlakningen och
+denitrifikationen som kväve, sedimentet som fosfor — och det är en känd
+förenkling, inte ett påstående.
+
+### Kvävet i djurkroppen
+
+Reserven — glykogen och fett — är kvävefri. Bara den magra vävnaden, proteinet,
+bär kväve. Födans kväve får därför en egen väg:
+
+```
+assimilerat kväve  →  kvävepoolen (fria aminosyror, litet tak)
+kvävepoolen        →  tillväxt och foster, som proteinets kväve
+överskott          →  urea, utsöndrat till cellen
+```
+
+**Tillväxt och fosterbygge kräver kväve ur poolen.** Energin kan komma ur
+kolhydrater och fiber, men vävnad och foster kan inte byggas utan kväve, och när
+poolen är tom stannar de — Liebigs lag för djuren. Det ger den avvägning
+`metabolismen.md` saknar: föda som är proteinrik men energifattig, och tvärtom.
+Betare är i verkligheten ofta kvävebegränsade.
+
+Urean gödslar cellen där djuret står. Den kostar vatten, men det bokförs först
+när vätskebalansen finns (steg 4); fram till dess är urinens vatten gratis,
+som allt vatten i dag.
 
 ---
 
@@ -139,8 +164,8 @@ jäsningsvärme, ~10–20 %.
 **Lignin** passerar orört.
 
 Förmagsjäsning (idisslare) och baktarmsjäsning skiljer sig i hur mycket av
-mikrobproteinet djuret får tillbaka. Det kan bli en ärftlig axel bredvid
-`diet`; den första versionen behöver det inte.
+mikrobproteinet djuret får tillbaka. Modellen använder en gemensam form; att
+skilja dem åt behövs inte.
 
 **Omvandlingen från torrt till vått sker här**, på ett ställe: assimilerad
 torrsubstans blir vävnad, och vävnadens vatten tas ur kroppens vattenpool.
@@ -151,7 +176,8 @@ torrsubstans blir vävnad, och vävnadens vatten tas ur kroppens vattenpool.
 
 ### Växternas vatten
 
-Färsk växtmassa är 70–85 % vatten. Vattnet i plantan blir ett tillstånd, med
+Färsk växtmassa är 70–85 % vatten. Vattnet i plantan blir ett eget tillstånd
+per planta — så att plantor som växer där det finns fukt växer bättre — med
 markvattnet som källa och transpirationen som sänka (transpirationen finns
 redan, bunden till tillväxten). En planta på torr mark har lägre vattenhalt:
 torkan får en väg in i betets värde, och den väg in i magfyllnaden som
@@ -218,8 +244,10 @@ törsten, växternas vatten av magfyllnaden och betets värde.
 En ändring per commit. Varje dynamikändring får en körning med uppmätt utfall,
 och 0210:s energibokföring mäter var energin tar vägen.
 
-1. **Djurkroppens sammansättning.** Poolerna får kemisk tolkning; fettet sin
-   täthet och ingen näring. Näringsbokföringen följer reservens sammansättning.
+1. **Djurkroppens sammansättning och kväve.** Poolerna får kemisk tolkning;
+   fettet sin täthet. Reserven blir kvävefri, kvävepoolen tillkommer,
+   tillväxt och foster kräver kväve ur den, och överskottet utsöndras som urea.
+   Näringsbokföringen följer sammansättningen.
 2. **Assimilationen.** Torrt blir vått på ett ställe; labilt, fiber och lignin
    var för sig; jäsningen som funktion av uppehållstiden.
 3. **Växternas vatten.** Vattenhalten som tillstånd; magfyllnaden i färsk massa.
@@ -233,20 +261,29 @@ och kan göras före.
 
 ---
 
-## Öppna frågor
+## Beslut vid genomgången
 
-- **Ligninets andel**: egen ärftlig axel, eller härledd ur `s` (vedartat är
-  mer lignifierat)?
-- **Växtens vatten**: eget tillstånd per planta, eller härlett ur markvattnet
-  i cellen? Ett eget tillstånd är dyrare men ger vissnande och återhämtning.
-- **Kväve och fosfor**: ska näringen delas? Fettets kvävefrihet och ureans
-  vattenkostnad talar för kväve; fosforn sitter i ben och nukleinsyror.
-- **Förmag eller baktarm**: axel från början, eller en gemensam form först?
-- **Faunans livskraft**: varje steg mäts mot frågan om faunan bär sig i
-  `f6-256`. Rätt fysik behöver inte ge livskraftiga djur — om de dör ut med
-  rätt fysik är det en annan mekanism som saknas.
+*2026-09-19.*
 
----
+1. **Ligninets andel härleds ur `s`.** Graden av vedartad struktur är
+   lignininnehållet; ingen ny axel.
+2. **Växternas vatten är ett eget tillstånd per planta**, så att plantor som
+   växer där det finns fukt växer bättre.
+3. **Kväve och fosfor delas inte upp nu.** Näringen definieras som kväve i
+   djurens kemi. Uppdelningen tas upp när en fråga kräver den — ben, eller en
+   nisch för kvävefixerare — och den kostar en dubblerad invariant, en ny
+   kvävekälla och en omkalibrering av 0202.
+4. **En gemensam form för jäsningen**; förmag och baktarm skiljs inte åt.
+5. **Reserven blir kvävefri redan i steg 1**, med kvävepoolen, kvävekravet för
+   tillväxt och foster, och urean till cellen. Urinens vattenkostnad kommer med
+   vätskebalansen i steg 4. Energi och kväve följer båda av sammansättningen och
+   hör till samma steg; vattnet är en annan storhet. Alternativet — att vänta
+   med kvävet till steg 4 — lämnade fettet kemiskt fel i tre steg och gjorde
+   steg 4 för stort för att utfallen skulle gå att skilja åt.
+
+Kvar att följa: **faunans livskraft** mäts efter varje steg. Rätt fysik
+behöver inte ge livskraftiga djur — dör de ut med rätt fysik är det en annan
+mekanism som saknas.
 
 ## Mätpunkter
 
