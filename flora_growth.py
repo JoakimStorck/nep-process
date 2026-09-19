@@ -111,10 +111,12 @@ def _store_down(x: float) -> float:
 
 
 def _growth_kernel_impl(
-    # --- per planta, gathrade ur store:n ---------------------------------
-    m32, struct32, adult32, root32, seed32, energy32,
-    topt32, twid32, uptake32, ralloc32, rcap32, rootalloc32,
+    # --- store:ns arrayer, lästa och skrivna via slotindex --------------
+    fl,
+    mass, structure, adult_mass, root_mass, seed_mass, energy,
+    temp_opt, temp_width, uptake_cap, repro_alloc, repro_cap, root_alloc,
     reserve, pool, carbon,
+    # --- per planta, i `fl`-ordning ---------------------------------------
     cells, temp, draws,
     # --- värld -----------------------------------------------------------
     nutrient, neighbor_idx, soil_water,
@@ -122,8 +124,7 @@ def _growth_kernel_impl(
     dt, BK, u_area, sra, sla, k_ext, h_ref, L_cell,
     w_per_kg, w_extract,
     m_floor_abs, seedling_floor, seed_cap_mult, e_labile, root_dieback,
-    # --- utdata per planta -----------------------------------------------
-    mass_out, root_out, energy_out, reserve_out, pool_out, carbon_out,
+    # --- utdata per planta, i `fl`-ordning -------------------------------
     shed_out, dying_out, dm_out, grow_out,
     # --- skrivbuffertar med längd n_cells --------------------------------
     claimed, lam, hsum, cellacc,
@@ -134,6 +135,15 @@ def _growth_kernel_impl(
 
     Semantiken är oförändrad mot `Population._growth_system_flora_numpy`; se
     dess docstring för biologin.
+
+    **Store:n läses och skrivs på plats (0206).** Kärnan fick tidigare femton
+    arrayer gathrade ur store:n och sex utdata som skalet strödde tillbaka,
+    alltså 21 svep över floran utöver kärnans egna. Nu tar den `fl` och
+    store:ns arrayer och indexerar via `s = fl[i]`. Det är säkert eftersom
+    varje planta läser sina indata i svep 1 innan dess utdata skrivs på samma
+    index, och de senare svepen läste redan utdata; för döende plantor läses
+    reserven och poolen i det seriella svepet innan de nollas, som förut.
+    Aritmetiken är densamma, så resultatet är bitidentiskt.
 
     **Formen är delad efter vad som ackumulerar och vad som inte gör det.** De
     stora loopar som räknar per planta skriver bara egna index; summor, räknare
@@ -146,7 +156,7 @@ def _growth_kernel_impl(
     Returnerar `(shed_total, n_age, n_starve, produced, taken, died,
     light_limited, water_limited, transpired, row_plant, row_cell, row_share)`.
     """
-    n = m32.shape[0]
+    n = fl.shape[0]
     n_cells = nutrient.shape[0]
     k_nb = neighbor_idx.shape[1]
 
@@ -168,7 +178,8 @@ def _growth_kernel_impl(
         # Strukturandelen används i två former, precis som i numpy-vägen:
         # klippt i näringsinnehåll, omsättning och livslängd, oklippt i
         # areorna och i energitätheten.
-        su = np.float64(struct32[i])
+        sl = fl[i]
+        su = np.float64(structure[sl])
         s = su
         if s < 0.0:
             s = 0.0
@@ -176,7 +187,7 @@ def _growth_kernel_impl(
             s = 1.0
         cost[i] = _nutrient_content(s)
 
-        m0 = np.float64(m32[i])
+        m0 = np.float64(mass[sl])
         shed_want = _turnover_rate(s) * dt * m0
         if shed_want > m0:
             shed_want = m0
@@ -184,14 +195,14 @@ def _growth_kernel_impl(
 
         # Förnafallet fäller proportionellt ur båda facken.
         keep = m_after / m0 if m0 > 0.0 else 1.0
-        root_t = np.float64(root32[i]) * keep
+        root_t = np.float64(root_mass[sl]) * keep
 
         # Rotens återgång mot plantans egen `flora_root_alloc`. Utan den
         # behåller en nedbetad planta hela sitt anspråk, eftersom anspråket
         # räknas ur rotmassan och betningen inte rör roten. Den exakta
         # återställningen är (rot - rho*m)/(1 - rho), vilket för en hårt betad
         # planta är merparten av den, så takten begränsar steget.
-        rho = np.float64(rootalloc32[i])
+        rho = np.float64(root_alloc[sl])
         if rho < 0.0:
             rho = 0.0
         elif rho > 1.0:
@@ -206,7 +217,7 @@ def _growth_kernel_impl(
 
         left = _store_down(m_after - die if m_after > die else 0.0)
         shed_out[i] = m0 - left
-        mass_out[i] = np.float32(left)
+        mass[sl] = np.float32(left)
         m[i] = left
 
         # Det som faktiskt lämnade plantan efter rundningen dras ur rotfacket.
@@ -214,10 +225,9 @@ def _growth_kernel_impl(
         if rm < 0.0:
             rm = 0.0
         rm = np.float64(np.float32(rm))
-        root_out[i] = np.float32(rm)
-        energy_out[i] = energy32[i]
+        root_mass[sl] = np.float32(rm)
 
-        floor = seedling_floor * np.float64(seed32[i])
+        floor = seedling_floor * np.float64(seed_mass[sl])
         if floor < m_floor_abs:
             floor = m_floor_abs
         ls = _lifespan(s)
@@ -234,11 +244,8 @@ def _growth_kernel_impl(
             dying_out[i] = 2          # svält
         else:
             dying_out[i] = 0
-            reserve_out[i] = reserve[i]
-            pool_out[i] = pool[i]
-            carbon_out[i] = carbon[i]
-            g = np.float64(temp[i]) - np.float64(topt32[i])
-            w = np.float64(twid32[i])
+            g = np.float64(temp[i]) - np.float64(temp_opt[sl])
+            w = np.float64(temp_width[sl])
             if w < 1e-6:
                 w = 1e-6
             gate[i] = np.exp(-0.5 * (g / w) * (g / w))
@@ -270,13 +277,14 @@ def _growth_kernel_impl(
                 n_age += 1
             else:
                 n_starve += 1
-            held = reserve[i] + pool[i]
+            sl = fl[i]
+            held = reserve[sl] + pool[sl]
             c = cells[i]
             if c >= 0 and c < n_cells and held > 0.0 and np.isfinite(held):
                 nutrient[c] += held
-            reserve_out[i] = 0.0
-            pool_out[i] = 0.0
-            carbon_out[i] = 0.0
+            reserve[sl] = 0.0
+            pool[sl] = 0.0
+            carbon[sl] = 0.0
         elif holds[i]:
             n_holds += 1
             if a_root[i] > 1.0:
@@ -289,7 +297,7 @@ def _growth_kernel_impl(
         died = 0.0
         for i in range(n):
             if dying_out[i] != 0:
-                dv = np.float64(mass_out[i])
+                dv = np.float64(mass[fl[i]])
                 if dv > 0.0:
                     died += dv
         return (shed_total, n_age, n_starve, 0.0, 0.0, died, 0.0, 0.0, 0.0,
@@ -345,13 +353,14 @@ def _growth_kernel_impl(
     # --- 3. inkomst -------------------------------------------------------
     for i in range(n):
         if holds[i] and gate[i] > 1e-6:
-            adult = np.float64(adult32[i])
+            sl = fl[i]
+            adult = np.float64(adult_mass[sl])
             if adult < 1e-12:
                 adult = 1e-12
-            head = (adult - m[i]) * cost[i] - reserve_out[i]
+            head = (adult - m[i]) * cost[i] - reserve[sl]
             if head < 0.0:
                 head = 0.0
-            uc = np.float64(uptake32[i])
+            uc = np.float64(uptake_cap[sl])
             if uc < 0.0:
                 uc = 0.0
             cap = uc * u_area * a_root[i] * gate[i] * dt
@@ -419,15 +428,16 @@ def _growth_kernel_impl(
 
     # --- 5. allokering och skugga ----------------------------------------
     for i in range(n):
-        al = np.float64(ralloc32[i]) * np.float64(rcap32[i])
+        sl = fl[i]
+        al = np.float64(repro_alloc[sl]) * np.float64(repro_cap[sl])
         if al < 0.0:
             al = 0.0
         elif al > 1.0:
             al = 1.0
         alloc[i] = al
         tp = take[i] * al
-        reserve_out[i] = reserve_out[i] + (take[i] - tp)
-        pool_out[i] = pool_out[i] + tp
+        reserve[sl] = reserve[sl] + (take[i] - tp)
+        pool[sl] = pool[sl] + tp
         if holds[i]:
             c = cells[i]
             hb = hsum[c]
@@ -452,24 +462,25 @@ def _growth_kernel_impl(
         grow_out[i] = 0
         if not holds[i]:
             continue
+        sl = fl[i]
         c = cells[i]
         d = cellacc[c]
         if d < 1.0:
             d = 1.0
         light = L_cell * eff[i] / d * (1.0 - 1e-12)
 
-        c_cap = seed_cap_mult * np.float64(seed32[i])
-        head_c = c_cap - carbon_out[i]
+        c_cap = seed_cap_mult * np.float64(seed_mass[sl])
+        head_c = c_cap - carbon[sl]
         if head_c < 0.0:
             head_c = 0.0
         to_carbon = light * alloc[i]
         if to_carbon > head_c:
             to_carbon = head_c
-        carbon_out[i] = carbon_out[i] + to_carbon
+        carbon[sl] = carbon[sl] + to_carbon
         light_growth = light - to_carbon
 
-        res = reserve_out[i]
-        adult = np.float64(adult32[i])
+        res = reserve[sl]
+        adult = np.float64(adult_mass[sl])
         if adult < 1e-12:
             adult = 1e-12
         # w_per_kg <= 0 betyder att vatten inte är en resurs i den här världen.
@@ -515,14 +526,14 @@ def _growth_kernel_impl(
         # vattenbalansen sluten utan ett andra flöde att bokföra.
         if w_per_kg > 0.0:
             soil_water[cells[i]] -= dm * w_per_kg
-        reserve_out[i] = res - dm * cost[i]
-        rm = np.float64(root_out[i])
+        reserve[sl] = res - dm * cost[i]
+        rm = np.float64(root_mass[sl])
         if rm > m[i]:
             rm = m[i]
-        root_out[i] = np.float32(rm + np.float64(rootalloc32[i]) * dm)
-        mass_out[i] = np.float32(stored)
-        energy_out[i] = np.float32(
-            stored * e_labile * (1.0 - np.float64(struct32[i]))
+        root_mass[sl] = np.float32(rm + np.float64(root_alloc[sl]) * dm)
+        mass[sl] = np.float32(stored)
+        energy[sl] = np.float32(
+            stored * e_labile * (1.0 - np.float64(structure[sl]))
         )
 
     # --- 7. summorna, seriellt och i slotordning -------------------------
@@ -546,7 +557,7 @@ def _growth_kernel_impl(
             elif g == 3:
                 water_lim += 1
         if dying_out[i] != 0:
-            dv = np.float64(mass_out[i])
+            dv = np.float64(mass[fl[i]])
             if dv > 0.0:
                 died += dv
 

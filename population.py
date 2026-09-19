@@ -2814,12 +2814,10 @@ class Population:
         temp = world.temperature_of_cells(cells).astype(np.float64, copy=False)
         draws = self.rng.random(n)
 
-        mass_out = np.empty(n, dtype=np.float32)
-        root_out = np.empty(n, dtype=np.float32)
-        energy_out = np.empty(n, dtype=np.float32)
-        reserve_out = np.empty(n, dtype=np.float64)
-        pool_out = np.empty(n, dtype=np.float64)
-        carbon_out = np.empty(n, dtype=np.float64)
+        # Kärnan läser och skriver store:ns arrayer direkt via `fl` (0206);
+        # här allokeras bara det som är per anrop och inte har en ägare i
+        # store:n. `cells` och `struct32` behövs ändå i skalet, för
+        # temperaturen och för förnafallets sammansättning.
         shed_out = np.empty(n, dtype=np.float64)
         dying_out = np.zeros(n, dtype=np.uint8)
         dm_out = np.empty(n, dtype=np.float64)
@@ -2829,13 +2827,14 @@ class Population:
         (shed_total, n_age, n_starve, produced, taken, died, light_lim,
          water_lim, transpired,
          row_plant, row_cell, row_share) = flora_growth.growth_kernel(
-            store.mass[fl], struct32, store.flora_adult_mass[fl],
-            store.flora_root_mass[fl], store.flora_seed_mass[fl], store.energy[fl],
-            store.flora_temp_opt[fl], store.flora_temp_width[fl],
-            store.uptake_capacity[fl], store.flora_repro_alloc[fl],
-            store.repro_capacity[fl], store.flora_root_alloc[fl],
-            store.flora_reserve[fl], store.flora_repro_pool[fl],
-            store.flora_carbon_pool[fl],
+            fl,
+            store.mass, store.structure, store.flora_adult_mass,
+            store.flora_root_mass, store.flora_seed_mass, store.energy,
+            store.flora_temp_opt, store.flora_temp_width,
+            store.uptake_capacity, store.flora_repro_alloc,
+            store.repro_capacity, store.flora_root_alloc,
+            store.flora_reserve, store.flora_repro_pool,
+            store.flora_carbon_pool,
             cells, temp, draws,
             world.nutrient, self.grid.neighbor_idx, world.soil_water,
             dt, BK,
@@ -2852,8 +2851,6 @@ class Population:
             float(self.PP.flora_max_seeds_per_tick),
             float(self.WP.E_labile_J_per_kg),
             float(self.PP.flora_root_dieback),
-            mass_out, root_out, energy_out,
-            reserve_out, pool_out, carbon_out,
             shed_out, dying_out, dm_out, grow_out,
             claimed, lam, hsum, cellacc,
         )
@@ -2861,13 +2858,6 @@ class Population:
         # Kärnan har redan dragit transpirationen ur `world.soil_water`, i
         # samma ordning som numpy-vägen. Här bokförs den bara i vattenledgern.
         world.book_transpiration(float(transpired))
-
-        store.mass[fl] = mass_out
-        store.flora_root_mass[fl] = root_out
-        store.energy[fl] = energy_out
-        store.flora_reserve[fl] = reserve_out
-        store.flora_repro_pool[fl] = pool_out
-        store.flora_carbon_pool[fl] = carbon_out
 
         # Förnafallet först, kadavret sedan: strukturandelen blandas massviktat
         # per cell, och ordningen mellan de två deponeringarna följer med.
@@ -2881,7 +2871,7 @@ class Population:
         dyi = np.flatnonzero(dying_out)
         if dyi.size:
             world.excrete_cells(
-                cells[dyi], mass_out[dyi].astype(np.float64), struct32[dyi]
+                cells[dyi], store.mass[fl[dyi]].astype(np.float64), struct32[dyi]
             )
             for slot in fl[dyi]:
                 # Reserven och poolen är redan återförda av kärnan, i rätt läge

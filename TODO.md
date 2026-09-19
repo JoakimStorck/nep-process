@@ -2592,6 +2592,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0203~~ | passtidtagningen delar upp `_step_world_and_flora` i världens delpass, florans tre system och spatialindexet | mätningen | **klart**, se nedan — bitidentisk bana; hydro väntar på trådar under last |
 | ~~0204~~ | hydrokärnorna `soil_pass` och `derive_water` blir seriella | prestanda | **klart**, se nedan — −6,8 ms/tick (−14 %); banan oberoende av kärnantalet |
 | ~~0205~~ | passtidtagningen ser in i florapassen och spatialindexet: kärnan, skalets världsanrop, slotfrisläppning, etablering | mätningen | **klart**, se nedan — bitidentisk bana; mätningen vid jämvikt följer |
+| ~~0206~~ | tillväxtkärnan läser och skriver store:n via `fl` i stället för 15 gathers och 6 scatters | prestanda | **klart**, se nedan — bitidentisk; −2,4 ms/tick (−6 %) |
 | — | sådden skapar plantor som inte bär sig: 20 % svälter ihjäl vid första ticken, 23 % efter 0202 | sådden | **öppen**, se p198 och 0202 |
 | — | ~~fröregnet halveras på ~100 mån~~ (falsifierat i p201: bottnar kring 220 frön/tick); 95 % av reproduktionspoolen hos omogna | florarevisionen | **öppen**, se p198 och p201 |
 | — | sammanfattningen saknar väg för en körning utan fauna: massakvot 2,9e17, "ingen omsättning alls" | mätningen | **öppen**, se p198 |
@@ -2715,6 +2716,40 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Tillväxtkärnan läser store:n på plats (0206)
+
+Prestanda. Skalet i `_growth_system_flora_numba` gathrade femton
+store-arrayer över florans slots, allokerade sex utdata-arrayer och strödde
+tillbaka dem efter kärnan — 21 svep över ~250 000 plantor utöver kärnans
+egna, uppmätt som ~4,9 ms skaltid i p205. Kärnan tar nu `fl` och store:ns
+arrayer och indexerar via `s = fl[i]`.
+
+Det är säkert för att varje planta läser sina indata i svep 1 innan dess
+utdata skrivs på samma index, och de senare svepen läste redan utdata. För
+döende plantor läses reserven och poolen i det seriella svepet innan de
+nollas, som förut. Tre tilldelningar i svep 1 (`energy_out = energy`,
+reservens, poolens och kolets kopior) blir identiteter och försvinner.
+Numpy-vägen är orörd. `cells` och `struct32` gathras fortfarande, eftersom
+skalet behöver dem för temperaturen och förnafallet.
+
+**Bitprov** mot `aa62e8a`: utskrifterna identiska, och alla 86
+tillståndsarrayer och ledgersummor bitvis lika efter `liten6` 400 tick och
+`f6-256-utan-fauna` 300 tick. `--verify-flora-growth` visar samma avvikelse
+mot numpy-vägen som tidigare, ~2e-16 mot skalan.
+
+**Utfall**, `f6-256-utan-fauna` tick 200–700 (204 000 plantor), omväxlande:
+
+```
+                         HEAD            0206
+totalt              40,6 / 40,5     38,2 / 38,0   ms/tick
+_growth_system_flora 20,5 / 20,4    18,1 / 18,0
+  växtkärnan         13,6 / 13,5    14,3 / 14,2
+```
+
+Skalet blev 3,1 ms billigare, men kärnan 0,7 ms dyrare: den läser nu
+indirekt i stället för ur sammanhängande kopior. Netto −2,4 ms, 6 %, mot
+uppskattade 3–5. Kvar av skalets egen tid är ~1 ms.
 
 ### Florapassens inre vid jämvikt (p205)
 
