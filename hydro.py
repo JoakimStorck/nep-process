@@ -50,12 +50,11 @@ import math
 import numpy as np
 
 try:
-    from numba import njit as _njit, prange as _prange
+    from numba import njit as _njit
 
     HAVE_NUMBA = True
 except Exception:  # pragma: no cover - beror på miljön
     HAVE_NUMBA = False
-    _prange = range
 
     def _njit(*a, **k):  # type: ignore[misc]
         def deco(f):
@@ -64,7 +63,7 @@ except Exception:  # pragma: no cover - beror på miljön
         return deco
 
 
-@_njit(cache=True, fastmath=True, parallel=True)
+@_njit(cache=True, fastmath=True)
 def soil_pass(soil, rain_dt, T_air, T_off, T0, T_span, oro,
               et_max_dt, capacity, baseflow_k, sea, lake_id, water,
               submerged_thr, runoff, acc):
@@ -90,11 +89,20 @@ def soil_pass(soil, rain_dt, T_air, T_off, T0, T_span, oro,
 
     acc[0] = tillförd nederbörd, acc[1] = avdunstat. Båda över land; havet har
     inget markvatten och räknas i sitt eget lager.
+
+    **Seriell sedan 0204.** Kärnan var kompilerad med `parallel=True`. Uppmätt
+    vid f6-256 i jämvikt, 65 536 celler, ledig maskin: hydro_pass 0,65 ms med
+    en tråd mot 6,2–7,2 ms med standardens 24 — trådstarten kostar mer än
+    svepet, och trådarna höll dessutom ~6 kärnor sysselsatta i väntan. Bitarna
+    berodde också på trådantalet: med `fastmath` avrundas cellerna olika i
+    vektorkroppen och i den skalära svansen, och var gränserna hamnar beror på
+    hur loopen delas mellan trådarna. Banan skilde sig därför i sista biten
+    mellan maskiner med olika kärnantal.
     """
     n = soil.shape[0]
     p_tot = 0.0
     e_tot = 0.0
-    for i in _prange(n):
+    for i in range(n):
         # En cell under vatten har ingen mark att lagra fukt i. Havet gäller
         # alltid; en sjöcell gäller när magasinets yta faktiskt står över den,
         # så att en strand blir bar mark när nivån sjunker i stället för att
@@ -443,7 +451,7 @@ def lake_levels(storage, lake_start, lake_cells, lake_vol, elev, level, area):
         area[L] = k
 
 
-@_njit(cache=True, fastmath=True, parallel=True)
+@_njit(cache=True, fastmath=True)
 def derive_water(elev, sea, lake_id, lake_level, discharge, slope,
                  channel_k, channel_exp, slope_floor, q_min, water):
     """
@@ -459,9 +467,11 @@ def derive_water(elev, sea, lake_id, lake_level, discharge, slope,
     potenslagen för varje landcell kostade fem av åtta millisekunder vid
     262 144 celler, eftersom `pow` med bruten exponent är dyr — och nio
     tiondelar av dem var sluttning.
+
+    Seriell sedan 0204, av samma skäl som `soil_pass`.
     """
     n = water.shape[0]
-    for i in _prange(n):
+    for i in range(n):
         if sea[i]:
             water[i] = -elev[i]
             continue

@@ -2590,11 +2590,12 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0202~~ | `nutrient_init` och `detritus_init` kalibreras mot p201:s jämvikt, inte mot 0086:s identitet | inkörningen | **klart**, se nedan — näringen inom 1–3 % av jämvikten från tick 0; faunan dör ut snabbare |
 | — | faunan bär sig inte i `f6-256`: utdöd vid månad ~84 före 0202 och ~24 efter, 93 av 94 döda av svält | ekologin | **öppen**, nästa — se 0202; hör ihop med 0197 och `f6-256-mager` |
 | ~~0203~~ | passtidtagningen delar upp `_step_world_and_flora` i världens delpass, florans tre system och spatialindexet | mätningen | **klart**, se nedan — bitidentisk bana; hydro väntar på trådar under last |
+| ~~0204~~ | hydrokärnorna `soil_pass` och `derive_water` blir seriella | prestanda | **klart**, se nedan — −6,8 ms/tick (−14 %); banan oberoende av kärnantalet |
 | — | sådden skapar plantor som inte bär sig: 20 % svälter ihjäl vid första ticken, 23 % efter 0202 | sådden | **öppen**, se p198 och 0202 |
 | — | ~~fröregnet halveras på ~100 mån~~ (falsifierat i p201: bottnar kring 220 frön/tick); 95 % av reproduktionspoolen hos omogna | florarevisionen | **öppen**, se p198 och p201 |
 | — | sammanfattningen saknar väg för en körning utan fauna: massakvot 2,9e17, "ingen omsättning alls" | mätningen | **öppen**, se p198 |
 | — | världsloggens `nutrient_in_flora` är bara vävnaden; reserven och reproduktionspoolen, 56 % av florans näring, saknas | mätningen | **öppen**, se p201 |
-| — | **mål: halverad körtid.** ms/tick i `f6-256` med och utan fauna, efter inkörningen (~300 000 plantor), fast frö och tickfönster, mätt på den här maskinen; baslinje utan fauna 70 ms/tick (median p198/p201, tick 15–30k, ledig maskin), med fauna ej mätt | prestanda | **öppen**, efter 0202 — profilera först och räkna Amdahl innan något byggs (jfr 0117); en patch i taget med bitprov |
+| — | **mål: halverad körtid.** ms/tick i `f6-256-utan-fauna` vid jämvikt efter 0202 (~250 000 plantor), fast frö, mätt på den här maskinen på ledig maskin. Baslinje 49,6 ms/tick (p203-trad, standardens 24 trådar), mål ~25. Fauna-varianten läggs till när faunan bär sig | prestanda | **pågår** — 0204: ~43; nästa är tillväxtpassets inre (58 %), se 0204 |
 | — | `f6-256-mager` 800 tick: 36 → 15 djur; magra världen har inte flora nog utan förnan | ekologin | **öppen**, kör `f6-256` |
 | — | skade- och reparationssystemet är nästan inert: `D` har medianen 0,0000 och `repair_capacity` binder i 2 % av tickarna | selektionen | **öppen**, nästa |
 | — | barnets startreserv betalas till 43–74 %; föräldern har inte råd med den redan minimala gåvan | livshistorien | **öppen**, hör ihop med `E_cap_per_M` |
@@ -2713,6 +2714,68 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Hydrokärnorna blir seriella (0204)
+
+Prestanda. `hydro.soil_pass` och `hydro.derive_water` var kompilerade med
+`parallel=True`, och `kor.sh` sätter sedan 0117 inte trådantalet — numba tog
+maskinens alla 24.
+
+**Baslinjen och trådsvepet** (`runs/p203-trad`). `f6-256-utan-fauna` med
+0202 kördes till tick 15 000 (~248 000 plantor, jämvikt) på ledig maskin,
+och därefter mättes fem fönster om 1 000 tick med olika trådantal i samma
+körning, via `numba.set_num_threads`:
+
+```
+pass (ms/tick)                24 trådar  1 tråd  4 trådar  12 trådar  24 igen
+totalt                            49,6    43,4     43,6      44,0      51,0
+_growth_system_flora              25,4    25,1     25,3      25,4      25,7
+_dispersal_system_flora            7,3     7,3      7,2       7,2       7,2
+store.rebuild_spatial_index        7,3     7,3      7,3       7,4       7,4
+world.step                         9,5     3,6      3,6       3,9      10,5
+  hydro_pass                       6,2     0,65     0,61      0,83      7,2
+  transport_pass                   1,4     1,4      1,4       1,4       1,4
+```
+
+Parallelliseringen gav ingenting vid något trådantal, och med standardens
+24 kostade trådstarten tio gånger svepet. Processen höll dessutom ~6 kärnor
+sysselsatta i väntan (568–638 % CPU), vilket stör varje annan körning på
+maskinen. Kontrollfönstret med 24 trådar sist ligger nära det första;
+mätningen har inte drivit.
+
+**Amdahl, från 43,4 ms:** tillväxten 58 %, spridningen 17 %, spatialindexet
+17 %, hela världen 8 %. Målet ~25 ms kräver ytterligare ~18 ms; tillväxten
+är enda pass som räcker ensamt, och bara om den blir 3,7 gånger snabbare.
+Realistiskt är en kombination — tillväxten halverad och spridning plus index
+ned 40 %.
+
+**Bitarna berodde på maskinen.** Sluttillståndet efter `liten6` 400 tick
+skilde sig mellan 24 och 1 tråd på ren HEAD: markvattnet i 4 av 4 096
+celler, relativt 1,8e-16. Med `fastmath` avrundas en cell olika i
+vektorkroppen och i den skalära svansen, och var gränserna hamnar beror på
+hur loopen delas mellan trådarna. **Banan från ett givet frö var alltså
+beroende av kärnantalet** — sandlådan med en kärna och den här maskinen med
+24 gav olika banor i sista biten.
+
+Bitprovet görs därför mot HEAD med en tråd, och där är banan identisk: alla
+85 tillståndsarrayer bitvis lika efter `liten6` 400 tick och `f6-256-utan-
+fauna` 300 tick, och 0204 ger samma bitar vid 1 och 24 trådar. Mot HEAD med
+standardens 24 skiljer de fyra cellerna. Den enda utskrivna skillnaden är
+vattenbalansens residual i rökprovet, 2,6e-16 mot 1,3e-16: `soil_pass`
+summerar nederbörden i loopen, och med `fastmath` vektoriseras den
+reduktionen olika i den parallella och den seriella kärnan. Vattenledgerns
+tillförda summa skiljer en ulp (1,5e-16 relativt i f6-256); alla fält och
+all näringsbokföring är identiska.
+
+**Utfall**, `f6-256-utan-fauna` tick 200–700 (204 000 plantor), omväxlande:
+
+```
+                 HEAD          0204
+totalt        47,8 / 46,8   40,5 / 40,4   ms/tick
+hydro_pass     6,9 / 6,2    0,64 / 0,64
+```
+
+−6,8 ms/tick, 14 %. Rökprovet godkänt.
 
 ### Passtidtagningen ser in i världspasset (0203)
 
