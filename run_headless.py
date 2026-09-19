@@ -363,12 +363,12 @@ _M_GENOMGANG = "@djupare"
 
 def _reserv_etikett(txt: str) -> str:
     """Namnge ett reservuttag efter vad uttrycket faktiskt betalar."""
-    if "_take_reserve_mass(amt / e_lab" in txt:
+    if "_take_reserve_energy(amt, dt, strypt=strypt)" in txt:
         return _M_GENOMGANG
-    if "trim_kg" in txt:
+    if "Et - Ecap" in txt:
         return "trimning"
-    if "strypt=False" in txt:
-        return "dräktighet: material" if "gest" in txt else "tillväxt: material"
+    if "want * build_E_kg" in txt:
+        return "födsel: påfyllning"
     if "E_need" in txt:
         return "reparation"
     if "_gest_build_E_kg" in txt:
@@ -418,7 +418,8 @@ def _bind_reservrader() -> dict:
         for _i, _rad in enumerate(_src):
             if "def " in _rad:
                 continue
-            if "_take_reserve_mass(" not in _rad and "take_energy(" not in _rad:
+            if ("_take_reserve_energy(" not in _rad
+                    and "take_energy(" not in _rad):
                 continue
             # Läs framåt tills parenteserna balanserar, alltså tills uttrycket
             # är helt. `f_lineno` pekar på den rad där det *avslutas*.
@@ -460,22 +461,24 @@ def instrument_reserv() -> None:
     import os as _os
     from agent import Body
 
-    orig = Body._take_reserve_mass
+    orig = Body._take_reserve_energy
 
     _M_RADER.update(_bind_reservrader())
 
     def _plats(f) -> tuple:
         return (_os.path.basename(f.f_code.co_filename), f.f_lineno)
 
-    def wrapped(self, kg, dt=1.0, **kw):
+    def wrapped(self, amount_J, dt=1.0, **kw):
         # **Reserven läses före uttaget.** Kriteriet stod efter `orig` och läste
         # därmed den *återstående* reserven, vilket krävde att den räckte till
         # hela begäran även efter att ha gett vad den kunde. Det underskattade
         # strypningen grovt: 0193 mätte 83 procent bindande tak i en körning där
         # den här raden rapporterade 18.
-        Mr_fore = float(self.M_reserve())
-        ut = orig(self, kg, dt, **kw)
-        want = float(kg)
+        # Uttagen räknas i joule sedan 0216: poolerna har olika täthet, så
+        # ett "kilo reserv" betyder inte längre samma sak i de två.
+        Mr_fore = float(self.E_total())
+        ut = orig(self, amount_J, dt, **kw)
+        want = float(amount_J)
         if want > 1e-15:
             f = _sys._getframe(1)
             namn = _M_RADER.get(_plats(f), "")
@@ -497,7 +500,7 @@ def instrument_reserv() -> None:
                 e[1] += 1
         return ut
 
-    Body._take_reserve_mass = wrapped
+    Body._take_reserve_energy = wrapped
 
 
 _INSTRUMENTED_STEERING = False
@@ -1473,10 +1476,11 @@ def print_summary(pop: Population, d0: dict, nb0: dict, unika: int, worst_drift:
         # flyttar mest ska stå överst, och reparationen anropas lika många
         # gånger som underhållet men betalar en tjugondel.
         print("\n  reservuttag                      anrop   strypta"
-              "    begärt kg    givet kg   andel given")
+              "    begärt MJ    givet MJ   andel given")
         for k, e in sorted(_M.items(), key=lambda kv: -kv[1][3]):
             print(f"    {k:<28}{e[0]:9d}{100 * e[1] / max(1, e[0]):9.1f} %"
-                  f"{e[2]:12.4g}{e[3]:12.4g}{100 * e[3] / max(1e-12, e[2]):11.1f} %")
+                  f"{e[2] / 1e6:12.4g}{e[3] / 1e6:12.4g}"
+                  f"{100 * e[3] / max(1e-12, e[2]):11.1f} %")
 
     print(f"\n  näring (kg)  fri {nb['free']:.2f}  flora {nb['in_flora']:.2f}  "
           f"fauna {nb['in_fauna']:.2f}  förna {nb.get('in_litter', nb['in_detritus']):.2f}  "

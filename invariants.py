@@ -30,6 +30,8 @@ from typing import Any
 
 import numpy as np
 
+from phenotype import N_PER_KG_PROTEIN
+
 
 MAX_EXAMPLES = 5
 
@@ -1075,10 +1077,15 @@ def nutrient_balance(pop) -> dict[str, float]:
             continue
         slot = int(getattr(a, "store_slot", -1))
         s = float(store.structure[slot]) if slot >= 0 else 0.25
-        in_fauna += float(b.M) * nutrient_content(s)
-        in_fauna += b.M_reserve() * NUTRIENT_PER_KG_LABILE
+        # Kroppens kväve sitter i proteinet (0216): mager torrsubstans bär
+        # `0,16·(1 − s)` per kilo, där `s` är askandelen. Reserven — glykogen
+        # och fett — är kvävefri, och kvävepoolens aminosyror bär proteinets
+        # halt. Se docs/sammansattning-och-vatten.md.
+        in_fauna += float(b.M) * N_PER_KG_PROTEIN * (1.0 - min(1.0, max(0.0, s)))
+        in_fauna += float(getattr(b, "N_pool", 0.0)) * N_PER_KG_PROTEIN
         if bool(b.gestating):
-            in_fauna += float(b.gest_M) * NUTRIENT_PER_KG_LABILE
+            in_fauna += (float(b.gest_M) * N_PER_KG_PROTEIN
+                         * (1.0 - min(1.0, max(0.0, s))))
 
     added = float(getattr(world, "_nutrient_added_total", 0.0))
     lost = float(getattr(world, "_nutrient_lost_total", 0.0))

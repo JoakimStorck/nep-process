@@ -333,6 +333,7 @@ inget kväve. `N_pool` får en egen energiterm i ledgern och i 0210:s poster.
 | | innehåll | typ |
 |---|---|---|
 | 1a | `M_wet()` och den härledda våta massan, införd där fysiken läser; vattenhalterna är 1, så ändringen är bitidentisk | refaktor |
+| 1b–1d | **slogs ihop i 0216:** materialets kemi binder ihop tätheterna och kvävet — vävnad kan inte byggas av fett, och en uppdelning hade mätt ett mellanläge som ändå skulle tas bort | dynamik |
 | 1b | tillstånden blir torrsubstans med vattenhalterna ovan; reserverna får sina tätheter; `reserve_cap` och `E_cap_per_M` blir J per kg **våt** massa; `fast_frac` fördelar energi; isolering och flytkraft läser fettvävens våta andel | dynamik |
 | 1c | `N_pool`, kvävefria reserver, deaminering, urea, endogen förlust, kvävebegränsad tillväxt och fosterbygge; invarianten och ledgern följer | dynamik |
 | 1d | kadavrets kväveöverskott mineraliseras vid döden | dynamik |

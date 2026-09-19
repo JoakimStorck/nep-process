@@ -720,6 +720,27 @@ def uptake_from_traits(traits: np.ndarray | None, default: float = 0.0) -> float
 # Strukturandel — gemensam för alla organismer
 # ---------------------------------------------------------------------------
 
+# --- Djurkroppens sammansättning ------------------------------------------
+# Se docs/sammansattning-och-vatten.md. Kroppens tillstånd är torrsubstans per
+# komponent; den våta massan härleds med vattenhalterna nedan tills vattnet
+# blir ett eget tillstånd (steg 4 i serien).
+LEAN_DM_FRAC = 0.27            # mager vävnads torrsubstans (hydratisering 73 %)
+GLYCOGEN_WATER_PER_KG = 3.0    # kg vatten per kg glykogen
+ADIPOSE_LIPID_FRAC = 0.85      # lipidandel i fettväv
+FETUS_DM_FRAC = 0.20           # fostrets torrsubstans
+# Metaboliserbar energi per kg torrsubstans (Atwater; protein brutto 23,6 —
+# skillnaden är urean och dess värme).
+E_GLYCOGEN_J_PER_KG = 17.2e6
+E_LIPID_J_PER_KG = 37.7e6
+E_PROTEIN_J_PER_KG = 17.2e6
+# Kväve per kg protein (Jones faktor 6,25). Fett och glykogen bär inget.
+N_PER_KG_PROTEIN = 0.16
+# Obligatorisk kväveförlust: Brodys ~2 mg N per kcal basalmetabolism.
+ENDOGENOUS_N_PER_J = 4.8e-10
+# Fria aminosyror som andel av den magra torrsubstansen. Verkliga djur bär
+# ~1–2 % av kroppsproteinet som fri pool.
+N_POOL_CAP_FRAC = 0.02
+
 STRUCTURE_MIN = 0.05
 STRUCTURE_MAX = 0.85
 

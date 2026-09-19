@@ -2595,9 +2595,11 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0213~~ | mobiliseringstaket gäller per tick, delat av alla strypta uttag | budgeten | **klart**, se nedan — rättelse; utfallet inom frönas spridning |
 | ~~0214~~ | fostret byggs efter underhållet; katabolism för fostret med skada och strikt över avmagringströskeln | budgeten | **klart**, se nedan — rättelse; utfallet inom frönas spridning |
 | ~~0215~~ | accessorer för våt massa införda där fysiken läser (steg 1a i skissen) | serien | **klart**, se nedan — bitidentisk |
+| ~~0216~~ | kroppens kemi: torrsubstans per komponent, verkliga tätheter, kvävefri reserv, kvävepool, urea, endogen förlust, kvävebegränsad tillväxt, kadavrets kväve (steg 1b–1d) | serien | **klart**, se nedan — fettandel 4–12 %, kvävepoolen tom hos ~30 % |
+| — | kadavrets energi för asätare räknas med förnans konstant och underskattar fettet | ekologin | **öppen**, rättas i steg 2 |
 | — | reserven belastar basal, värmeledning och termoreglering men inte rörelse, kroppsdjup, betesräckvidd eller predationens massjämförelse | budgeten | **öppen**, funnen i 0215 |
 | — | en graviditet som avstannar avbryts aldrig (ingen resorption) | reproduktionen | **öppen**, se 0214 |
-| — | växtföda ger en tredjedel av sin energi (våt vävnads 9,3 MJ/kg på torrsubstans, cellulosa noll); fettet har samma täthet som labil vävnad | födobudgeten | **öppen**, principbeslut — revisionen F1, M3 |
+| — | växtföda ger en tredjedel av sin energi (våt vävnads 9,3 MJ/kg på torrsubstans, cellulosa noll) | födobudgeten | **öppen**, steg 2 i skissen — revisionen F1; fettets täthet rättad i 0216 |
 | — | startdjuren sätts in med 6 % reserv: 14 av 80 svälter inom en månad; nyfödda har ~3 ticks reserv | utgångsläget | **öppen** — revisionen, mätkörningen, L6 |
 | ~~0203~~ | passtidtagningen delar upp `_step_world_and_flora` i världens delpass, florans tre system och spatialindexet | mätningen | **klart**, se nedan — bitidentisk bana; hydro väntar på trådar under last |
 | ~~0204~~ | hydrokärnorna `soil_pass` och `derive_water` blir seriella | prestanda | **klart**, se nedan — −6,8 ms/tick (−14 %); banan oberoende av kärnantalet |
@@ -2729,6 +2731,81 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Kroppens kemi (0216)
+
+Dynamikändring, steg 1b–1d i `docs/sammansattning-och-vatten.md` **slagna i
+en patch**. Uppdelningen höll inte: vävnad byggdes av reservmassa ett kilo per
+kilo, och med verkliga tätheter är det kemiskt omöjligt — ett kilo fett bär
+37,7 MJ och ett kilo mager torrsubstans 17,2, och fett innehåller inget kväve
+att bygga protein av. Materialets kemi binder alltså ihop tätheterna och
+kvävet.
+
+**Tillstånden är torrsubstans per komponent.** `M` är mager vävnad (protein
+och aska), `M_fast` glykogen, `M_slow` lipid, `gest_M` fostervävnad, och
+`N_pool` är fria aminosyror i proteinekvivalent. Den våta massan härleds med
+vattenhalterna i `phenotype.py` — mager vävnad 73 % vatten, glykogen 3 kg
+vatten per kg, fettväv 85 % lipid, foster 80 % vatten — och det är den
+allometrin läser. Genomets massor (`M_target`, `child_M`, `M_repro_min`) och
+`AgentParams` massor är våt levande massa och räknas om vid läsning.
+`reserve_cap` och `E_cap_per_M` är J per kg **våt** mager massa.
+
+**Kemin.** Glykogen 17,2 MJ/kg, lipid 37,7, protein 17,2 metaboliserbart
+(23,6 brutto; skillnaden är urean). Djurens `s` är askandelen i den magra
+torrsubstansen, och kvävet per kilo är `0,16·(1 − s)`. `fast_frac` fördelar
+numera **energi** mellan poolerna, inte massa: ett kilo glykogen väger nio
+gånger mer än ett kilo fett per lagrad joule, vått räknat, och den kostnaden
+gör axeln till en verklig avvägning.
+
+**Kvävet.** Födans kväve blir aminosyror i kvävepoolen så långt den rymmer
+(2 % av den magra torrsubstansen); överskottet deamineras direkt, energin
+stannar och kvävet går ut som urea till cellen. Tillväxt och foster bygger
+protein ur poolen — **de är kvävebegränsade** när den är tom. Den
+obligatoriska kväveförlusten är Brodys ~2 mg N per kcal basalmetabolism och
+tas ur poolen, annars ur mager vävnad; utan den har ett vuxet djur inget
+kvävebehov och Liebigs lag kan aldrig binda. Katabolismen ger proteinets
+energi till reserven och kvävet som urea.
+
+**Tre förenklingar, uttalade i koden.** Askan har ingen källa — mineraler är
+ingen valuta i modellen, bara kvävet — och den lämnar modellen i stället för
+att hamna i förnan, eftersom växtkonstanterna annars hade gett den kväve ur
+ingenting. Reservöverskott över taket **oxideras** i stället för att
+utsöndras, av samma skäl. Och kadavret läggs in som torrsubstans med sitt
+kväveöverskott mineraliserat direkt i cellen; dess energi för asätare räknas
+fortfarande med förnans konstant och underskattar fettet — det rättas i
+steg 2.
+
+**Utfall.** Kroppens sammansättning blir biologisk: fettandelen 4–12 % av
+den våta massan (`liten6`, median över beståndet vid tick 200–600), glykogenet
+några gram, och **kvävepoolen står tom hos ungefär en tredjedel av djuren** —
+kvävebegränsningen binder.
+
+Tre frön per scenario, HEAD (0215) mot 0216 (`runs/p216`):
+
+```
+f6-256, 1 200 tick   födslar        djurmånader        största energirest
+  HEAD               23 / 62 / 45   707 / 951 / 600    9e-15
+  0216               52 / 82 / 36   775 / 1045 / 565   3e-14
+liten6, 3 000 tick   utdöd vid mån
+  HEAD               33 / 35 / 16   382 / 354 / 175    8e-13
+  0216               13 / 21 / 13   359 / 370 / 190    7e-13
+```
+
+Fler födslar i `f6-256`, tidigare utdöende i `liten6`, djurmånaderna
+oförändrade inom frönas spridning: **faunan bär sig fortfarande inte.** Det
+är väntat — födans energi är kvar på steg 2:s felaktiga konstant, och nu
+tillkommer kvävebegränsningen.
+
+**Bokföringen stänger.** Näringsinvarianten driver 5e-9 relativt över 400
+tick i rökprovet, och 0210:s energipost har en rest på högst 7e-13 i alla
+körningar. Under arbetet fångade balansen fyra fel i patchen: askan i förnan,
+kvävet i nyföddas pool, ett teckenfall när ungen är mindre askrik än modern,
+och att jag skrev över 0210:s mätvariabel vid födseln.
+
+**En observation utan slutsats:** `cell_idx`-brottet som står som öppen rad
+sedan p194 inträffade en gång på tolv körningar med den här koden och noll på
+HEAD, båda `liten6` 400 tick. Tolv körningar räcker inte för att skilja
+orsak från slump, och raden står kvar.
 
 ### Accessorer för våt massa (0215)
 

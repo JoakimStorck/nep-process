@@ -21,6 +21,16 @@ from phenotype import (
     body_depth,
     LENGTH_UNIT_M,
     NUTRIENT_PER_KG_LABILE,
+    LEAN_DM_FRAC,
+    GLYCOGEN_WATER_PER_KG,
+    ADIPOSE_LIPID_FRAC,
+    FETUS_DM_FRAC,
+    E_GLYCOGEN_J_PER_KG,
+    E_LIPID_J_PER_KG,
+    E_PROTEIN_J_PER_KG,
+    N_PER_KG_PROTEIN,
+    ENDOGENOUS_N_PER_J,
+    N_POOL_CAP_FRAC,
 )
 
 from grid import Grid
@@ -1108,6 +1118,11 @@ class Body:
 
     alive: bool = True
 
+    # Fria aminosyror i proteinekvivalent torrsubstans (0216). Tillväxt och
+    # foster bygger protein ur den; födans kväve fyller den; överskott
+    # deamineras och kvävet går ut som urea.
+    N_pool: float = 0.0
+
     # Hur mycket av `M_slow` som mobiliserats strypt sedan tickens början
     # (0213). Taket är en takt per tick och delas av alla strypta uttag i
     # ticken; nollställs i början av `step`.
@@ -1142,6 +1157,36 @@ class Body:
     death_cause: str = ""
     gest_M_target: float = 0.0   # target fetal mass
     
+    def N_pool_cap(self) -> float:
+        """Kvävepoolens tak, i proteinekvivalent torrsubstans (0216)."""
+        return N_POOL_CAP_FRAC * max(0.0, float(self.M))
+
+    def E_pool(self) -> float:
+        """Energin i kvävepoolens aminosyror (0216)."""
+        return float(self.N_pool) * E_PROTEIN_J_PER_KG
+
+    def E_store_total(self) -> float:
+        """Reserven plus kvävepoolen — den storhet ledgern stänger mot."""
+        return self.E_total() + self.E_pool()
+
+    def _add_N(self, kg_N: float) -> None:
+        """
+        Kväve in i kroppen: till poolen så långt den rymmer, resten som urea.
+
+        Urean går till cellen som växttillgängligt kväve — den gödslar marken
+        där djuret står.
+        """
+        n = float(kg_N)
+        if n <= 0.0:
+            return
+        want_p = n / N_PER_KG_PROTEIN
+        room = max(0.0, self.N_pool_cap() - float(self.N_pool))
+        to_pool = want_p if want_p < room else room
+        self.N_pool = float(self.N_pool) + to_pool
+        rest_N = (want_p - to_pool) * N_PER_KG_PROTEIN
+        if rest_N > 0.0:
+            self.out_nutrient_kg += rest_N
+
     def M_lean_wet(self) -> float:
         """
         Den magra vävnadens **våta** massa (1a).
@@ -1151,7 +1196,8 @@ class Body:
         med fasta vattenhalter. De tre accessorerna här markerar var fysiken
         läser massan — Kleiber, värmeledning, rörelse, räckvidd, predation,
         kadaver — till skillnad från kemin, som räknar på torrsubstansen.
-        I den här patchen är vattenhalten ett, så talen är oförändrade.
+        Tillstånden är torrsubstans sedan 0216; vattenhalterna står i
+        `phenotype.py`.
 
         **Reserven ingår inte överallt i dag.** `M_carry` i steget räknar med
         den — basal, värmeledning och termoreglering bär den — men
@@ -1160,15 +1206,16 @@ class Body:
         så att 1a blir bitidentisk. Att de säger emot varandra är en egen
         fråga; se raden i TODO.md.
         """
-        return float(self.M)
+        return float(self.M) / LEAN_DM_FRAC
 
     def M_reserve_wet(self) -> float:
-        """Reservens våta massa: glykogen med sitt vatten plus fettväv (1a)."""
-        return float(self.M_fast) + float(self.M_slow)
+        """Reservens våta massa: glykogen med sitt vatten plus fettväv."""
+        return (float(self.M_fast) * (1.0 + GLYCOGEN_WATER_PER_KG)
+                + float(self.M_slow) / ADIPOSE_LIPID_FRAC)
 
     def M_fetus_wet(self) -> float:
-        """Fostrets våta massa (1a)."""
-        return float(self.gest_M)
+        """Fostrets våta massa."""
+        return float(self.gest_M) / FETUS_DM_FRAC
 
     def M_wet(self) -> float:
         """Kroppens våta massa utan foster: mager vävnad plus reserv (1a)."""
@@ -1202,16 +1249,15 @@ class Body:
 
     def _burn(self, kg: float) -> None:
         """
-        Labil massa som oxideras för energi.
+        Reservmassa som oxideras för energi.
 
         Kolet går till atmosfären och lämnar modellen — massa är aldrig en
-        sluten storhet här. Näringen i den brända massan är däremot kvar och
-        utsöndras till cellen som kvävehaltigt avfall, direkt växttillgängligt.
+        sluten storhet här. **Reserven bär inget kväve** sedan 0216: glykogen
+        och fett är kvävefria, och det enda kväve som lämnar kroppen kommer
+        från protein, via `_add_N`, den endogena förlusten och katabolismen.
+        Metoden finns kvar som markering av att massan oxiderats.
         """
-        m = float(kg)
-        if m <= 0.0:
-            return
-        self.out_nutrient_kg += m * NUTRIENT_PER_KG_LABILE
+        return
 
     def _release_nutrient(self, kg: float) -> None:
         """Fri näring rakt ut, utan att någon massa lämnar kroppen."""
@@ -1219,105 +1265,64 @@ class Body:
         if n > 0.0:
             self.out_nutrient_kg += n
 
-    def _take_reserve_mass(self, kg: float, dt: float = 1.0,
-                           *, strypt: bool = True) -> float:
+    def _take_reserve_energy(self, amount_J: float, dt: float = 1.0,
+                             *, strypt: bool = True) -> float:
         """
-        Ta reservmassa: snabbt först, långsamt med tak. Returnerar uttaget.
+        Ta energi ur reserven: glykogen först, fett med tak. Returnerar J.
 
-        Ingen näringsbokföring här — anroparen avgör om massan brändes,
-        byggdes in i vävnad eller överfördes till en avkomma.
+        Poolerna har olika täthet sedan 0216 — glykogen 17,2 MJ/kg, fett
+        37,7 — så uttaget räknas i joule och massan följer av vilken pool som
+        lämnade ifrån sig energin. Ingen näringsbokföring här: reserven är
+        kvävefri, och anroparen avgör om massan oxiderades eller överfördes.
 
-        `dt` styr hur mycket av den långsamma poolen som får mobiliseras. Utan
-        det blir taket beroende av hur ofta metoden råkar anropas i stället för
-        av tid, vilket är samma klass av fel som `k_age1` — en takt som inte är
-        skalfri mot tidsenheten.
+        `dt` styr hur mycket av fettet som får mobiliseras. Utan det blir
+        taket beroende av hur ofta metoden råkar anropas i stället för av tid.
 
-        **`strypt=False` för anabolism.** Taket gäller löpande förbrukning, inte
-        byggande. Fett mobiliseras långsamt när det bränns — det är därför man
-        magrar gradvis under en svält — men en organism som bygger vävnad
-        omsätter reserver i den takt byggandet kräver, och en dräktig hona
-        snabbast av alla.
-
-        0161 mätte att taket band på fel ställe: tillväxten ströps i 19,3
-        procent av anropen mot underhållets 5,8, och fick bara fyra femtedelar
-        av det begärda. Ett djur som ville växa fick vänta på droppet medan ett
-        som bara ville överleva knappt märkte något. Det gjorde späcket dyrt att
-        bära utan att göra det långsamt att förlora, alltså kostnaden utan
-        egenskapen — och `fast_frac` driftade mot den snabba poolen även när
-        isoleringen sänkte termoregleringen från 102 till 81 procent av
-        basalomsättningen.
-
-        Poolens tidsskala är oförändrad: `M_slow` är fortfarande långsam att
-        *förbruka*, vilket är det som gör svälten gradvis och isoleringen till
-        ett tillstånd som byggs och förloras över månader.
+        **`strypt=False` för anabolism och överföring.** Taket gäller löpande
+        förbrukning, inte byggande: fett mobiliseras långsamt när det bränns,
+        men en organism som bygger vävnad omsätter reserver i den takt
+        byggandet kräver, och en dräktig hona snabbast av alla. Taket delas av
+        alla strypta uttag i samma tick (0213).
         """
-        want = float(kg)
+        want = float(amount_J)
         if want <= 0.0:
             return 0.0
-        Mr = self.M_reserve()
-        if Mr <= 1e-15:
-            return 0.0
-        take = want if want < Mr else Mr
 
-        # Snabbt först, långsamt sedan — och det långsamma med tak.
-        #
-        # Uttaget fördelades tidigare i proportion till poolernas storlek, vilket
-        # gjorde dem till en pool med två namn. Nu töms `M_fast` innan `M_slow`
-        # rörs, och `M_slow` får bara lämna ifrån sig en begränsad mängd per
-        # steg. Det ger fettets tidsskala: mellan glykogenets tick och
-        # strukturens sista utväg.
-        #
-        # **Taket mäts mot ämnesomsättningen och inte mot depån.** Det var
-        # tidigare `M_slow · slow_mobil_frac · dt`, alltså proportionellt mot det
-        # fett som är kvar — en takt som kollapsar precis när den behövs, och
-        # som gör den sista fjärdedelen av depån asymptotiskt oåtkomlig. Uppmätt
-        # band den i 83 procent av agenttickarna trots att fettet fanns; se
-        # `AgentParams.mobil_max_x_basal` för mätningen och härledningen.
-        #
-        # Räcker inte taket returneras mindre än begärt. Anroparen ser det som
-        # ett kvarstående underskott, och det är riktigt: ett djur kan svälta
-        # med fett kvar om dräneringen överstiger vad lipolysen hinner leverera.
-        # Skillnaden är att det nu sker när dräneringen är hög och inte när
-        # depån är låg.
-        d_fast = min(take, float(self.M_fast))
-        self.M_fast = float(self.M_fast) - d_fast
-        rest = take - d_fast
-        if rest > 0.0 and self.M_slow > 0.0:
+        E_fast = float(self.M_fast) * E_GLYCOGEN_J_PER_KG
+        d_fast = want if want < E_fast else E_fast
+        if d_fast > 0.0:
+            self.M_fast = max(0.0, float(self.M_fast) - d_fast / E_GLYCOGEN_J_PER_KG)
+        rest = want - d_fast
+
+        d_slow = 0.0
+        E_slow = float(self.M_slow) * E_LIPID_J_PER_KG
+        if rest > 0.0 and E_slow > 0.0:
             if strypt:
                 AP = self.AP
-                # `Mr` är reserven som den såg ut när uttaget började, inte
-                # den som är kvar efter att `M_fast` tömts — taket ska inte
-                # bero på hur mycket som redan tagits i samma anrop.
-                M_carry = self.M_lean_wet() + Mr
+                M_carry = self.M_lean_wet() + self.M_reserve_wet()
                 P_basal = float(AP.k_basal) * (M_carry ** 0.75)
-                tak = (float(AP.mobil_max_x_basal) * P_basal * float(dt)
-                       / float(AP.E_labile_J_per_kg))
-                # **Taket gäller per tick, inte per anrop (0213).** Det räknades
-                # om i varje anrop, så underhållet, efterbetalningen,
-                # reparationen, byggarbetet och avgifterna fick var sitt tak:
-                # uppmätt 7,7 × basal per tick mot avsedda 2 × (revisionen M5).
+                tak = float(AP.mobil_max_x_basal) * P_basal * float(dt)
                 kvar = tak - float(self._slow_mobil_used)
                 if kvar < 0.0:
                     kvar = 0.0
-                d_slow = min(rest, kvar)
+                d_slow = min(rest, E_slow, kvar)
                 self._slow_mobil_used = float(self._slow_mobil_used) + d_slow
             else:
-                d_slow = min(rest, float(self.M_slow))
-            self.M_slow = max(0.0, float(self.M_slow) - d_slow)
-        else:
-            d_slow = 0.0
+                d_slow = min(rest, E_slow)
+            if d_slow > 0.0:
+                self.M_slow = max(0.0, float(self.M_slow) - d_slow / E_LIPID_J_PER_KG)
         return float(d_fast + d_slow)
 
     def _catabolize(self, dM_cat: float, structure: float) -> float:
         """
-        Mobilisera `dM_cat` kg vävnad till reserven. Returnerar frigjord energi.
+        Bryt ned `dM_cat` kg mager torrsubstans. Returnerar frigjord energi.
 
-        Bara den labila fraktionen kan mobiliseras; strukturmaterialet passerar
-        ut som exkrement tillsammans med katabolismens förlust. Vid faunans
-        typiska strukturandel 0,25 ger det samma energiutbyte som den tidigare
-        konstanten E_body_J_per_kg — vilket inte är en slump, eftersom
-        7,0e6 ≈ 9,302e6 · (1 − 0,25). Skillnaden är att utbytet nu följer
-        individens egen sammansättning i stället för en global konstant.
+        Sammansättningen avgör (0216): proteinandelen `1 − s` oxideras med
+        katabolismens verkningsgrad och energin läggs i glykogenpoolen,
+        proteinets kväve lämnar kroppen som urea till cellen, och askan `s` —
+        ben och mineral — passerar ut som exkrement. Kvävet återvinns inte
+        till kvävepoolen: en svältande kropp utsöndrar det, och att låta det
+        gå tillbaka vore att räkna proteinets energi två gånger.
         """
         dM = float(dM_cat)
         if dM <= 0.0:
@@ -1325,19 +1330,31 @@ class Body:
         s = min(1.0, max(0.0, float(structure)))
         cat_eff = max(0.0, float(getattr(self.AP, "catabolism_eff", 1.0)))
 
-        lab = dM * (1.0 - s) * cat_eff
+        protein = dM * (1.0 - s)
+        ash = dM - protein
         self.M = float(self.M) - dM
-        self.M_fast = float(self.M_fast) + lab
 
-        rest = max(0.0, dM - lab)
-        if rest > 1e-18:
-            self._void(rest, min(1.0, dM * s / rest))
+        E_yield = protein * E_PROTEIN_J_PER_KG * cat_eff
+        if E_yield > 0.0:
+            self.M_fast = float(self.M_fast) + E_yield / E_GLYCOGEN_J_PER_KG
+        if protein > 0.0:
+            self.out_nutrient_kg += protein * N_PER_KG_PROTEIN
+        # **Askan lämnar modellen (0216).** Den bär inget kväve, och att lägga
+        # den i förnan hade gett den växtkonstanternas strukturkväve, alltså
+        # kväve ur ingenting. Mineraler är ingen valuta här — massa är inte en
+        # sluten storhet, kväve är. Se docs/sammansattning-och-vatten.md.
 
-        return float(lab * float(self.AP.E_labile_J_per_kg))
+        return float(E_yield)
 
     def E_total(self) -> float:
-        """Tillgänglig energi, härledd ur reservmassan."""
-        return self.M_reserve() * float(self.AP.E_labile_J_per_kg)
+        """
+        Reservens energi: glykogen och fett med sina egna tätheter (0216).
+
+        Kvävepoolen räknas inte hit — den är material för vävnad, inte
+        löpande bränsle. Ledgern stänger mot `E_store_total`.
+        """
+        return (float(self.M_fast) * E_GLYCOGEN_J_PER_KG
+                + float(self.M_slow) * E_LIPID_J_PER_KG)
 
     def E_cap(self) -> float:
         """
@@ -1352,8 +1369,13 @@ class Body:
 
         Med säsonger som verkar över fyra vintrar per liv är förmågan att
         lägga på hull dessutom det som avgör om vintern går att överleva.
+
+        **Taket är J per kg våt mager massa sedan 0216.** `M` är torrsubstans,
+        och ett tak per torr kilo hade betytt något annat än den axel som
+        selekterats. Med fettets verkliga täthet svarar dagens intervall,
+        0,5e6–1,1e7 J per kg, mot 1,5–25 procent kroppsfett.
         """
-        M = self.M
+        M = self.M_lean_wet()
         cap = float(getattr(self, "_reserve_cap", 0.0)) or float(self.AP.E_cap_per_M)
         return cap * (M if M > 1e-9 else 1e-9)
 
@@ -1537,15 +1559,7 @@ class Body:
         if amt <= 0.0:
             return 0.0
 
-        e_lab = float(self.AP.E_labile_J_per_kg)
-        take_kg = self._take_reserve_mass(amt / e_lab, dt, strypt=strypt)
-        if take_kg <= 0.0:
-            return 0.0
-
-        if burn:
-            self._burn(take_kg)
-
-        return float(take_kg * e_lab)
+        return float(self._take_reserve_energy(amt, dt, strypt=strypt))
         
     def start_gestation(self, M_target: float, n: int = 1) -> bool:
         """`M_target` är kullens totala fetala massa, `n` antalet ungar."""
@@ -1677,7 +1691,9 @@ class Body:
         child_M = max(float(self.AP.M_birth_min), float(getattr(pheno, "child_M", self.AP.M_birth_min)))
         M_target = max(child_M, float(getattr(pheno, "M_target", float(self.AP.M0))))
         A_mature = max(1e-9, float(getattr(pheno, "A_mature", 1.0)))
-        return growth_curve_mass(child_M, M_target, A_mature, float(age_s))
+        # Kurvan är i våt levande massa; tillståndet är torrsubstans (0216).
+        return growth_curve_mass(child_M, M_target, A_mature,
+                                 float(age_s)) * LEAN_DM_FRAC
 
     def step(
         self,
@@ -1769,7 +1785,9 @@ class Body:
         # samma tick — parning, attack, reproduktionens avgift — delar på det
         # som steget lämnar.
         self._slow_mobil_used = 0.0
-        E_before = float(self.E_total())
+        # Ledgern stänger mot reserven **plus kvävepoolen** (0216): poolens
+        # aminosyror bär energi som blir vävnad eller deamineras.
+        E_before = float(self.E_store_total())
         M_before = float(self.M)
 
         # ---------------------------------------------------------
@@ -1785,8 +1803,10 @@ class Body:
         _compute_cost = float(AP.compute_cost)
         _v_max        = float(AP.v_max)
         _D_max        = float(AP.D_max)
-        _M_min        = float(AP.M_min)
-        _M_crit       = float(AP.M_crit)
+        # Massorna i `AgentParams` och i genomet är våt levande massa;
+        # tillstånden är torrsubstans sedan 0216. Omräkningen sker här.
+        _M_min        = float(AP.M_min) * LEAN_DM_FRAC
+        _M_crit       = float(AP.M_crit) * LEAN_DM_FRAC
         _starve_gain  = float(AP.starve_stress_gain)
         _frailty_cap  = float(AP.frailty_gain_cap)
         _fatigue_eff  = float(AP.fatigue_effort)
@@ -1814,6 +1834,7 @@ class Body:
         _wear_aD      = float(AP.wear_aD)
         # M_target: genetiskt bestämd vuxenmassa från phenotype
         _M_target     = float(getattr(pheno, "M_target", float(AP.M0)))
+        _M_target_dm  = _M_target * LEAN_DM_FRAC
         # Egen strukturandel: styr katabolismens utbyte, exkrementets
         # sammansättning och hur mycket näring vävnaden binder per kilo.
         _structure    = min(1.0, max(0.0, float(getattr(pheno, "structure", 0.25))))
@@ -1913,9 +1934,32 @@ class Body:
             # bieffekt av 0157 snarare än något som konstruerats för ändamålet.
             # Den tredje kommer när arbetets värme går in i värmebalansen:
             # isolering sätter tak på uthållig effekt.
+            # **Kvävet skiljs från energin (0216).** Födans labila massa bär
+            # kväve; det blir aminosyror i kvävepoolen så långt den rymmer,
+            # och resten deamineras direkt: kolskelettets energi stannar i
+            # kroppen, kvävet går ut som urea. Energin som inte är bundet
+            # protein går till reserven, fördelad mellan glykogen och fett
+            # efter `fast_frac` — i **energi**, eftersom poolerna har olika
+            # täthet. Ett kilo glykogen väger nio gånger mer än ett kilo fett
+            # per lagrad joule, räknat vått, och det är den kostnaden som gör
+            # axeln till en verklig avvägning.
+            N_in = m_assim * NUTRIENT_PER_KG_LABILE
+            p_equiv = N_in / N_PER_KG_PROTEIN
+            E_prot = p_equiv * E_PROTEIN_J_PER_KG
+            if E_prot > E_in and E_prot > 0.0:
+                # Födans energi räcker inte till proteinets — kan inträffa så
+                # länge `E_labile` är för lågt (steg 2 i skissen).
+                p_equiv *= E_in / E_prot
+            room = max(0.0, self.N_pool_cap() - float(self.N_pool))
+            to_pool = p_equiv if p_equiv < room else room
+            self.N_pool = float(self.N_pool) + to_pool
+            excess_p = p_equiv - to_pool
+            if excess_p > 0.0:
+                self.out_nutrient_kg += excess_p * N_PER_KG_PROTEIN
+            E_to_reserve = max(0.0, E_in - to_pool * E_PROTEIN_J_PER_KG)
             _fs = float(getattr(pheno, "fast_frac", 0.85))
-            self.M_fast += _fs * m_assim
-            self.M_slow += (1.0 - _fs) * m_assim
+            self.M_fast += _fs * E_to_reserve / E_GLYCOGEN_J_PER_KG
+            self.M_slow += (1.0 - _fs) * E_to_reserve / E_LIPID_J_PER_KG
 
         dE_store = E_in
         E_to_M = 0.0
@@ -2129,6 +2173,34 @@ class Body:
             E_paid_drain += paid2
 
         # ---------------------------------------------------------
+        # (3A0) Obligatorisk kväveförlust (0216)
+        # ---------------------------------------------------------
+        # Proteinomsättningen läcker kväve oavsett om djuret växer: Brodys
+        # ~2 mg N per kcal basalmetabolism. Den tas ur kvävepoolen — vars
+        # aminosyror deamineras, så att kolskelettets energi stannar i
+        # reserven — och räcker den inte bryts mager vävnad ned. Utan den här
+        # posten har ett vuxet djur inget kvävebehov alls, och Liebigs lag kan
+        # aldrig binda för det.
+        out_endog_N = ENDOGENOUS_N_PER_J * out_basal
+        if out_endog_N > 0.0:
+            p_need = out_endog_N / N_PER_KG_PROTEIN
+            from_pool = p_need if p_need < float(self.N_pool) else float(self.N_pool)
+            if from_pool > 0.0:
+                self.N_pool = float(self.N_pool) - from_pool
+                self.M_fast = (float(self.M_fast)
+                               + from_pool * E_PROTEIN_J_PER_KG / E_GLYCOGEN_J_PER_KG)
+                self.out_nutrient_kg += from_pool * N_PER_KG_PROTEIN
+            rest_N = out_endog_N - from_pool * N_PER_KG_PROTEIN
+            if rest_N > 1e-18:
+                p_per_kg = max(1e-12, 1.0 - _structure)
+                dM_endog = rest_N / (N_PER_KG_PROTEIN * p_per_kg)
+                free_endog = max(0.0, float(self.M) - _M_min)
+                dM_endog = min(dM_endog, free_endog)
+                if dM_endog > 0.0:
+                    E_from_M += self._catabolize(dM_endog, _structure)
+                    dM_cat += dM_endog
+
+        # ---------------------------------------------------------
         # (3A) Fostret — efter underhållet (0214)
         # ---------------------------------------------------------
         # Fostret byggdes i (2C), före dräneringarna, och saknades reserven
@@ -2152,20 +2224,25 @@ class Body:
                 dM_want = min(_gest_rate * dt, M_tgt - M_cur)
 
                 if dM_want > 0.0:
-                    # Fostervävnad byggs av moderns reservmassa, ett kilo per
-                    # kilo. Byggkostnaden är syntesarbetet ovanpå materialet,
-                    # inte i stället för det — de är två termer.
-                    kg_per_kg = 1.0 + (_gest_build_E_kg / _E_labile)
-                    need_kg = dM_want * kg_per_kg
-                    have_kg = self.M_reserve()
+                    # **Fostervävnad byggs av protein ur kvävepoolen (0216).**
+                    # Materialet är aminosyror, askan följer med utan egen
+                    # källa (mineraler är ingen valuta i modellen), och
+                    # byggkostnaden är syntesarbetet ur reserven.
+                    _p_per_kg = max(0.0, 1.0 - _structure)
+                    need_p = dM_want * _p_per_kg
+                    have_kg = float(self.N_pool)
 
-                    if have_kg < need_kg:
+                    if have_kg < need_p and _p_per_kg > 0.0:
                         _M_top = float(getattr(self, "_M_peak", 0.0))
                         _M_golv = (max(_M_min, float(AP.M_waste_frac) * _M_top)
                                    if _M_top > 0.0 else _M_min)
                         free = max(0.0, float(self.M) - _M_golv)
+                        # Katabolismen ger protein motsvarande `1 − s` av den
+                        # nedbrutna massan; kvävet går ut som urea, så poolen
+                        # fylls inte. Den här vägen finansierar alltså bara
+                        # syntesarbetet, inte materialet.
                         yield_kg = max(1e-12, (1.0 - _structure) * _cat_eff)
-                        dM_cat_gest = min((need_kg - have_kg) / yield_kg, free)
+                        dM_cat_gest = min((need_p - have_kg) / max(1e-12, yield_kg * _p_per_kg), free)
                         if dM_cat_gest >= free:
                             # Lika med tröskeln är död i (5); stanna strikt över.
                             dM_cat_gest = free * (1.0 - 1e-9)
@@ -2174,15 +2251,18 @@ class Body:
                             _k_cat_dmg = float(getattr(AP, 'k_cat_dmg', 1.0))
                             dD_cat = _k_cat_dmg * dM_cat_gest / max(float(self.M), 1e-9)
                             self.D = clamp(float(self.D) + dD_cat, 0.0, _D_max)
-                        have_kg = self.M_reserve()
+                        have_kg = float(self.N_pool)
 
-                    build_kg = min(dM_want, have_kg / kg_per_kg)
+                    build_kg = dM_want if _p_per_kg <= 0.0 else min(dM_want, have_kg / _p_per_kg)
                     if build_kg > 0.0:
                         out_gest_build = float(self.take_energy(build_kg * _gest_build_E_kg, dt=dt))
-                        # Fostret är ännu odifferentierad, labil vävnad; dess
-                        # struktur läggs på först vid födseln.
-                        dM_gest = self._take_reserve_mass(build_kg, dt, strypt=False)
-                        E_material += dM_gest * _E_labile
+                        if _gest_build_E_kg > 0.0:
+                            # Blev arbetet inte fullt betalt byggs mindre.
+                            build_kg = min(build_kg, out_gest_build / _gest_build_E_kg)
+                        p_used = build_kg * _p_per_kg
+                        self.N_pool = max(0.0, float(self.N_pool) - p_used)
+                        dM_gest = build_kg
+                        E_material += p_used * E_PROTEIN_J_PER_KG
                         if dM_gest > 0.0:
                             self.gest_M = M_cur + dM_gest
                             self.gest_E_J = float(self.gest_E_J) + out_gest_build
@@ -2197,7 +2277,7 @@ class Body:
         #
         # Reservgraden läses här, efter dräneringarna, så grinden bedömer det
         # som finns kvar i stället för det som var på väg att spenderas.
-        if deficit <= 0.0 and float(self.M) < _M_target:
+        if deficit <= 0.0 and float(self.M) < _M_target_dm:
             r_now = self.reserve_frac()
             gR0 = float(getattr(AP, 'growth_R_min', 0.30))
             gR1 = max(gR0 + 1e-9, float(getattr(AP, 'growth_R_full', 0.60)))
@@ -2212,31 +2292,35 @@ class Body:
                 # Somatisk vävnad byggs av reservmassa, ett kilo per kilo, med
                 # syntesarbetet som tilläggskostnad. Materialet stryper, inte
                 # byggkostnaden.
-                _kg_per_kg_growth = 1.0 + (_growth_build_E_kg / _E_labile)
                 # Samma kurva som `expected_mass`, uttryckt som hastighet.
+                # Massorna är torrsubstans sedan 0216; genomets `M_target` och
+                # `child_M` är våt levande massa och räknas om.
                 _r = growth_rate(
-                    max(float(AP.M_min), float(getattr(pheno, "child_M", AP.M_min))),
-                    _M_target,
+                    max(float(AP.M_min), float(getattr(pheno, "child_M", AP.M_min))) * LEAN_DM_FRAC,
+                    _M_target_dm,
                     max(1e-9, float(getattr(pheno, "A_mature", 1.0))),
                     float(self.M),
                 )
                 dM_want = min(_r * dt * growth_gate,
-                              _M_target - float(self.M))
-                dM_want = min(dM_want, self.M_reserve() / _kg_per_kg_growth)
+                              _M_target_dm - float(self.M))
+                # **Materialet är protein ur kvävepoolen (0216).** Askan följer
+                # med utan egen källa; mineraler är ingen valuta i modellen.
+                _p_per_kg = max(0.0, 1.0 - _structure)
+                if _p_per_kg > 0.0:
+                    dM_want = min(dM_want, float(self.N_pool) / _p_per_kg)
 
                 if dM_want > 0.0:
                     out_growth = float(self.take_energy(dM_want * _growth_build_E_kg, dt=dt))
-                    mat = self._take_reserve_mass(dM_want, dt, strypt=False)
+                    mat = dM_want
+                    if _growth_build_E_kg > 0.0:
+                        mat = min(mat, out_growth / _growth_build_E_kg)
                     if mat > 0.0:
+                        p_used = mat * _p_per_kg
+                        self.N_pool = max(0.0, float(self.N_pool) - p_used)
                         self.M = float(self.M) + mat
                         dM_growth = mat
-                        E_material += mat * _E_labile
-                        # Reserven är labil och näringsrik; vävnaden binder
-                        # mindre per kilo eftersom en del är strukturmaterial.
-                        # Mellanskillnaden utsöndras som kvävehaltigt avfall.
-                        self._release_nutrient(
-                            mat * (NUTRIENT_PER_KG_LABILE - _nut_tissue)
-                        )
+                        E_material += p_used * E_PROTEIN_J_PER_KG
+                        # Kvävet följer med in i vävnaden; ingenting utsöndras.
 
         # snapshot after drains/catabolism (for stress math)
         Et = float(self.E_total())
@@ -2351,18 +2435,17 @@ class Body:
         Et = float(self.E_total())
         Ecap = float(self.E_cap())
         if Et > Ecap:
-            # Vad som inte får plats i reserven lämnar kroppen som exkrement.
-            # Att radera det vore att förstöra massa: djuret hann äta upp det.
-            # Att i stället begränsa intaget vid källan är biologiskt renare men
-            # rör födosöket, och tas när kalibreringen är stabil.
+            # **Överskottet oxideras (0216).** Det utsöndrades tidigare som
+            # labil massa till detritus, men reserven är kvävefri: fett och
+            # glykogen har inget kväve att bära med sig, och att lägga massan i
+            # förnan hade skapat kväve ur ingenting. Massa är inte en sluten
+            # storhet; kvävet är. Att i stället begränsa intaget vid källan är
+            # biologiskt renare och hör till steg 2.
             # Ingen strypning: det här är utsöndring och inte mobilisering.
             # Med taket blev reservtaket mjukt — överskottet låg kvar över cap
             # tills lipolysen hann ikapp, vilket är precis det 0189 tog bort.
-            trim_kg = self._take_reserve_mass((Et - Ecap) / _E_labile,
-                                              strypt=False)
-            if trim_kg > 0.0:
-                self._void(trim_kg, 0.0)
-                E_overflow = trim_kg * _E_labile
+            E_overflow = float(self._take_reserve_energy(Et - Ecap, dt,
+                                                        strypt=False))
     
         # ---------------------------------------------------------
         # (5) Deterministic death conditions
@@ -2445,7 +2528,7 @@ class Body:
         E_from_M_total = float(E_from_M) + float(E_from_M_gest)
         dM_cat_total = float(dM_cat) + float(dM_cat_gest)
     
-        E_after = float(self.E_total())
+        E_after = float(self.E_store_total())
         M_after = float(self.M)
     
         expected_E_after = (
@@ -3171,12 +3254,15 @@ class Agent:
         self._mating_mode = False
 
     def _init_body_state_from_AP(self) -> None:
-        self.body.M = max(0.0, float(self.AP.M0))
+        self.body.M = max(0.0, float(self.AP.M0)) * LEAN_DM_FRAC
 
         E0 = max(0.0, float(self.AP.E0))
-        e_lab = float(self.AP.E_labile_J_per_kg)
-        self.body.M_fast = (0.85 * E0) / e_lab
-        self.body.M_slow = (0.15 * E0) / e_lab
+        # Poolerna har egna tätheter sedan 0216.
+        self.body.M_fast = (0.85 * E0) / E_GLYCOGEN_J_PER_KG
+        self.body.M_slow = (0.15 * E0) / E_LIPID_J_PER_KG
+        # En nyskapad kropp har ätit: kvävepoolen är full. Vid warm start
+        # bokförs den som tillförd näring, se `_book_initial_nutrient`.
+        self.body.N_pool = self.body.N_pool_cap()
 
         self.body.Tb = float(getattr(self.AP, "Tb_init", 37.0))
         
@@ -3711,10 +3797,11 @@ class Agent:
             err = self._signed_angle(math.atan2(dy, dx) - self.heading)
             mreq = max(float(self.AP.M_min),
                        float(getattr(self.pheno, "M_repro_min", 0.0)))
+            # `M_repro_min` är våt levande massa.
             drift = styrning.parningsdrift(
                 -float(getattr(self, "_repro_cd_s", 0.0)),
                 float(self.AP.repro_motivation_tau),
-                (float(self.body.M) - mreq) / max(mreq, 1e-9),
+                (self.body.M_lean_wet() - mreq) / max(mreq, 1e-9),
                 float(self.body.reserve_frac()),
             )
             st = drift * styrning.narhet(dist, float(self.AP.attack_range),
@@ -4689,7 +4776,8 @@ class Agent:
     
     def start_gestation(self, n: int = 1) -> bool:
         # `child_M` är kullens **totala** massa; `n` är hur den delas.
-        M_target = float(getattr(self.pheno, "child_M", 0.0))
+        # `child_M` är kullens våta massa; fostret bärs som torrsubstans.
+        M_target = float(getattr(self.pheno, "child_M", 0.0)) * LEAN_DM_FRAC
         return bool(self.body.start_gestation(M_target, n))
     
     def pay_repro_cost(self, cost_E_J: float, *, transfer: bool = False,
@@ -4733,7 +4821,8 @@ class Agent:
         if child_M_from_parent is not None:
             child_M = float(child_M_from_parent)
         else:
-            child_M = float(getattr(parent_pheno, "child_M", float(self.AP.M0) * 0.5))
+            child_M = (float(getattr(parent_pheno, "child_M", float(self.AP.M0) * 0.5))
+                       * LEAN_DM_FRAC)
     
         # **Ingen klämning här.** `max(M_birth_min, child_M)` skapade massa ur
         # ingenting när kullen delades tunt, och `Agent` har ingen förälder att
@@ -4747,21 +4836,21 @@ class Agent:
         Ef_J = max(0.0, float(child_E_fast_J)) if child_E_fast_J is not None else 0.0
         Es_J = max(0.0, float(child_E_slow_J)) if child_E_slow_J is not None else 0.0
     
-        e_lab = float(self.AP.E_labile_J_per_kg)
-        self.body.M_fast = Ef_J / e_lab
-        self.body.M_slow = Es_J / e_lab
+        # Poolerna har egna tätheter sedan 0216.
+        self.body.M_fast = Ef_J / E_GLYCOGEN_J_PER_KG
+        self.body.M_slow = Es_J / E_LIPID_J_PER_KG
+        # Ungen föds med tom kvävepool. Att ge den en full vore att skapa
+        # kväve ur ingenting; det modersmjölken skulle ha gett finns inte
+        # ännu (laktationen är väntetid, se revisionen L4).
+        self.body.N_pool = 0.0
     
         # ---- Clip to Ecap deterministiskt ----
-        # Överskottet raderas inte utan bokförs som exkrement, precis som i
-        # Body.step(). Barnet kan inte bära mer reserv än dess massa tillåter.
+        # Barnet kan inte bära mer reserv än dess massa tillåter.
         Et = float(self.body.E_total())
         Ecap = float(self.body.E_cap())
         if Et > Ecap:
-            e_lab_c = float(self.AP.E_labile_J_per_kg)
-            trim_kg = self.body._take_reserve_mass((Et - Ecap) / e_lab_c,
-                                                   strypt=False)
-            if trim_kg > 0.0:
-                self.body._void(trim_kg, 0.0)
+            # Överskottet oxideras; reserven är kvävefri (0216).
+            self.body._take_reserve_energy(Et - Ecap, strypt=False)
     
         # ---- Other body fields ----
         self.body.Fg = clamp(float(getattr(parent_pheno, "child_Fg", 0.15)), 0.0, 1.0)

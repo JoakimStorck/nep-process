@@ -21,6 +21,8 @@ from genetics import (
 import flora_growth
 from phenotype import (
     _T_SOC,
+    LEAN_DM_FRAC,
+    N_PER_KG_PROTEIN,
     derive_pheno,
     flora_adult_mass,
     dispersal_scale,
@@ -557,17 +559,26 @@ class Population:
             cs = np.asarray(world.carcass_structure)[cact].astype(np.float64)
             total += float(np.sum(c * nutrient_content_array(cs)))
 
+        # Floran bär näring efter strukturandelen; faunans vävnad bär
+        # proteinets kväve, `0,16·(1 − s)`, och dess reserv inget alls (0216).
         for slot in range(int(store.n)):
             if not bool(store.alive[slot]):
                 continue
-            total += float(store.mass[slot]) * nutrient_content(float(store.structure[slot]))
+            m = float(store.mass[slot])
+            st = float(store.structure[slot])
+            if int(store.kind[slot]) == 1:
+                total += m * nutrient_content(st)
+            else:
+                total += m * N_PER_KG_PROTEIN * (1.0 - min(1.0, max(0.0, st)))
 
-        e_lab = float(self.WP.E_labile_J_per_kg)
         for a in self.agents:
             if not a.body.alive:
                 continue
-            total += a.body.M_reserve() * NUTRIENT_PER_KG_LABILE
-            total += float(a.body.gest_M) * NUTRIENT_PER_KG_LABILE
+            slot = int(getattr(a, "store_slot", -1))
+            st = float(store.structure[slot]) if slot >= 0 else 0.25
+            _p = 1.0 - min(1.0, max(0.0, st))
+            total += float(a.body.N_pool) * N_PER_KG_PROTEIN
+            total += float(a.body.gest_M) * N_PER_KG_PROTEIN * _p
 
         world._nutrient_added_total += total
 
@@ -1130,7 +1141,8 @@ class Population:
         # `growth_k`. En brant kurva är fortfarande en fördel, men bara i den mån
         # kroppen kan finansiera den.
         M = float(store.mass[s])
-        Mreq = max(float(ag.AP.M_min), float(ag.pheno.M_repro_min))
+        # `store.mass` är torrsubstans sedan 0216; kraven är våt massa.
+        Mreq = max(float(ag.AP.M_min), float(ag.pheno.M_repro_min)) * LEAN_DM_FRAC
         if M < Mreq:
             return False
     
@@ -1263,7 +1275,7 @@ class Population:
         # mjuka grinden läser samma villkor som den hårda, av samma skäl som i
         # 0177: ett djur ska inte vara motiverat till det som är omöjligt.
         if float(store.mass[s]) < max(float(ag.AP.M_min),
-                                      float(ag.pheno.M_repro_min)):
+                                      float(ag.pheno.M_repro_min)) * LEAN_DM_FRAC:
             return False
 
         # Samma säsongsvillkor som den hårda grinden; se `_i_parningssasong`.
@@ -1516,20 +1528,29 @@ class Population:
         # körningarna och dominerande i de långa täta.
         #
         # Golvet är rimligt som livskraftsgräns, men det måste ha en betalare.
-        # Bäraren fyller på ur sin egen reserv; massan överförs och bränns inte,
-        # och `d_nut` nedan släpper mellanskillnaden mellan reservens labila
-        # näringshalt och vävnadens eftersom den räknas på det påfyllda
-        # `child_M`. Räcker reserven inte föds ungen på den massa som faktiskt
-        # byggdes, och fysiologin får avgöra om den är livskraftig — vilket är
-        # vad kommentaren till `M_birth_min` säger att den ska göra.
+        # Bäraren fyller på med **protein ur sin kvävepool** (0216) — samma
+        # material som fostret byggdes av — och betalar syntesarbetet ur
+        # reserven. Räcker poolen inte föds ungen på den massa som faktiskt
+        # byggdes, och fysiologin får avgöra om den är livskraftig.
         #
-        # Uppmätt: `_step_births` gick från +1,18e-03 kg obokförd näring per
-        # 200 tick på `liten6` till −5,0e-11, alltså float64-brus.
+        # Massorna är torrsubstans; `M_birth_min` är våt levande massa.
+        # 0210 mäter förälderns reserv; påfyllningen nedan läser poolen.
         _E_parent_pre = float(b.E_total())
-        brist = float(self.AP.M_birth_min) - child_M
+        brist = float(self.AP.M_birth_min) * LEAN_DM_FRAC - child_M
         if brist > 0.0:
-            betalt = float(b._take_reserve_mass(brist * n_kull, strypt=False))
-            child_M += betalt / n_kull
+            s_mor = float(store.structure[p_slot])
+            p_per_kg = max(0.0, 1.0 - min(1.0, max(0.0, s_mor)))
+            want = brist * n_kull
+            if p_per_kg > 0.0:
+                want = min(want, float(b.N_pool) / p_per_kg)
+            _ana = max(1e-9, float(getattr(self.AP, "anabolism_eff", 0.7)))
+            build_E_kg = float(self.AP.E_labile_J_per_kg) * (1.0 / _ana - 1.0)
+            if build_E_kg > 0.0 and want > 0.0:
+                paid = float(b.take_energy(want * build_E_kg, dt=float(ctx.dt)))
+                want = min(want, paid / build_E_kg)
+            if want > 0.0:
+                b.N_pool = max(0.0, float(b.N_pool) - want * p_per_kg)
+                child_M += want / n_kull
 
         b.abort_gestation()
         
@@ -1541,7 +1562,9 @@ class Population:
         # --- 1.4: Energi till barnet (dras från föräldern) ---
         # child_E_fast/slow är fraktioner av barnets energikapacitet — en livshistoriestrategi.
         # Barnets Ecap beräknas från dess massa och den delade AP-konstanten.
-        child_Ecap = float(self.AP.E_cap_per_M) * max(child_M, float(self.AP.M_birth_min))
+        # `E_cap_per_M` är J per kg **våt** mager massa (0216).
+        child_Ecap = float(self.AP.E_cap_per_M) * max(
+            child_M / LEAN_DM_FRAC, float(self.AP.M_birth_min))
         child_E_fast_J = float(parent.pheno.child_E_fast) * child_Ecap
         child_E_slow_J = float(parent.pheno.child_E_slow) * child_Ecap
         # Startenergin begärs för hela kullen; skalningen nedan fördelar det
@@ -1593,14 +1616,30 @@ class Population:
             ungar.append(child)
             self._efl_add("E_newborn", float(child.body.E_total()))
 
-            # Fostret bars som labil vävnad. Vid födseln får barnet sin egen
-            # strukturandel, och vävnaden binder mindre näring per kilo än
-            # reserven gjorde. Mellanskillnaden utsöndras till moderns cell.
+            # Fostret bars med moderns askandel. Vid födseln får barnet sin
+            # egen, och kvävet per kilo ändras därmed (0216). Mellanskillnaden
+            # utsöndras till, eller tas ur, moderns cell.
             s_child = float(getattr(child.pheno, "structure", 0.25))
-            d_nut = float(child_M) * (NUTRIENT_PER_KG_LABILE - nutrient_content(s_child))
+            s_mor = float(store.structure[p_slot])
+            d_nut = float(child_M) * N_PER_KG_PROTEIN * (
+                (1.0 - min(1.0, max(0.0, s_mor)))
+                - (1.0 - min(1.0, max(0.0, s_child))))
+            _cell_b = int(self.grid.cell_of(float(parent.x), float(parent.y)))
             if d_nut > 0.0:
-                self.world.add_nutrient(
-                    int(self.grid.cell_of(float(parent.x), float(parent.y))), d_nut)
+                self.world.add_nutrient(_cell_b, d_nut)
+            elif d_nut < 0.0:
+                # Ungen är mindre askrik än modern och bär därför mer kväve per
+                # kilo än materialet gjorde. Skillnaden tas ur cellen; räcker
+                # den inte krymps ungen, precis som floran krymper en planta
+                # vars cell inte kan betala.
+                behov = -d_nut
+                fick = float(self.world.take_nutrient(_cell_b, behov))
+                brist_n = behov - fick
+                if brist_n > 1e-15:
+                    nc = max(1e-12, N_PER_KG_PROTEIN
+                             * (1.0 - min(1.0, max(0.0, s_child))))
+                    krymp = min(float(child.body.M), brist_n / nc)
+                    child.body.M = float(child.body.M) - krymp
             self._flush_body_outputs(child)
 
         self._flush_body_outputs(parent)
@@ -1973,8 +2012,11 @@ class Population:
             else:
                 shrink = (age_s - 2.0 * A_mature) / max(A_mature, 1e-9)
                 M0     = adult_M * max(0.5, 1.0 - 0.2 * shrink)
+            # Massorna här är våt levande massa; tillståndet är torrsubstans.
             a.body.M = max(float(self.AP.M_min),
-                           M0 * float(self.rng.uniform(0.9, 1.1)))
+                           M0 * float(self.rng.uniform(0.9, 1.1))) * LEAN_DM_FRAC
+            # Startdjuren har ätit: kvävepoolen är full.
+            a.body.N_pool = a.body.N_pool_cap()
 
             # Slitage W: ackumulerat vid denna ålder
             a.body.W = (float(self.AP.wear_a0) * age_s
@@ -2038,9 +2080,10 @@ class Population:
                     continue
                 slot = int(getattr(a, "store_slot", -1))
                 st = float(self.store.structure[slot]) if slot >= 0 else 0.25
-                add += float(a.body.M) * nutrient_content(st)
-                add += a.body.M_reserve() * NUTRIENT_PER_KG_LABILE
-                add += float(a.body.gest_M) * NUTRIENT_PER_KG_LABILE
+                _p = 1.0 - min(1.0, max(0.0, st))
+                add += float(a.body.M) * N_PER_KG_PROTEIN * _p
+                add += float(a.body.N_pool) * N_PER_KG_PROTEIN
+                add += float(a.body.gest_M) * N_PER_KG_PROTEIN * _p
             self.world._nutrient_added_total += add
 
         return made
@@ -4554,11 +4597,15 @@ class Population:
                 # exkrement och kväve från sista ticken förlorade.
                 self._flush_body_outputs(a)
 
-                # Kadavret är fysisk massa: vävnad, reserv och foster vått (1a).
-                M_tissue = body.M_lean_wet()
-                M_res = body.M_reserve_wet()
-                M_fetus = body.M_fetus_wet() if bool(body.gestating) else 0.0
-                carcass_kg = M_tissue + M_res + M_fetus
+                # **Kadavret är torrsubstans (0216).** Världens pooler räknar
+                # torrt, som floran och förnan; kroppens vatten lämnar med
+                # dess massa och bokförs först när vattnet blir en storhet
+                # (steg 4 i docs/sammansattning-och-vatten.md).
+                M_tissue = float(body.M)
+                M_res = float(body.M_fast) + float(body.M_slow)
+                M_fetus = float(body.gest_M) if bool(body.gestating) else 0.0
+                M_npool = float(getattr(body, "N_pool", 0.0))
+                carcass_kg = M_tissue + M_res + M_fetus + M_npool
 
                 # Reserven och fostret är labil vävnad; bara den committade
                 # massan bär strukturmaterial. Kadavrets strukturandel blir
@@ -4567,7 +4614,10 @@ class Population:
                 # (1 - struktur) skalade upp reserven till kadaverekvivalenter
                 # och skapade massa vid varje dödsfall.
                 if carcass_kg > 1e-15:
-                    s_carc = min(1.0, max(0.0, M_tissue * struct / carcass_kg))
+                    # Askan sitter i vävnaden och i fostret; reserven och
+                    # kvävepoolen är rena.
+                    s_carc = min(1.0, max(0.0,
+                                          (M_tissue + M_fetus) * struct / carcass_kg))
                     self.world.add_carcass(
                         float(a.x),
                         float(a.y),
@@ -4575,6 +4625,25 @@ class Population:
                         rad=int(self.PP.carcass_rad),
                         structure=s_carc,
                     )
+                    # **Kväveöverskottet mineraliseras (0216).** Kadaverpoolen
+                    # härleder sitt kväve ur strukturandelen med växternas
+                    # konstanter och kan bära högst 3,3 % per kilo; djurens
+                    # magra torrsubstans bär ~13 %. Skillnaden går direkt till
+                    # cellens fria näring, vilket är vad ett verkligt kadaver
+                    # gör: det ger snabbt en kväverik fläck i marken. Kvar att
+                    # rätta i steg 2 är att kadavrets *energi* för asätare
+                    # räknas med förnans konstant och därför underskattar
+                    # fettet.
+                    _p = 1.0 - min(1.0, max(0.0, struct))
+                    N_body = (N_PER_KG_PROTEIN * _p * (M_tissue + M_fetus)
+                              + N_PER_KG_PROTEIN * M_npool)
+                    N_pool_world = carcass_kg * nutrient_content(s_carc)
+                    d_nut_death = N_body - N_pool_world
+                    _cell = int(self.grid.cell_of(float(a.x), float(a.y)))
+                    if d_nut_death > 0.0:
+                        self.world.add_nutrient(_cell, d_nut_death)
+                    elif d_nut_death < 0.0:
+                        self.world.take_nutrient(_cell, -d_nut_death)
 
                 # **Posten skrivs före nollställningen.** `death_record` läser
                 # `body.M` och `body.E_total()`, och de raderades på raderna
