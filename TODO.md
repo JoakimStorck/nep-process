@@ -2588,7 +2588,12 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0201~~ | förlustvägarna redovisas var för sig; sammanfattningens näringsrad räknar i månader | mätningen | **klart**, se nedan — bitidentisk bana; i `liten6` går 78 % av förlusten som förna till havet |
 | ~~—~~ | mättnadskörningen om: `f6-256-utan-fauna` 80 000 tick, `--world-every 12` | jämvikten | **klart**, `runs/p201`, se nedan — floran står nästan still, näringen inte |
 | ~~0202~~ | `nutrient_init` och `detritus_init` kalibreras mot p201:s jämvikt, inte mot 0086:s identitet | inkörningen | **klart**, se nedan — näringen inom 1–3 % av jämvikten från tick 0; faunan dör ut snabbare |
-| — | faunan bär sig inte i `f6-256`: utdöd vid månad ~84 före 0202 och ~24 efter, 93 av 94 döda av svält | ekologin | **öppen**, nästa — se 0202; hör ihop med 0197 och `f6-256-mager` |
+| — | faunan bär sig inte i `f6-256`: utdöd vid månad ~84 före 0202 och ~24 efter, 93 av 94 döda av svält | ekologin | **öppen**, nästa — trolig huvudorsak i `docs/revision-faunans-balans.md` (M1, F1, M3) |
+| — | poploggens energifält är en ticks ögonblicksbild, inte flöden; populationens energi saknar poster för födsel och död | mätningen | **öppen**, först — revisionen I1 |
+| — | termoregleringen räknar inte den metaboliska värmen: 0,6–1,2 × basal ovanpå underhållet | budgeten | **öppen** — revisionen M1 |
+| — | mobiliseringstaket gäller per anrop, inte per tick; dräktigheten går före underhållet och kataboliserar modern till `M_min` | budgeten | **öppen** — revisionen M5, L2 |
+| — | växtföda ger en tredjedel av sin energi (våt vävnads 9,3 MJ/kg på torrsubstans, cellulosa noll); fettet har samma täthet som labil vävnad | födobudgeten | **öppen**, principbeslut — revisionen F1, M3 |
+| — | startdjuren sätts in med 6 % reserv: 14 av 80 svälter inom en månad; nyfödda har ~3 ticks reserv | utgångsläget | **öppen** — revisionen, mätkörningen, L6 |
 | ~~0203~~ | passtidtagningen delar upp `_step_world_and_flora` i världens delpass, florans tre system och spatialindexet | mätningen | **klart**, se nedan — bitidentisk bana; hydro väntar på trådar under last |
 | ~~0204~~ | hydrokärnorna `soil_pass` och `derive_water` blir seriella | prestanda | **klart**, se nedan — −6,8 ms/tick (−14 %); banan oberoende av kärnantalet |
 | ~~0205~~ | passtidtagningen ser in i florapassen och spatialindexet: kärnan, skalets världsanrop, slotfrisläppning, etablering | mätningen | **klart**, se nedan — bitidentisk bana; mätningen vid jämvikt följer |
