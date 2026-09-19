@@ -2593,6 +2593,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0204~~ | hydrokärnorna `soil_pass` och `derive_water` blir seriella | prestanda | **klart**, se nedan — −6,8 ms/tick (−14 %); banan oberoende av kärnantalet |
 | ~~0205~~ | passtidtagningen ser in i florapassen och spatialindexet: kärnan, skalets världsanrop, slotfrisläppning, etablering | mätningen | **klart**, se nedan — bitidentisk bana; mätningen vid jämvikt följer |
 | ~~0206~~ | tillväxtkärnan läser och skriver store:n via `fl` i stället för 15 gathers och 6 scatters | prestanda | **klart**, se nedan — bitidentisk; −2,4 ms/tick (−6 %) |
+| ~~0207~~ | spatialindexets CSR-bygge och florafält i en numba-kärna, med numpys summeringsordning återskapad | prestanda | **klart**, se nedan — bitidentisk; −2,0 ms/tick (−5 %) |
 | — | sådden skapar plantor som inte bär sig: 20 % svälter ihjäl vid första ticken, 23 % efter 0202 | sådden | **öppen**, se p198 och 0202 |
 | — | ~~fröregnet halveras på ~100 mån~~ (falsifierat i p201: bottnar kring 220 frön/tick); 95 % av reproduktionspoolen hos omogna | florarevisionen | **öppen**, se p198 och p201 |
 | — | sammanfattningen saknar väg för en körning utan fauna: massakvot 2,9e17, "ingen omsättning alls" | mätningen | **öppen**, se p198 |
@@ -2716,6 +2717,47 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Spatialindexet i en kärna (0207)
+
+Prestanda. `rebuild_spatial_index` byggde CSR-layouten och florafälten i ett
+femtontal numpy-svep över alla levande organismer varje tick. Uppmätt steg
+för steg vid 214 000 plantor (5,7 ms för helheten): florafältens gathers och
+masker 1,3 ms, två `reduceat` 1,0, sorteringens gathers och skrivningen till
+`cell_slots` 0,6, counting sort 0,36, cellernas gathers 0,32.
+
+Allt från celltillhörigheten till florafälten görs nu i
+`_csr_and_flora_fields`: counting sort direkt över de levande slotarna med
+`cell_idx` som nyckel och skrivning rakt in i `cell_slots`, grupperna ur
+räknarna i stigande cellordning, och florans skottmassa och massa gånger
+struktur summerade per cell. Id-uppslaget och nollningen av förra byggets
+fält står kvar i numpy (~0,4 ms). Utan numba används numpy-vägen med stabil
+argsort; `_counting_sort_order` har inget anrop kvar och är borttagen.
+
+**Summeringsordningen.** `np.add.reduceat` summerar inte sekventiellt: den
+initierar med segmentets första element och lägger till `pairwise_sum` av
+resten, som från åtta element använder åtta ackumulatorer — och en cell har
+upp till tio plantor. `_pairwise_sum` återskapar numpys algoritm för float64
+med steg ett. Verifierad isolerat: 0 av 460 000 summor skiljer bitvis, för
+segment om 1–1 000 element, numpy 2.4.2. Algoritmen är numpys interna; en
+framtida version som ändrar den fångas av bitprovet.
+
+**Bitprov** mot `360ad38`: utskrifterna identiska, och alla 86
+tillståndsarrayer och ledgersummor — inklusive `cell_slots`, `idx_cells`,
+`idx_starts` och florafälten — bitvis lika efter `liten6` 400 tick och
+`f6-256-utan-fauna` 300 tick. Numpy-reserven ger samma tillstånd; enda
+skillnaden är skrivbufferten `_csr_cursor`, som den inte använder.
+
+**Utfall**, `f6-256-utan-fauna` tick 200–700 (204 000 plantor), omväxlande:
+
+```
+                            HEAD           0207
+totalt                 38,0 / 38,2    36,1 / 36,2   ms/tick
+rebuild_spatial_index   5,8 / 5,8     3,7 / 3,8
+```
+
+−2,0 ms, 5 %. Kvar i kärnan är främst att läsa plantorna i cellordning,
+alltså spridda åtkomster över fyra slotarrayer.
 
 ### Tillväxtkärnan läser store:n på plats (0206)
 

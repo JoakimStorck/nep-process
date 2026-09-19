@@ -8,9 +8,10 @@ import numpy as np
 
 from phenotype import buoyancy_from_structure, structure_fraction
 
-# Numba är valfri. Finns den används en counting sort för CSR-bygget; annars
-# faller koden tillbaka på np.argsort. Permutationerna är bitidentiska, så
-# fallbacken ger samma bana — bara långsammare.
+# Numba är valfri. Finns den byggs CSR-layouten och florafälten i en kärna
+# (`_csr_and_flora_fields`); annars faller koden tillbaka på numpy med stabil
+# argsort och reduceat. Resultaten är bitidentiska, så fallbacken ger samma
+# bana — bara långsammare.
 try:
     from numba import njit as _njit
 
@@ -67,36 +68,155 @@ _NON_SLOT_ARRAYS = frozenset({
 
 
 @_njit(cache=True, nogil=True)
-def _counting_sort_order(cells, cursor):
+def _pairwise_sum(a, lo, n):
     """
-    Stabil gruppering av begränsade heltalsnycklar. O(n + n_cells).
+    `numpy`:s `pairwise_sum` för float64 med steg ett, återskapad exakt.
 
-    Ger exakt samma permutation som `np.argsort(cells, kind="stable")`, men
-    utan jämförelser: räkna, kumulera, strö ut. Elementen besöks i
-    ursprunglig ordning, vilket är det som gör den stabil.
-
-    `cursor` är en återanvänd skrivbuffert med längd n_cells. Att den finns
-    återinför en O(n_cells)-term som Steg 5 tog bort ur indexet — men den
-    kostar två linjära svep, uppmätt 2,0 ms vid en miljon celler, mot
-    argsortens 39. Bytet är alltså kraftigt positivt även vid den skalan.
+    Under åtta element sekventiellt från noll; upp till 128 med åtta
+    ackumulatorer som slås ihop parvis; större block halveras rekursivt på en
+    multipel av åtta. Det är den ordning `np.add.reduce` och `reduceat`
+    summerar sammanhängande float64 i, och den måste följas bit för bit för
+    att indexbygget ska ge samma florafält som numpy-vägen. Verifierad mot
+    numpy 2.4.2 på 460 000 segment om 1–1 000 element; en framtida numpy som
+    byter ordning fångas av bitprovet, inte av den här koden.
     """
-    n = cells.shape[0]
+    if n < 8:
+        res = 0.0
+        for i in range(n):
+            res += a[lo + i]
+        return res
+    if n <= 128:
+        r0 = a[lo]
+        r1 = a[lo + 1]
+        r2 = a[lo + 2]
+        r3 = a[lo + 3]
+        r4 = a[lo + 4]
+        r5 = a[lo + 5]
+        r6 = a[lo + 6]
+        r7 = a[lo + 7]
+        i = 8
+        end = n - (n % 8)
+        while i < end:
+            r0 += a[lo + i]
+            r1 += a[lo + i + 1]
+            r2 += a[lo + i + 2]
+            r3 += a[lo + i + 3]
+            r4 += a[lo + i + 4]
+            r5 += a[lo + i + 5]
+            r6 += a[lo + i + 6]
+            r7 += a[lo + i + 7]
+            i += 8
+        res = ((r0 + r1) + (r2 + r3)) + ((r4 + r5) + (r6 + r7))
+        while i < n:
+            res += a[lo + i]
+            i += 1
+        return res
+    n2 = n // 2
+    n2 -= n2 % 8
+    return _pairwise_sum(a, lo, n2) + _pairwise_sum(a, lo + n2, n - n2)
+
+
+@_njit(cache=True, nogil=True)
+def _csr_and_flora_fields(live, cell_idx, kind, mass, root_mass, structure,
+                          cursor, cell_slots, flora_cell_mass,
+                          flora_cell_structure, with_flora):
+    """
+    Celltillhörigheten och de härledda florafälten i ett svep per steg (0207).
+
+    Samma resultat som numpy-vägen i `rebuild_spatial_index` — gathers,
+    counting sort, gruppgränser, två `reduceat` och scatter — men utan de
+    femton mellanliggande arrayerna över alla levande organismer:
+
+    - counting sort direkt över `live` med `cell_idx` som nyckel; slotarna
+      besöks i stigande ordning, så grupperingen är stabil och skrivs rakt in
+      i `cell_slots`;
+    - grupperna läses i stigande cellordning ur räknarna;
+    - florans skottmassa och massa gånger struktur summeras per cell med
+      `np.add.reduceat`:s ordning — första elementet plus `_pairwise_sum` av
+      resten — så att fälten blir bitidentiska.
+
+    Returnerar (idx_cells, idx_starts, flora_cells). `m == 0` ger tomma
+    arrayer; anroparen behåller då sina standardvärden.
+    """
+    nl = live.shape[0]
     nc = cursor.shape[0]
     for c in range(nc):
         cursor[c] = 0
-    for i in range(n):
-        cursor[cells[i]] += 1
-    run = 0
+    m = 0
+    for k in range(nl):
+        c = cell_idx[live[k]]
+        if c >= 0:
+            cursor[c] += 1
+            m += 1
+    n_groups = 0
     for c in range(nc):
-        k = cursor[c]
+        if cursor[c] > 0:
+            n_groups += 1
+    idx_cells = np.empty(n_groups, np.int64)
+    idx_starts = np.empty(n_groups + 1, np.int64)
+    run = 0
+    g = 0
+    for c in range(nc):
+        cnt = cursor[c]
         cursor[c] = run
-        run += k
-    order = np.empty(n, np.int64)
-    for i in range(n):
-        c = cells[i]
-        order[cursor[c]] = i
-        cursor[c] += 1
-    return order
+        if cnt > 0:
+            idx_cells[g] = c
+            idx_starts[g] = run
+            g += 1
+        run += cnt
+    idx_starts[n_groups] = m
+    for k in range(nl):
+        sl = live[k]
+        c = cell_idx[sl]
+        if c >= 0:
+            cell_slots[cursor[c]] = sl
+            cursor[c] += 1
+
+    if not with_flora or m == 0:
+        return idx_cells, idx_starts, np.empty(0, np.int64)
+
+    # Florans värden i sorterad ordning, som numpy-vägens maskade gathers.
+    fm = np.empty(m, np.float64)
+    fp = np.empty(m, np.float64)
+    nf = 0
+    n_fc = 0
+    for gi in range(n_groups):
+        had = False
+        for t in range(idx_starts[gi], idx_starts[gi + 1]):
+            sl = cell_slots[t]
+            if kind[sl] == 1:
+                d = np.float64(mass[sl]) - np.float64(root_mass[sl])
+                # np.maximum(0.0, d): noll vid d <= 0, NaN släpps igenom.
+                if not (d > 0.0 or d != d):
+                    d = 0.0
+                fm[nf] = d
+                fp[nf] = d * np.float64(structure[sl])
+                nf += 1
+                had = True
+        if had:
+            n_fc += 1
+    flora_cells = np.empty(n_fc, np.int64)
+    lo = 0
+    f = 0
+    for gi in range(n_groups):
+        cnt = 0
+        for t in range(idx_starts[gi], idx_starts[gi + 1]):
+            if kind[cell_slots[t]] == 1:
+                cnt += 1
+        if cnt == 0:
+            continue
+        msum = fm[lo] + _pairwise_sum(fm, lo + 1, cnt - 1)
+        ssum = fp[lo] + _pairwise_sum(fp, lo + 1, cnt - 1)
+        c = idx_cells[gi]
+        flora_cell_mass[c] = np.float32(msum)
+        den = msum
+        if not (den >= 1e-30 or den != den):
+            den = 1e-30
+        flora_cell_structure[c] = np.float32(ssum / den)
+        flora_cells[f] = c
+        f += 1
+        lo += cnt
+    return idx_cells, idx_starts, flora_cells
 
 
 def _group_starts(sorted_keys: np.ndarray) -> np.ndarray:
@@ -716,7 +836,22 @@ class OrganismStore:
             )
             self._ids_prev = set_ids
 
-        # --- celltillhörighet ---
+        # --- celltillhörighet och härledda florafält ---
+        if _HAVE_NUMBA:
+            idx_cells, idx_starts, fu = _csr_and_flora_fields(
+                live, self.cell_idx, self.kind, self.mass, self.flora_root_mass,
+                self.structure, self._csr_cursor, self.cell_slots,
+                self.flora_cell_mass, self.flora_cell_structure,
+                bool(with_flora_fields),
+            )
+            if idx_starts.size > 1:
+                self.idx_cells = idx_cells
+                self.idx_starts = idx_starts
+                if with_flora_fields and fu.size:
+                    self._flora_cells_prev = fu
+            return
+
+        # Numpy-vägen: samma resultat utan numba.
         cells = self.cell_idx[live].astype(np.int64, copy=False)
         placed = cells >= 0
         if not np.any(placed):
@@ -725,14 +860,8 @@ class OrganismStore:
         live_c = live[placed]
         cells_c = cells[placed]
 
-        # Counting sort när numba finns, annars argsort. Permutationen är
-        # densamma; argsorten var uppmätt 3,9 ms vid 47 000 organismer och
-        # 39 ms vid 350 000 — superlinjär, och körd två gånger per tick. Den
-        # var därmed den enskilt största posten i profilen vid stora bestånd.
-        if _HAVE_NUMBA:
-            order = _counting_sort_order(cells_c, self._csr_cursor)
-        else:
-            order = np.argsort(cells_c, kind="stable")
+        # Stabil argsort ger samma permutation som counting sort i kärnan.
+        order = np.argsort(cells_c, kind="stable")
         sorted_cells = cells_c[order]
         sorted_slots = live_c[order]
         m = int(sorted_slots.size)
