@@ -2592,7 +2592,8 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0210~~ | poploggens energi som flöden över loggintervallet, med poster för allt som ändrar reserven utanför `Body.step`; populationens energi stänger | mätningen | **klart**, se nedan — bitidentisk bana; resten 9e-15 |
 | ~~0211~~ | `docs/sammansattning-och-vatten.md`: torrsubstans och vatten som två tillstånd, kemisk sammansättning, fiberjäsning, djurens vätskebalans | planen | **klart**, designskiss — serien i sex steg står i dokumentet |
 | ~~0212~~ | termoregleringen räknar av den metaboliska värmen; bara det som fattas produceras särskilt | budgeten | **klart**, se nedan — termo 0,5 → 0,02 × basal; faunan lever längre men bär sig inte |
-| — | mobiliseringstaket gäller per anrop, inte per tick; dräktigheten går före underhållet och kataboliserar modern till `M_min` | budgeten | **öppen** — revisionen M5, L2 |
+| ~~0213~~ | mobiliseringstaket gäller per tick, delat av alla strypta uttag | budgeten | **klart**, se nedan — rättelse; utfallet inom frönas spridning |
+| — | dräktigheten går före underhållet och kataboliserar modern till `M_min` | budgeten | **öppen**, nästa — revisionen L2 |
 | — | växtföda ger en tredjedel av sin energi (våt vävnads 9,3 MJ/kg på torrsubstans, cellulosa noll); fettet har samma täthet som labil vävnad | födobudgeten | **öppen**, principbeslut — revisionen F1, M3 |
 | — | startdjuren sätts in med 6 % reserv: 14 av 80 svälter inom en månad; nyfödda har ~3 ticks reserv | utgångsläget | **öppen** — revisionen, mätkörningen, L6 |
 | ~~0203~~ | passtidtagningen delar upp `_step_world_and_flora` i världens delpass, florans tre system och spatialindexet | mätningen | **klart**, se nedan — bitidentisk bana; hydro väntar på trådar under last |
@@ -2725,6 +2726,39 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Mobiliseringstaket per tick (0213)
+
+Dynamikändring, en rättelse. Taket på hur mycket av `M_slow` som får
+mobiliseras strypt, `mobil_max_x_basal · P_basal · dt`, räknades om i varje
+anrop till `_take_reserve_mass`. Underhållet, efterbetalningen efter
+katabolism, reparationen, byggarbetet och avgifterna utanför steget fick
+därför var sitt tak — uppmätt 7,7 × basal per tick mot avsedda 2 ×
+(revisionen M5). `Body` bär nu `_slow_mobil_used`, som nollställs i början av
+`step` och delas av alla strypta uttag i ticken; uttag senare i samma tick —
+parning, attack, reproduktionens avgift — delar på det som steget lämnar.
+Isolerat: fyra uttag ger tillsammans exakt 2,0 × basal.
+
+**Utfall**, tre frön, HEAD (0212) mot 0213 (`runs/p213`):
+
+```
+f6-256, 1 200 tick        födslar        djurmånader       attackkostnad strypt
+  HEAD                    52 / 63 / 44   847 / 1059 / 595   0,0 %
+  0213                    24 / 57 / 46   715 / 879 / 607    8,1 %
+liten6, 3 000 tick        utdöd vid mån
+  HEAD                    20 / 23 / 20   502 / 334 / 239
+  0213                    25 / 22 / 19   378 / 285 / 212
+```
+
+Underhållet, som tas först i ticken, stryps i högst 0,3 % av anropen både
+före och efter; det är de senare uttagen som nu möter taket. Skillnaden i
+faunans öde ligger inom spridningen mellan fröna. Rättelsen är alltså en
+korrekthetsfråga, inte en av orsakerna till att faunan inte bär sig.
+
+Kvar från revisionen (A6): byggarbetet tas strypt medan materialet tas
+ostrypt, fast docstringen säger att byggande inte ska strypas. Det rör inte
+taket och lämnas till en egen patch. Invariantsviten godkänd i alla tolv
+körningar.
 
 ### Den metaboliska värmen värmer kroppen (0212)
 

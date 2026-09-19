@@ -1108,6 +1108,11 @@ class Body:
 
     alive: bool = True
 
+    # Hur mycket av `M_slow` som mobiliserats strypt sedan tickens början
+    # (0213). Taket är en takt per tick och delas av alla strypta uttag i
+    # ticken; nollställs i början av `step`.
+    _slow_mobil_used: float = 0.0
+
     # energy ledger diagnostics (per-individual)
     last_ledger: dict | None = None
     last_flux: dict | None = None
@@ -1252,7 +1257,15 @@ class Body:
                 P_basal = float(AP.k_basal) * (M_carry ** 0.75)
                 tak = (float(AP.mobil_max_x_basal) * P_basal * float(dt)
                        / float(AP.E_labile_J_per_kg))
-                d_slow = min(rest, tak)
+                # **Taket gäller per tick, inte per anrop (0213).** Det räknades
+                # om i varje anrop, så underhållet, efterbetalningen,
+                # reparationen, byggarbetet och avgifterna fick var sitt tak:
+                # uppmätt 7,7 × basal per tick mot avsedda 2 × (revisionen M5).
+                kvar = tak - float(self._slow_mobil_used)
+                if kvar < 0.0:
+                    kvar = 0.0
+                d_slow = min(rest, kvar)
+                self._slow_mobil_used = float(self._slow_mobil_used) + d_slow
             else:
                 d_slow = min(rest, float(self.M_slow))
             self.M_slow = max(0.0, float(self.M_slow) - d_slow)
@@ -1717,6 +1730,10 @@ class Body:
         # ---------------------------------------------------------
         # (0B) Ledger baselines
         # ---------------------------------------------------------
+        # Mobiliseringstakets budget för ticken börjar här. Uttag senare i
+        # samma tick — parning, attack, reproduktionens avgift — delar på det
+        # som steget lämnar.
+        self._slow_mobil_used = 0.0
         E_before = float(self.E_total())
         M_before = float(self.M)
 
