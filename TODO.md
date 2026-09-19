@@ -2596,7 +2596,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | — | ~~fröregnet halveras på ~100 mån~~ (falsifierat i p201: bottnar kring 220 frön/tick); 95 % av reproduktionspoolen hos omogna | florarevisionen | **öppen**, se p198 och p201 |
 | — | sammanfattningen saknar väg för en körning utan fauna: massakvot 2,9e17, "ingen omsättning alls" | mätningen | **öppen**, se p198 |
 | — | världsloggens `nutrient_in_flora` är bara vävnaden; reserven och reproduktionspoolen, 56 % av florans näring, saknas | mätningen | **öppen**, se p201 |
-| — | **mål: halverad körtid.** ms/tick i `f6-256-utan-fauna` vid jämvikt efter 0202 (~250 000 plantor), fast frö, mätt på den här maskinen på ledig maskin. Baslinje 49,6 ms/tick (p203-trad, standardens 24 trådar), mål ~25. Fauna-varianten läggs till när faunan bär sig | prestanda | **pågår** — 0204: ~43; nästa är tillväxtpassets inre (58 %), se 0204 |
+| — | **mål: halverad körtid.** ms/tick i `f6-256-utan-fauna` vid jämvikt efter 0202 (~250 000 plantor), fast frö, mätt på den här maskinen på ledig maskin. Baslinje 49,6 ms/tick (p203-trad, standardens 24 trådar), mål ~25. Fauna-varianten läggs till när faunan bär sig | prestanda | **pågår** — efter 0204: 43,2 (p205); nästa är tillväxtskalet och spatialindexet, se mätningen efter 0205 |
 | — | `f6-256-mager` 800 tick: 36 → 15 djur; magra världen har inte flora nog utan förnan | ekologin | **öppen**, kör `f6-256` |
 | — | skade- och reparationssystemet är nästan inert: `D` har medianen 0,0000 och `repair_capacity` binder i 2 % av tickarna | selektionen | **öppen**, nästa |
 | — | barnets startreserv betalas till 43–74 %; föräldern har inte råd med den redan minimala gåvan | livshistorien | **öppen**, hör ihop med `E_cap_per_M` |
@@ -2715,6 +2715,45 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Florapassens inre vid jämvikt (p205)
+
+*Mätning med 0205:s passtidtagning, `runs/p205-jamvikt`: `f6-256-utan-fauna`
+till tick 15 000, sedan tre fönster om 1 000 tick vid ~248 000 plantor, ledig
+maskin. Fönstren ligger inom 0,1 ms/tick av varandra. Ingen kodändring.*
+
+```
+pass                                     ms/tick   andel
+totalt                                     43,2
+_growth_system_flora                       25,0     58 %
+  flora_growth.growth_kernel               17,1     40 %
+  world.excrete_cells (3 anrop)             2,0      5 %
+  _release_flora_slot (83 anrop)            0,5      1 %
+  world.temperature_of_cells                0,3      1 %
+  store.set_flora_claims                    0,2      0 %
+  skalets egen tid (rest)                  ~4,9     11 %
+_dispersal_system_flora                     7,25    17 %
+  _add_or_create_flora_in_cell (85 anrop)   1,6      4 %
+  passets egen tid (rest)                  ~5,6     13 %
+store.rebuild_spatial_index                 7,2     17 %
+  _clear_prev_id_entries                    0,3      1 %
+world.step                                  3,6      8 %
+  transport 1,4 · nedbrytning 0,8 · hydro 0,6 · sediment 0,5
+```
+
+Skalets egen tid är gathers av femton store-arrayer över florans slots,
+sex scatters tillbaka, tio `np.empty` och slumptalen. Spatialindexet bygger
+om hela CSR-layouten och florafälten varje tick i ett femtontal
+numpy-svep, eftersom florans massa ändras varje tick.
+
+**Amdahl, från 43,2 ms mot målet ~25.** Tillväxtskalet (inklusive
+`excrete_cells`, 6,9 ms) och spatialindexet (7,2 ms) är båda svep över
+samma slots som kan slås ihop, och bör gå att göra bitidentiskt —
+uppskattningsvis 7–10 ms tillsammans. Spridningens egen kod (5,6 ms) är
+inte läst. Tillsammans räcker de till ~30–33 ms; målet kräver också
+kärnan, 17,1 ms eller 69 ns per planta, och där äger numpy-vägen
+semantiken — en ändring av aritmetiken är en fråga om accepterad
+avvikelse, inte en ren prestandapatch.
 
 ### Passtidtagningen ser in i florapassen (0205)
 
