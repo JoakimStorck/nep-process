@@ -65,9 +65,8 @@ arbetsträdet, diffa utskrifterna med tidtagningsrader bortfiltrerade
 (`ms/tick`, `uppstart`, `på …s`). Noll skillnad krävs.
 
 Tidsåtgång att räkna med innan ett kommando startas: rökprovet tar under en
-minut; f6-256-skala kostar drygt två minuter i uppstart (135 s uppmätt i
-sandlådan i 0199, inte ommätt på den här maskinen) plus ~70 ms/tick
-(p198: 40 000 tick på 2848 s), så
+minut; f6-256-skala kostar ~40 s i uppstart plus ~70 ms/tick på ledig maskin
+(p201: 80 000 tick på 99 minuter), så
 långkörningar (tiotusentals tick) startas i bakgrunden med `nohup … &` mot
 en egen katalog under `runs/`.
 
