@@ -285,6 +285,89 @@ Kvar att följa: **faunans livskraft** mäts efter varje steg. Rätt fysik
 behöver inte ge livskraftiga djur — dör de ut med rätt fysik är det en annan
 mekanism som saknas.
 
+## Steg 1 i detalj: djurkroppens sammansättning och kväve
+
+*Specificerat och genomgånget 2026-09-20. Fem delpatchar, en ändring per commit.*
+
+### Tillstånd
+
+Kroppens tillstånd byter från våt massa till torrsubstans per komponent:
+`M` blir torr mager vävnad (protein och aska), `M_fast` glykogen, `M_slow`
+lipid, `gest_M` torr fostervävnad, och `N_pool` tillkommer som fria
+aminosyror mätta i proteinekvivalent torrsubstans. Den våta massan härleds
+med fasta vattenhalter tills vattnet blir ett tillstånd i steg 4:
+
+```
+M_våt = M/0,27 + M_fast·4 + M_slow/0,85 + N_pool + gest_M/0,20
+```
+
+mager vävnad 73 % vatten (Pace & Rathbun), glykogen ~3 kg vatten per kg,
+fettväv 85 % lipid, foster ~80 % vatten. Den våta massan används av allt som
+är fysik: Kleiber, `M_carry`, värmeledning, rörelse, flytkraft, betets `M^0,5`
+och predationen.
+
+### Kemin
+
+Per kg torrsubstans, metaboliserbart: glykogen 17,2 MJ, lipid 37,7 MJ
+(39,3 brutto), protein 17,2 MJ (23,6 brutto; skillnaden är urea och värme)
+med 0,16 kg kväve per kg. Djurens `s` är **askandelen** i den magra
+torrsubstansen; kvävet per kg blir `0,16·(1 − s)`. Växtkonstanterna
+`nutrient_content(s)` gäller inte längre djurvävnad.
+
+### Kvävets flöden
+
+Assimilerat protein går till `N_pool`; tillväxt och foster tar protein
+därifrån; överskott deamineras, kolskelettets energi går till reserven och
+kvävet ut som urea till cellen. Den obligatoriska kväveförlusten är Brodys
+~2 mg N per kcal basalmetabolism (4,8e-10 kg N per J) och tas ur poolen
+först, ur mager vävnad sedan. Utan den har ett vuxet djur inget kvävebehov,
+och Liebigs lag kan inte binda.
+
+### Bokföringen
+
+`in_fauna = 0,16·(1−s)·M + 0,16·N_pool + 0,16·(1−s_f)·gest_M`; reserverna bär
+inget kväve. `N_pool` får en egen energiterm i ledgern och i 0210:s poster.
+
+### Delpatchar
+
+| | innehåll | typ |
+|---|---|---|
+| 1a | `M_wet()` och den härledda våta massan, införd där fysiken läser; vattenhalterna är 1, så ändringen är bitidentisk | refaktor |
+| 1b | tillstånden blir torrsubstans med vattenhalterna ovan; reserverna får sina tätheter; `reserve_cap` och `E_cap_per_M` blir J per kg **våt** massa; `fast_frac` fördelar energi; isolering och flytkraft läser fettvävens våta andel | dynamik |
+| 1c | `N_pool`, kvävefria reserver, deaminering, urea, endogen förlust, kvävebegränsad tillväxt och fosterbygge; invarianten och ledgern följer | dynamik |
+| 1d | kadavrets kväveöverskott mineraliseras vid döden | dynamik |
+| 1e | verklig inlagringseffektivitet: protein k≈0,5, fett k≈0,75, glykogen k≈0,95; byggvärmen räknas i termoregleringen; fostrets underhåll som egen dränering (Kleiber på fostrets massa) i stället för ARC:s sammanslagna konceptus-k | dynamik |
+
+### Beslut i detalj (2026-09-20)
+
+**Kadavret (1d).** Världens pooler beskriver material med `s` och
+växtkonstanterna och kan bära högst 3,3 % kväve per kg. Djurens magra
+torrsubstans har ~13 %. Vid döden läggs kadavret in med labil näringshalt och
+kväveöverskottet mineraliseras direkt till cellens fria näring — verkliga
+kadaver ger snabbt en kväverik fläck. Kadavrets energi för asätare
+underskattas därmed, eftersom fettet räknas som labil vävnad: **känd
+förenkling som tas bort i steg 2**, när födans sammansättning modelleras och
+kadaver är föda. Storleken talar för det: faunan i `f6-256` bär ~2–3 kg kväve
+mot världens ~10 000, och kadaver var 0,0 % av födan i 0197:s mätning.
+
+**Strukturandelen (1b, 1c).** `s` tolkas som askandel, intervallet 0,05–0,85
+står kvar: mjukkroppade djur i ena änden, skalbärare i den andra, däggdjur
+vid 0,15–0,20. Startdjurens median 0,44–0,64 är i praktiken standardgenomets
+mittvärde och inte ett selektionsutfall; **de sätts in med ~0,15–0,20 via
+scenariot** och selektionen får avgöra därifrån. Med kvävebegränsningen i 1c
+blir axeln en äkta avvägning: hög askandel sparar kväve — kropp av mineral i
+stället för protein — och kostar energi vid svält, tyngre kropp och sämre
+flytkraft. **Askan har ingen källa**: mineraler är ingen valuta i modellen,
+bara kvävet, och askan byggs av reservmassa mot enbart energi. Känd
+förenkling, av samma slag som att växternas kol kommer ur luften.
+
+**Inlagringen (1e).** Dagens overhead är 0,43 av materialets energi för all
+vävnad, och att lagra intaget i reserven är gratis. Verkliga tal ger ~24 MJ
+per kg protein, ~13 per kg lipid och ~1 per kg glykogen. Det gör djuren
+dyrare att driva — värmeökningen efter måltid är 10–30 % av intaget i
+verkligheten — medan steg 2 gör födan tre gånger energirikare. Mellanläget
+blir sämre; varje steg mäts för sig.
+
 ## Mätpunkter
 
 - Intag per kg kroppsvikt och dygn, i färsk och torr massa, mot 5–6 % torrt
