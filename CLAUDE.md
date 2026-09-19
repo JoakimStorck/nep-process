@@ -16,9 +16,8 @@ commitmeddelanden och dokument skrivs på svenska.
   uppdaterad — en ändring är inte klar förrän dess rad och sektion finns.
   Städcommits som bara rör arbetsordningen (CLAUDE.md, `.gitignore`) får
   ingen rad.
-- Nya rader får commitens datum (`2026-09-19`) i första kolumnen där
-  historiken har ett patchnummer, och sektionsrubriken bär datumet inom
-  parentes på samma sätt.
+- Raden bär patchnumret i första kolumnen (överstruket när den är klar),
+  och sektionsrubriken bär numret inom parentes: `### Kort rubrik (0201)`.
 - `patches/` är arkivet med de gamla patch- och difffilerna. Den ignoreras
   av git; historiken finns i git-loggen.
 - `docs/` bär de längre analyserna (livscykel, statusanalyser, revisioner).
@@ -38,11 +37,13 @@ commitmeddelanden och dokument skrivs på svenska.
    0117, tillbakadragen 4 augusti — en procent långsammare på tolv kärnor,
    och Amdahl-räkningen hade gått att göra i förväg.)
 3. **En ändring per commit.** Instrumentering och dynamikändring blandas
-   aldrig i samma commit. Committiteln är en kort svensk mening om vad som
-   var fel eller vad som ändras, i historikens stil (`förnan var inte
-   föda`). Numreringen är avslutad efter 0200 (0xxx löpande, 7xxx för
-   Steg 7:s geologi och vatten); de gamla numren gäller fortfarande som
-   referenser i TODO.md och git-loggen.
+   aldrig i samma commit. Varje patch numreras löpande med fyra siffror i
+   committiteln, följt av en kort svensk mening om vad som var fel eller
+   vad som ändras: `0201: kort beskrivning`. Nästa nummer är det högsta
+   0xxx-numret i `git log` plus ett. Numret är referensen i TODO.md och i
+   löptext ("se 0190") — det tål omskrivning, vilket hashen inte gör.
+   7xxx-serien var Steg 7:s geologi och vatten och fortsätts inte.
+   Städcommits som bara rör arbetsordningen är onumrerade.
 4. **Bitidentisk bana är måttstocken** för instrument- och
    prestandapatchar: kör referensen på ren HEAD och den patchade koden med
    samma frö, jämför alla loggrader utom tidtagning — och vid minsta tvivel
