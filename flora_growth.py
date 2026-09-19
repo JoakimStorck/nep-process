@@ -568,3 +568,79 @@ def _growth_kernel_impl(
 
 
 growth_kernel = _njit(cache=True, nogil=True)(_growth_kernel_impl)
+
+
+# ---------------------------------------------------------------------------
+# Spridningspassets svep över hela floran (0208)
+# ---------------------------------------------------------------------------
+# `Population._dispersal_system_flora` avgör vilka plantor som kan sätta frö
+# och bygger trängselfältet, båda över alla plantor, medan resten av passet
+# bara rör de fåtal mödrar som faktiskt sår. De två kärnorna nedan gör
+# helsvepen utan mellanliggande arrayer. Numpys semantik följs exakt:
+# `np.maximum(a, b)` är `a if a >= b else b` (NaN i `b` släpps igenom), och
+# `np.bincount` summerar vikterna i indataordning från noll. Utan numba
+# använder passet sin numpy-väg, som ger samma resultat.
+
+
+@_njit(cache=True, nogil=True)
+def dispersal_gates(fl, alive, mass, adult_mass, seed_mass, maturity,
+                    repro_pool, carbon_pool, seed_nut_per_kg, repro_mass_mult):
+    """
+    Frögrindarna per planta i ett svep.
+
+    Returnerar (index i `fl` för plantor som passerar alla grindar,
+    räknarna (levande, näring, kol, storlek, alla)) — samma tal som
+    grindredovisningen i numpy-vägen.
+    """
+    n = fl.shape[0]
+    chosen = np.empty(n, np.int64)
+    k = 0
+    g_alive = 0
+    g_nut = 0
+    g_carbon = 0
+    g_size = 0
+    for i in range(n):
+        s = fl[i]
+        if not alive[s]:
+            continue
+        g_alive += 1
+        seed = np.float64(seed_mass[s])
+        if 1e-9 >= seed:
+            seed = 1e-9
+        cap = np.float64(adult_mass[s])
+        if 1e-12 >= cap:
+            cap = 1e-12
+        nut_ok = repro_pool[s] >= seed * seed_nut_per_kg
+        carb_ok = carbon_pool[s] >= seed
+        a = repro_mass_mult * seed
+        b = np.float64(maturity[s]) * cap
+        thr = a if (a >= b or a != a) else b
+        size_ok = np.float64(mass[s]) >= thr
+        if nut_ok:
+            g_nut += 1
+        if carb_ok:
+            g_carbon += 1
+        if size_ok:
+            g_size += 1
+        if nut_ok and carb_ok and size_ok:
+            chosen[k] = i
+            k += 1
+    return chosen[:k], np.array([g_alive, g_nut, g_carbon, g_size, k], np.int64)
+
+
+@_njit(cache=True, nogil=True)
+def flora_crowd(alive, kind, cell_idx, mass, BK, n_cells):
+    """
+    Anspråkad area per cell för etableringens trängselterm:
+    `min(1, massa / B_K)` summerat per cell över levande flora, i slotordning.
+    """
+    crowd = np.zeros(n_cells, np.float64)
+    for s in range(alive.shape[0]):
+        if alive[s] and kind[s] == 1:
+            c = cell_idx[s]
+            if c >= 0:
+                w = np.float64(mass[s]) / BK
+                if 1.0 <= w:
+                    w = 1.0
+                crowd[c] += w
+    return crowd

@@ -2972,13 +2972,47 @@ class Population:
         if fl.size == 0:
             return 0, 0.0
 
-        m_all = store.mass[fl].astype(np.float64, copy=False)
-        cap_all = np.maximum(1e-12, store.flora_adult_mass[fl].astype(np.float64, copy=False))
-        struct_all = store.structure[fl].astype(np.float64, copy=False)
-        pool_all = store.flora_repro_pool[fl]
-        seed_all = np.maximum(1e-9, store.flora_seed_mass[fl].astype(np.float64, copy=False))
-        appar_all = store.flora_apparatus[fl].astype(np.float64, copy=False)
-        cost_all = nutrient_content_array(struct_all)
+        # Grindarna och trängseln gäller hela floran; resten av passet bara de
+        # fåtal mödrar som sår. Med numba görs helsvepen i en kärna var (0208),
+        # annars i numpy-vägen nedan — resultaten är desamma.
+        seed_nut_per_kg = nutrient_content(SEED_STRUCTURE)
+        if flora_growth.HAVE_NUMBA:
+            chosen, gates = flora_growth.dispersal_gates(
+                fl, store.alive, store.mass, store.flora_adult_mass,
+                store.flora_seed_mass, store.flora_maturity,
+                store.flora_repro_pool, store.flora_carbon_pool,
+                float(seed_nut_per_kg), float(FLORA_REPRO_MASS_MULT),
+            )
+            (self._last_gate_alive, self._last_gate_nutrient,
+             self._last_gate_carbon, self._last_gate_size,
+             self._last_gate_all) = (int(x) for x in gates)
+        else:
+            m_all = store.mass[fl].astype(np.float64, copy=False)
+            cap_all = np.maximum(1e-12, store.flora_adult_mass[fl].astype(np.float64, copy=False))
+            pool_all = store.flora_repro_pool[fl]
+            seed_all = np.maximum(1e-9, store.flora_seed_mass[fl].astype(np.float64, copy=False))
+            carbon_all = store.flora_carbon_pool[fl]
+            seed_cost_all = seed_all * seed_nut_per_kg
+            # Grindredovisning. Hundrasextio frön per månad från 92 590 plantor
+            # med i genomsnitt mer pool än ett frö kostar är tre tiopotenser fel,
+            # och summan kan inte skilja "poolen är tom hos de flesta" från "en
+            # annan grind stoppar dem". Här räknas varje villkor för sig.
+            g_alive = store.alive[fl]
+            g_nut = g_alive & (pool_all >= seed_cost_all)
+            g_carbon = g_alive & (carbon_all >= seed_all)
+            g_size = g_alive & (m_all >= np.maximum(
+                FLORA_REPRO_MASS_MULT * seed_all,
+                store.flora_maturity[fl].astype(np.float64, copy=False) * cap_all,
+            ))
+            eligible = g_nut & g_carbon & g_size
+            self._last_gate_alive = int(np.count_nonzero(g_alive))
+            self._last_gate_nutrient = int(np.count_nonzero(g_nut))
+            self._last_gate_carbon = int(np.count_nonzero(g_carbon))
+            self._last_gate_size = int(np.count_nonzero(g_size))
+            self._last_gate_all = int(np.count_nonzero(eligible))
+            chosen = np.flatnonzero(eligible)
+        if chosen.size == 0:
+            return 0, 0.0
 
         # Fröet kostar i båda valutorna. Näringen räknas ur fröets egen
         # sammansättning och inte ur moderns: ett frö är näringsrikt förråd
@@ -2987,51 +3021,34 @@ class Population:
         # växelkurs som när ljus bygger kropp — ett frö är alltså exakt lika
         # dyrt som lika mycket vävnad, vilket gör att samma resurs begränsar
         # reproduktion som tillväxt.
-        carbon_all = store.flora_carbon_pool[fl]
-        seed_cost_all = seed_all * nutrient_content(SEED_STRUCTURE)
-        eligible = (
-            store.alive[fl]
-            & (pool_all >= seed_cost_all)
-            & (carbon_all >= seed_all)
-            & (m_all >= np.maximum(
-                FLORA_REPRO_MASS_MULT * seed_all,
-                store.flora_maturity[fl].astype(np.float64, copy=False) * cap_all,
-            ))
-        )
-        # Grindredovisning. Hundrasextio frön per månad från 92 590 plantor med
-        # i genomsnitt mer pool än ett frö kostar är tre tiopotenser fel, och
-        # summan kan inte skilja "poolen är tom hos de flesta" från "en annan
-        # grind stoppar dem". Här räknas varje villkor för sig.
-        g_alive = store.alive[fl]
-        g_nut = g_alive & (pool_all >= seed_cost_all)
-        g_carbon = g_alive & (carbon_all >= seed_all)
-        g_size = g_alive & (m_all >= np.maximum(
-            FLORA_REPRO_MASS_MULT * seed_all,
-            store.flora_maturity[fl].astype(np.float64, copy=False) * cap_all,
-        ))
-        self._last_gate_alive = int(np.count_nonzero(g_alive))
-        self._last_gate_nutrient = int(np.count_nonzero(g_nut))
-        self._last_gate_carbon = int(np.count_nonzero(g_carbon))
-        self._last_gate_size = int(np.count_nonzero(g_size))
-        self._last_gate_all = int(np.count_nonzero(g_nut & g_carbon & g_size))
-
-        chosen = np.flatnonzero(eligible)
-        if chosen.size == 0:
-            return 0, 0.0
+        #
+        # Allt nedan läser bara de behöriga mödrarna, i `fl`-ordning.
+        fc = fl[chosen]
+        pool_c = store.flora_repro_pool[fc]
+        carbon_c = store.flora_carbon_pool[fc]
+        seed_c = np.maximum(1e-9, store.flora_seed_mass[fc].astype(np.float64, copy=False))
+        seed_cost_c = seed_c * seed_nut_per_kg
+        cap_c = np.maximum(1e-12, store.flora_adult_mass[fc].astype(np.float64, copy=False))
+        appar_c = store.flora_apparatus[fc].astype(np.float64, copy=False)
 
         # Cellernas anspråkade area, för etableringens trängselterm. Samma
         # storhet som upptaget delas efter, alltså samma trängsel.
         n_cells = int(grid.n_cells)
-        live = np.flatnonzero(store.alive & (store.kind == 1))
-        crowd = np.zeros(n_cells, dtype=np.float64)
-        if live.size:
-            lc = store.cell_idx[live].astype(np.int64, copy=False)
-            ok = lc >= 0
-            crowd = np.bincount(
-                lc[ok],
-                weights=np.minimum(1.0, store.mass[live][ok].astype(np.float64) / BK),
-                minlength=n_cells,
-            )[:n_cells]
+        if flora_growth.HAVE_NUMBA:
+            crowd = flora_growth.flora_crowd(
+                store.alive, store.kind, store.cell_idx, store.mass, BK, n_cells,
+            )
+        else:
+            live = np.flatnonzero(store.alive & (store.kind == 1))
+            crowd = np.zeros(n_cells, dtype=np.float64)
+            if live.size:
+                lc = store.cell_idx[live].astype(np.int64, copy=False)
+                ok = lc >= 0
+                crowd = np.bincount(
+                    lc[ok],
+                    weights=np.minimum(1.0, store.mass[live][ok].astype(np.float64) / BK),
+                    minlength=n_cells,
+                )[:n_cells]
 
         # Allt utom slotallokeringen görs över alla frön på en gång. En loop
         # per moder kostade 348 ms per tick vid trettontusen plantor: femton
@@ -3040,27 +3057,27 @@ class Population:
         n_seed = np.minimum(
             int(self.PP.flora_max_seeds_per_tick),
             np.minimum(
-                (pool_all[chosen] / np.maximum(1e-30, seed_cost_all[chosen])).astype(np.int64),
-                (carbon_all[chosen] / np.maximum(1e-30, seed_all[chosen])).astype(np.int64),
+                (pool_c / np.maximum(1e-30, seed_cost_c)).astype(np.int64),
+                (carbon_c / np.maximum(1e-30, seed_c)).astype(np.int64),
             ),
         )
         keep = n_seed > 0
-        sel = chosen[keep]
         n_seed = n_seed[keep]
-        if sel.size == 0:
+        if n_seed.size == 0:
             return 0, 0.0
 
-        midx = np.repeat(sel, n_seed)
-        slots = fl[midx]
-        seed_m = seed_all[midx]
-        appar = appar_all[midx]
+        # `mc` indexerar de behörigas arrayer, ett element per frö.
+        mc = np.repeat(np.flatnonzero(keep), n_seed)
+        slots = fc[mc]
+        seed_m = seed_c[mc]
+        appar = appar_c[mc]
         prov = seed_m * (1.0 - appar)
 
-        L = dispersal_scale(cap_all[midx], appar, seed_m)
+        L = dispersal_scale(cap_c[mc], appar, seed_m)
         # Stretchad exponentialkärna: tyngre svans än exponentialen, vilket är
         # den kvalitativa egenskap verkliga spridningskärnor har.
-        d = L * self.rng.standard_exponential(midx.size) ** (1.0 / 0.7)
-        th = self.rng.uniform(0.0, 2.0 * np.pi, midx.size)
+        d = L * self.rng.standard_exponential(mc.size) ** (1.0 / 0.7)
+        th = self.rng.uniform(0.0, 2.0 * np.pi, mc.size)
         px = store.pos_x[slots].astype(np.float64) + d * np.cos(th)
         py = store.pos_y[slots].astype(np.float64) + d * np.sin(th)
         grid.wrap_pos_inplace(px, py)
@@ -3082,13 +3099,13 @@ class Population:
             self._last_flora_seed_crowd_p90 = float(q90)
 
         pr = establish_p(prov, crowd[targets])
-        wins = self.rng.random(midx.size) < pr
+        wins = self.rng.random(mc.size) < pr
 
         # Poolen debiteras en gång per moder, oavsett utfall: fröna byggdes.
-        store.flora_repro_pool[fl[sel]] -= n_seed * seed_cost_all[sel]
-        store.flora_carbon_pool[fl[sel]] -= n_seed * seed_all[sel]
+        store.flora_repro_pool[fc[keep]] -= n_seed * seed_cost_c[keep]
+        store.flora_carbon_pool[fc[keep]] -= n_seed * seed_c[keep]
         dispersed_mass = float(seed_m.sum())
-        self._last_flora_seeds = int(midx.size)
+        self._last_flora_seeds = int(mc.size)
 
         # Frön som inte etablerar sig blir förna där de landade.
         lost = ~wins
@@ -3107,7 +3124,7 @@ class Population:
             if not bool(store.alive[mother]):
                 continue
             target = int(targets[j])
-            paid_each = float(seed_cost_all[midx[j]])
+            paid_each = float(seed_cost_c[mc[j]])
 
             child_traits = mutate_trait_vector(
                 store.traits[mother, :], self.rng, sigma=0.05, p=0.10, clip=2.5,

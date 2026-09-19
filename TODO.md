@@ -2594,6 +2594,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0205~~ | passtidtagningen ser in i florapassen och spatialindexet: kärnan, skalets världsanrop, slotfrisläppning, etablering | mätningen | **klart**, se nedan — bitidentisk bana; mätningen vid jämvikt följer |
 | ~~0206~~ | tillväxtkärnan läser och skriver store:n via `fl` i stället för 15 gathers och 6 scatters | prestanda | **klart**, se nedan — bitidentisk; −2,4 ms/tick (−6 %) |
 | ~~0207~~ | spatialindexets CSR-bygge och florafält i en numba-kärna, med numpys summeringsordning återskapad | prestanda | **klart**, se nedan — bitidentisk; −2,0 ms/tick (−5 %) |
+| ~~0208~~ | spridningens helsvep — frögrindarna och trängselfältet — i numba-kärnor; frödelen läser bara behöriga mödrar | prestanda | **klart**, se nedan — bitidentisk; −2,0 ms/tick (−5,5 %) |
 | — | sådden skapar plantor som inte bär sig: 20 % svälter ihjäl vid första ticken, 23 % efter 0202 | sådden | **öppen**, se p198 och 0202 |
 | — | ~~fröregnet halveras på ~100 mån~~ (falsifierat i p201: bottnar kring 220 frön/tick); 95 % av reproduktionspoolen hos omogna | florarevisionen | **öppen**, se p198 och p201 |
 | — | sammanfattningen saknar väg för en körning utan fauna: massakvot 2,9e17, "ingen omsättning alls" | mätningen | **öppen**, se p198 |
@@ -2717,6 +2718,42 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Spridningens helsvep i kärnor (0208)
+
+Prestanda. `_dispersal_system_flora` gjorde nästan allt arbete över hela
+floran, fast bara några hundra mödrar sår: ett tiotal gathers, grindarna två
+gånger (för urvalet och för redovisningen), trängselfältet via `flatnonzero`
+och `bincount`, och `nutrient_content_array` över alla plantors struktur utan
+att resultatet lästes. Uppmätt vid 214 000 plantor: gathers och härledda
+1,36 ms, trängselfältet 0,88, grindredovisningen 0,46, urvalet 0,43.
+
+Två kärnor i `flora_growth.py` gör nu helsvepen: `dispersal_gates` ger
+urvalet och de fem grindräkningarna i ett svep över `fl`, och `flora_crowd`
+bygger trängselfältet i slotordning. Numpys semantik följs exakt —
+`np.maximum(a, b)` som `a if a >= b else b` med NaN i `b` genomsläppt,
+`np.minimum` på samma sätt, och `bincount`:s summering i indataordning från
+noll. Frödelen läser sedan bara de behöriga mödrarna; indexen i `fl` byts mot
+index i deras egna arrayer. Den döda `cost_all` är borttagen. Utan numba
+används numpy-vägen.
+
+**Bitprov** mot `5406303`: utskrifterna identiska, och alla 86
+tillståndsarrayer och ledgersummor bitvis lika efter `liten6` 400 och 3 000
+tick och `f6-256-utan-fauna` 300 tick. `liten6` 3 000 tick prövar
+frödelen — 490–930 frön per tick och etableringar — vilket f6-256 vid tick
+300 inte gör, eftersom ingen moder där är behörig än. Numpy-vägen utan numba
+ger samma tillstånd som HEAD:s numpy-väg över 3 000 tick.
+
+**Utfall**, `f6-256-utan-fauna` tick 200–700 (204 000 plantor), omväxlande:
+
+```
+                          HEAD           0208
+totalt               36,0 / 36,0    34,0 / 34,0   ms/tick
+_dispersal_system     7,9 / 8,0      6,1 / 6,1
+```
+
+−2,0 ms, 5,5 %. Det som återstår i passet i det här tidiga tillståndet är
+främst frödelen, som skalar med fröregnet och inte med beståndet.
 
 ### Spatialindexet i en kärna (0207)
 
