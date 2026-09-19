@@ -2594,6 +2594,8 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0212~~ | termoregleringen räknar av den metaboliska värmen; bara det som fattas produceras särskilt | budgeten | **klart**, se nedan — termo 0,5 → 0,02 × basal; faunan lever längre men bär sig inte |
 | ~~0213~~ | mobiliseringstaket gäller per tick, delat av alla strypta uttag | budgeten | **klart**, se nedan — rättelse; utfallet inom frönas spridning |
 | ~~0214~~ | fostret byggs efter underhållet; katabolism för fostret med skada och strikt över avmagringströskeln | budgeten | **klart**, se nedan — rättelse; utfallet inom frönas spridning |
+| ~~0215~~ | accessorer för våt massa införda där fysiken läser (steg 1a i skissen) | serien | **klart**, se nedan — bitidentisk |
+| — | reserven belastar basal, värmeledning och termoreglering men inte rörelse, kroppsdjup, betesräckvidd eller predationens massjämförelse | budgeten | **öppen**, funnen i 0215 |
 | — | en graviditet som avstannar avbryts aldrig (ingen resorption) | reproduktionen | **öppen**, se 0214 |
 | — | växtföda ger en tredjedel av sin energi (våt vävnads 9,3 MJ/kg på torrsubstans, cellulosa noll); fettet har samma täthet som labil vävnad | födobudgeten | **öppen**, principbeslut — revisionen F1, M3 |
 | — | startdjuren sätts in med 6 % reserv: 14 av 80 svälter inom en månad; nyfödda har ~3 ticks reserv | utgångsläget | **öppen** — revisionen, mätkörningen, L6 |
@@ -2727,6 +2729,35 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Accessorer för våt massa (0215)
+
+Refaktor, bitidentisk. Första delpatchen i steg 1 av
+`docs/sammansattning-och-vatten.md`: `Body` får `M_lean_wet`,
+`M_reserve_wet`, `M_fetus_wet` och `M_wet`, och de ställen där fysiken läser
+massan går genom dem — `M_carry` i steget, predationens massjämförelse och
+skada, kroppsdjupet, rörelsekostnaden, betesräckvidden och kadavret.
+Vattenhalten är ett i den här patchen, så talen är oförändrade; i 1b blir
+tillstånden torrsubstans och accessorerna räknar om.
+
+**Bitprovet fångade tre ställen där jag hade ändrat innebörden**, och de tre
+är samtidigt kartan över vad koden faktiskt gör:
+
+- `store.mass` speglar `body.M` exakt, prövat av invarianten
+  `body_store_mirror`. Spegeln bär alltså mager vävnad, inte hela kroppen.
+  Vad den ska bära när `M` blir torrsubstans avgörs i 1b, tillsammans med
+  invarianten.
+- Mobiliseringstaket läser reserven som den såg ut när uttaget började, inte
+  den som är kvar sedan `M_fast` tömts.
+- **Reserven ingår inte överallt.** `M_carry` räknar med den — basal,
+  värmeledning och termoreglering bär den — men rörelsekostnaden,
+  kroppsdjupet, betesräckvidden och predationens massjämförelse läser `M`
+  ensam, trots att kommentaren i steget säger att reserven ska belasta
+  rörelsen. Det är en egen fråga och ligger som öppen rad.
+
+Bitprov mot `a4b5cf4`: utskrifterna identiska, och alla tillståndsarrayer och
+ledgersummor bitvis lika efter `liten6` 3 000 tick och `f6-256` med fauna
+600 tick.
 
 ### Fostret efter underhållet (0214)
 

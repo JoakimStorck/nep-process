@@ -1142,6 +1142,38 @@ class Body:
     death_cause: str = ""
     gest_M_target: float = 0.0   # target fetal mass
     
+    def M_lean_wet(self) -> float:
+        """
+        Den magra vävnadens **våta** massa (1a).
+
+        Serien i `docs/sammansattning-och-vatten.md` gör `M`, `M_fast`,
+        `M_slow` och `gest_M` till torrsubstans och härleder den våta massan
+        med fasta vattenhalter. De tre accessorerna här markerar var fysiken
+        läser massan — Kleiber, värmeledning, rörelse, räckvidd, predation,
+        kadaver — till skillnad från kemin, som räknar på torrsubstansen.
+        I den här patchen är vattenhalten ett, så talen är oförändrade.
+
+        **Reserven ingår inte överallt i dag.** `M_carry` i steget räknar med
+        den — basal, värmeledning och termoreglering bär den — men
+        rörelsekostnaden, kroppsdjupet, betesräckvidden och predationens
+        massjämförelse läser `M` ensam. De använder därför `M_lean_wet` här,
+        så att 1a blir bitidentisk. Att de säger emot varandra är en egen
+        fråga; se raden i TODO.md.
+        """
+        return float(self.M)
+
+    def M_reserve_wet(self) -> float:
+        """Reservens våta massa: glykogen med sitt vatten plus fettväv (1a)."""
+        return float(self.M_fast) + float(self.M_slow)
+
+    def M_fetus_wet(self) -> float:
+        """Fostrets våta massa (1a)."""
+        return float(self.gest_M)
+
+    def M_wet(self) -> float:
+        """Kroppens våta massa utan foster: mager vävnad plus reserv (1a)."""
+        return self.M_lean_wet() + self.M_reserve_wet()
+
     def M_reserve(self) -> float:
         """Total mobiliserbar reservmassa i kilo."""
         return float(self.M_fast) + float(self.M_slow)
@@ -1253,7 +1285,10 @@ class Body:
         if rest > 0.0 and self.M_slow > 0.0:
             if strypt:
                 AP = self.AP
-                M_carry = float(self.M) + Mr
+                # `Mr` är reserven som den såg ut när uttaget började, inte
+                # den som är kvar efter att `M_fast` tömts — taket ska inte
+                # bero på hur mycket som redan tagits i samma anrop.
+                M_carry = self.M_lean_wet() + Mr
                 P_basal = float(AP.k_basal) * (M_carry ** 0.75)
                 tak = (float(AP.mobil_max_x_basal) * P_basal * float(dt)
                        / float(AP.E_labile_J_per_kg))
@@ -1893,9 +1928,9 @@ class Body:
         # gjorde fett gratis — och utan kostnad har en evolverbar
         # reservkapacitet ingen avvägning att selekteras på.
         self._reserve_cap = float(getattr(pheno, "reserve_cap", 0.0))
-        M_carry = float(self.M) + self.M_reserve()
+        M_carry = self.M_wet()
         if bool(self.gestating):
-            M_carry += _gest_burden * max(0.0, float(self.gest_M))
+            M_carry += _gest_burden * max(0.0, self.M_fetus_wet())
 
         M_eff = max(1e-9, M_carry)
         metab = float(pheno.metabolism_scale)
@@ -3228,7 +3263,7 @@ class Agent:
         if not target.body.alive:
             return -1e9
         d_norm = 1.0 - clamp(dist / max(float(self.AP.prey_search_radius), 1e-9), 0.0, 1.0)
-        m_term = clamp(float(target.body.M) / max(float(self.body.M), 1e-9), 0.0, 2.0)
+        m_term = clamp(target.body.M_lean_wet() / max(self.body.M_lean_wet(), 1e-9), 0.0, 2.0)
         e_term = clamp(float(target.body.reserve_frac()), 0.0, 1.0)
         weak_term = 1.0 - clamp(float(target.body.D) / max(float(target.body.AP.D_max), 1e-9), 0.0, 1.0)
         weak_term = 1.0 - weak_term  # low D => low prey value from weakness, high D => high value
@@ -3236,7 +3271,7 @@ class Agent:
 
     def attack_risk(self, target: "Agent", dist: float) -> float:
         d_norm = 1.0 - clamp(dist / max(float(self.AP.prey_search_radius), 1e-9), 0.0, 1.0)
-        rel_mass = clamp(float(target.body.M) / max(float(self.body.M), 1e-9), 0.0, 3.0)
+        rel_mass = clamp(target.body.M_lean_wet() / max(self.body.M_lean_wet(), 1e-9), 0.0, 3.0)
         target_pred = clamp(float(getattr(target.pheno, "predation", 0.0)), 0.0, 1.0)
         target_def = 1.0 - clamp(float(target.body.D) / max(float(target.body.AP.D_max), 1e-9), 0.0, 1.0)
         return 0.35 * rel_mass + 0.40 * target_pred + 0.20 * target_def + 0.05 * d_norm
@@ -3977,7 +4012,7 @@ class Agent:
         var fullt.
         """
         return max(float(self.AP.water_depth_floor),
-                   body_depth(float(self.body.M),
+                   body_depth(self.body.M_lean_wet(),
                               float(getattr(self.pheno, "structure", 0.25))))
 
     def _water_factor(self) -> float:
@@ -4070,7 +4105,7 @@ class Agent:
         weak_move = float(self.body.move_factor())
         u = clamp(allow_move * thrust * fatigue_factor * weak_move, 0.0, 1.0)
 
-        M_pre = max(1e-9, float(self.body.M))
+        M_pre = max(1e-9, self.body.M_lean_wet())
         F_prop = u * float(self.AP.F0) * (M_pre ** float(self.AP.force_mass_exp))
 
         c1 = float(self.AP.drag_lin)
@@ -4298,7 +4333,7 @@ class Agent:
         gånger ytan, utan att någon konstant behöver sättas om.
         """
         r = float(self.AP.graze_reach_k) * body_depth(
-            float(self.body.M), float(getattr(self.pheno, "structure", 0.25)))
+            self.body.M_lean_wet(), float(getattr(self.pheno, "structure", 0.25)))
         L = max(0.0, float(self.AP.forage_path_rate) * float(dt))
         return 2.0 * r * L + math.pi * r * r
 

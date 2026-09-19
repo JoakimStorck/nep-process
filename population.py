@@ -1054,6 +1054,9 @@ class Population:
         if s < 0 or s >= int(self.store.n):
             return
     
+        # Store:ns massa speglar `body.M` exakt — invarianten
+        # `body_store_mirror` prövar det. Vad spegeln ska bära när `M` blir
+        # torrsubstans avgörs i 1b, tillsammans med invarianten.
         self.store.mass[s] = np.float32(float(a.body.M))
         self.store.energy[s] = np.float32(float(a.body.E_total()))
         self.store.energy_cap[s] = np.float32(float(a.body.E_cap()))
@@ -4495,7 +4498,7 @@ class Population:
             self._efl_add("E_attack", float(predator.body.E_total()) - _E_pre)
             self._write_body_surface_to_store(predator.store_slot, predator)
     
-            dD = dmg_per_s * max(0.25, score) * hunt_eff * (float(predator.body.M) ** 0.5) * dt
+            dD = dmg_per_s * max(0.25, score) * hunt_eff * (predator.body.M_lean_wet() ** 0.5) * dt
             prey.body.D = min(float(prey.body.D) + dD, float(prey.body.AP.D_max))
             self._write_body_surface_to_store(prey.store_slot, prey)
             
@@ -4551,9 +4554,10 @@ class Population:
                 # exkrement och kväve från sista ticken förlorade.
                 self._flush_body_outputs(a)
 
-                M_tissue = float(body.M)
-                M_res = float(body.M_reserve())
-                M_fetus = float(body.gest_M) if bool(body.gestating) else 0.0
+                # Kadavret är fysisk massa: vävnad, reserv och foster vått (1a).
+                M_tissue = body.M_lean_wet()
+                M_res = body.M_reserve_wet()
+                M_fetus = body.M_fetus_wet() if bool(body.gestating) else 0.0
                 carcass_kg = M_tissue + M_res + M_fetus
 
                 # Reserven och fostret är labil vävnad; bara den committade
