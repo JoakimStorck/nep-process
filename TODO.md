@@ -2590,6 +2590,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0202~~ | `nutrient_init` och `detritus_init` kalibreras mot p201:s jämvikt, inte mot 0086:s identitet | inkörningen | **klart**, se nedan — näringen inom 1–3 % av jämvikten från tick 0; faunan dör ut snabbare |
 | — | faunan bär sig inte i `f6-256`: utdöd vid månad ~84 före 0202 och ~24 efter, 93 av 94 döda av svält | ekologin | **öppen**, nästa — trolig huvudorsak i `docs/revision-faunans-balans.md` (M1, F1, M3) |
 | ~~0210~~ | poploggens energi som flöden över loggintervallet, med poster för allt som ändrar reserven utanför `Body.step`; populationens energi stänger | mätningen | **klart**, se nedan — bitidentisk bana; resten 9e-15 |
+| ~~0211~~ | `docs/sammansattning-och-vatten.md`: torrsubstans och vatten som två tillstånd, kemisk sammansättning, fiberjäsning, djurens vätskebalans | planen | **klart**, designskiss — serien i sex steg står i dokumentet |
 | — | termoregleringen räknar inte den metaboliska värmen: 0,6–1,2 × basal ovanpå underhållet | budgeten | **öppen** — revisionen M1 |
 | — | mobiliseringstaket gäller per anrop, inte per tick; dräktigheten går före underhållet och kataboliserar modern till `M_min` | budgeten | **öppen** — revisionen M5, L2 |
 | — | växtföda ger en tredjedel av sin energi (våt vävnads 9,3 MJ/kg på torrsubstans, cellulosa noll); fettet har samma täthet som labil vävnad | födobudgeten | **öppen**, principbeslut — revisionen F1, M3 |
