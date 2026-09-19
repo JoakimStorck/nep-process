@@ -2595,11 +2595,12 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0206~~ | tillväxtkärnan läser och skriver store:n via `fl` i stället för 15 gathers och 6 scatters | prestanda | **klart**, se nedan — bitidentisk; −2,4 ms/tick (−6 %) |
 | ~~0207~~ | spatialindexets CSR-bygge och florafält i en numba-kärna, med numpys summeringsordning återskapad | prestanda | **klart**, se nedan — bitidentisk; −2,0 ms/tick (−5 %) |
 | ~~0208~~ | spridningens helsvep — frögrindarna och trängselfältet — i numba-kärnor; frödelen läser bara behöriga mödrar | prestanda | **klart**, se nedan — bitidentisk; −2,0 ms/tick (−5,5 %) |
+| ~~0209~~ | florans livslängd räknas när plantan skapas, inte varje tick | prestanda | **klart**, se nedan — bitidentisk; −1,6 ms/tick (−4,5 %) |
 | — | sådden skapar plantor som inte bär sig: 20 % svälter ihjäl vid första ticken, 23 % efter 0202 | sådden | **öppen**, se p198 och 0202 |
 | — | ~~fröregnet halveras på ~100 mån~~ (falsifierat i p201: bottnar kring 220 frön/tick); 95 % av reproduktionspoolen hos omogna | florarevisionen | **öppen**, se p198 och p201 |
 | — | sammanfattningen saknar väg för en körning utan fauna: massakvot 2,9e17, "ingen omsättning alls" | mätningen | **öppen**, se p198 |
 | — | världsloggens `nutrient_in_flora` är bara vävnaden; reserven och reproduktionspoolen, 56 % av florans näring, saknas | mätningen | **öppen**, se p201 |
-| — | **mål: halverad körtid.** ms/tick i `f6-256-utan-fauna` vid jämvikt efter 0202 (~250 000 plantor), fast frö, mätt på den här maskinen på ledig maskin. Baslinje 49,6 ms/tick (p203-trad, standardens 24 trådar), mål ~25. Fauna-varianten läggs till när faunan bär sig | prestanda | **pågår** — efter 0208: 35,5 (p208, −28,5 %); kärnan är hälften, se p208 |
+| — | **mål: körtiden ned mot 30 ms/tick** (ursprungligen halverad, ~25; sänkt 2026-09-19 — de sista ~5 ms kräver omstrukturerad kärna eller avvikelse i sista biten, se p208). ms/tick i `f6-256-utan-fauna` vid jämvikt (~250 000 plantor), fast frö, ledig maskin; baslinje 49,6 (p203-trad) | prestanda | **pågår** — efter 0208: 35,5 (p208); 0209 ytterligare −1,6 i tidigt tillstånd |
 | — | `f6-256-mager` 800 tick: 36 → 15 djur; magra världen har inte flora nog utan förnan | ekologin | **öppen**, kör `f6-256` |
 | — | skade- och reparationssystemet är nästan inert: `D` har medianen 0,0000 och `repair_capacity` binder i 2 % av tickarna | selektionen | **öppen**, nästa |
 | — | barnets startreserv betalas till 43–74 %; föräldern har inte råd med den redan minimala gåvan | livshistorien | **öppen**, hör ihop med `E_cap_per_M` |
@@ -2718,6 +2719,37 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Livslängden räknas vid födseln (0209)
+
+Prestanda. Tillväxtkärnan räknade `_lifespan(s) = L_min · (L_max/L_min)^s`
+för varje planta varje tick, och `pow` kostade 1,4 av kärnans 15,0 ms vid
+214 000 plantor (p208). Strukturandelen den beror på skrivs bara i
+`_init_flora_slot` och är fast under plantans liv. Livslängden räknas nu där
+och lagras i det nya slotfältet `store.flora_lifespan` (float64), som kärnan
+läser; en faunaslot får noll. Fältet har en skrivare och en läsare.
+
+Värdet räknas av `flora_growth.lifespan_of_stored` med samma njit-hjälpare
+som kärnan använde — strukturandelen som float64, klippt till [0, 1] — så
+att det blir samma bitar; `pow` i Python och i numba behöver inte ge samma
+sista bit. Numpy-vägen räknar fortfarande livslängden själv och är orörd.
+
+**Bitprov** mot `997e44d`: utskrifterna identiska, och alla 86 gemensamma
+tillståndsarrayer och ledgersummor bitvis lika efter `liten6` 400 och 3 000
+tick och `f6-256-utan-fauna` 300 tick; det nya fältet är det enda som
+tillkommer.
+
+**Utfall**, `f6-256-utan-fauna` tick 200–700 (204 000 plantor), omväxlande:
+
+```
+                    HEAD           0209
+totalt         34,1 / 34,7    32,8 / 32,6   ms/tick
+växtkärnan     14,3 / 14,3    13,1 / 12,9
+uppstart       10,3 / 10,2 s  10,4 / 10,4 s
+```
+
+−1,6 ms, 4,5 %. Sådden anropar hjälparen en gång per planta, vilket kostar
+~0,1 s i uppstarten.
 
 ### Tickens delar efter 0208 (p208)
 

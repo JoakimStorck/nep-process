@@ -1625,6 +1625,9 @@ class Population:
         self.store.repair_capacity[slot] = np.float32(0.0)
         self.store.repro_capacity[slot] = np.float32(flora_repro_capacity(traits))
         self.store.structure[slot] = np.float32(struct)
+        self.store.flora_lifespan[slot] = flora_growth.lifespan_of_stored(
+            self.store.structure[slot]
+        )
     
         self.store.flood_tolerance[slot] = np.float32(0.0)
         # Härledd ur strukturandelen, som för faunan. Floran rör sig inte, så
@@ -2834,7 +2837,7 @@ class Population:
             store.uptake_capacity, store.flora_repro_alloc,
             store.repro_capacity, store.flora_root_alloc,
             store.flora_reserve, store.flora_repro_pool,
-            store.flora_carbon_pool,
+            store.flora_carbon_pool, store.flora_lifespan,
             cells, temp, draws,
             world.nutrient, self.grid.neighbor_idx, world.soil_water,
             dt, BK,

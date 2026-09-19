@@ -376,6 +376,11 @@ class OrganismStore:
     flora_temp_width: np.ndarray = field(init=False)
     flora_apparatus: np.ndarray = field(init=False)
     flora_seed_mass: np.ndarray = field(init=False)
+    # Livslängden i månader, härledd ur strukturandelen när plantan skapas
+    # (0209). Strukturandelen är fast under en plantas liv, så `pow` i
+    # `flora_lifespan` behöver inte räknas om varje tick. Skrivs bara av
+    # `Population._init_flora_slot`; läses av tillväxtkärnan.
+    flora_lifespan: np.ndarray = field(init=False)
 
     # Tillfällig migrationsflagga: 0=djur/nuvarande agent, 1=flora
     kind: np.ndarray = field(init=False)
@@ -439,6 +444,7 @@ class OrganismStore:
         self.flora_temp_width = np.zeros(cap, dtype=np.float32)
         self.flora_apparatus = np.zeros(cap, dtype=np.float32)
         self.flora_seed_mass = np.zeros(cap, dtype=np.float32)
+        self.flora_lifespan = np.zeros(cap, dtype=np.float64)
 
         self.kind = np.zeros(cap, dtype=np.int8)
 
@@ -720,6 +726,7 @@ class OrganismStore:
         self.flora_temp_width[slot] = 0.0
         self.flora_apparatus[slot] = 0.0
         self.flora_seed_mass[slot] = 0.0
+        self.flora_lifespan[slot] = 0.0
     
         self.kind[slot] = 0
         

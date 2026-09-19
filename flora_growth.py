@@ -94,6 +94,25 @@ def _lifespan(s: float) -> float:
     return FLORA_LIFESPAN_MIN * _LIFESPAN_RATIO ** s
 
 
+def lifespan_of_stored(structure32) -> float:
+    """
+    Livslängden för en planta med den lagrade strukturandelen, som kärnan
+    läser ur `store.flora_lifespan` (0209).
+
+    Samma uttryck som kärnan räknade per tick: strukturandelen som float64,
+    klippt till [0, 1], genom `_lifespan`. Att anropa samma njit-hjälpare är
+    det som gör värdet bitidentiskt med det kärnan tidigare räknade själv —
+    `pow` i Python och i numba behöver inte ge samma sista bit. Utan numba
+    används numpy-vägen, som räknar livslängden själv.
+    """
+    s = float(np.float64(structure32))
+    if s < 0.0:
+        s = 0.0
+    elif s > 1.0:
+        s = 1.0
+    return float(_lifespan(s))
+
+
 @_njit(cache=True, nogil=True, inline="always")
 def _store_down(x: float) -> float:
     """
@@ -115,7 +134,7 @@ def _growth_kernel_impl(
     fl,
     mass, structure, adult_mass, root_mass, seed_mass, energy,
     temp_opt, temp_width, uptake_cap, repro_alloc, repro_cap, root_alloc,
-    reserve, pool, carbon,
+    reserve, pool, carbon, lifespan,
     # --- per planta, i `fl`-ordning ---------------------------------------
     cells, temp, draws,
     # --- värld -----------------------------------------------------------
@@ -144,6 +163,11 @@ def _growth_kernel_impl(
     index, och de senare svepen läste redan utdata; för döende plantor läses
     reserven och poolen i det seriella svepet innan de nollas, som förut.
     Aritmetiken är densamma, så resultatet är bitidentiskt.
+
+    **Livslängden läses ur store:n (0209).** `pow` i `_lifespan` kostade
+    1,4 av 15 ms vid 214 000 plantor, fast strukturandelen den beror på är
+    fast under plantans liv. Den räknas nu en gång i `_init_flora_slot`, med
+    samma hjälpare, och läses här.
 
     **Formen är delad efter vad som ackumulerar och vad som inte gör det.** De
     stora loopar som räknar per planta skriver bara egna index; summor, räknare
@@ -230,7 +254,7 @@ def _growth_kernel_impl(
         floor = seedling_floor * np.float64(seed_mass[sl])
         if floor < m_floor_abs:
             floor = m_floor_abs
-        ls = _lifespan(s)
+        ls = lifespan[sl]
         if ls < 1e-6:
             ls = 1e-6
 
