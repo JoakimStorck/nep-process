@@ -25,8 +25,14 @@ All organisk materia beskrivs av **en** egenskap: strukturandelen `s` mellan 0 o
 ```
 energiinnehåll     E_labile · (1 − s)              E_labile = 9,302e6 J/kg
 näringsinnehåll    N_L·(1 − s) + N_S·s             N_L = 1/30, N_S = 1/500
-matsmältning       0,80 − 0,35·s                   andel av det labila som tas upp
+matsmältning       0,80 · d                        andel av det labila som tas upp;
+                                                   d = kostpreferensens verkningsgrad
 ```
+
+Matsmältningen var `0,80 − 0,35·s`. Den straffade segheten två gånger, eftersom
+`(1 − s)` redan tar bort strukturmaterialet; se `phenotype.assimilated_fraction`.
+Strukturmaterialet ger alltså noll energi — se `docs/sammansattning-och-vatten.md`
+för varför det inte stämmer med verkliga betare, och vad som föreslås i stället.
 
 Strukturmaterial är energifattigt, näringsfattigt och svårsmält. Labilt material är motsatsen. En seg växt bär mindre av allt per kilo — den är sämre föda och billigare att bygga.
 
@@ -49,25 +55,20 @@ Den bevarade storheten är summan. `M` bär organismens egen strukturandel; rese
 Reservens tak är `reserve_cap · M`, där `reserve_cap` är en genetisk axel som spänner ungefär 8 till 42 procent av kroppsmassan. Att bära reserv kostar, eftersom reservmassan räknas in i `M_carry` och därmed belastar basalmetabolism, rörelse och värmeförlust. Utan den kostnaden hade axeln ingen avvägning att selekteras på.
 
 
-### Den långsamma poolen är inte långsam
+### Den långsamma poolen
 
-Namnen lovar två tidsskalor. Koden levererar en:
+Intaget fördelas enligt den ärftliga `fast_frac` (0,50–0,95): den andelen till
+`M_fast`, resten till `M_slow`. Uttaget tar **`M_fast` först**, och `M_slow`
+lämnar bara ifrån sig en begränsad mängd per steg — ett tak mätt mot
+ämnesomsättningen, `mobil_max_x_basal` gånger basalen, inte mot depån. Det ger
+fettets tidsskala mellan glykogenets tick och strukturens sista utväg. Byggande
+(tillväxt, foster, överföring till avkomman) tas ostrypt.
 
-```python
-d_fast = take * (M_fast / Mr)          # uttag i proportion till andelarna
-M_slow -= (take - d_fast)
-```
-
-Uttaget fördelas efter poolernas **storlek**, inte efter olika mobiliserings-
-takt, och insättningen är fast 85/15. Nettot är att de töms i takt och alltid
-håller samma proportion — alltså en pool med två namn.
-
-Det gör att organismen saknar det mellansteg riktig fysiologi har. Verkliga
-djur går glykogen på timmar, fett på veckor och protein sist av allt, och det
-sista är det som skadar. Modellen har det första och det tredje: reserven
-räcker några tick, och när den är slut tas strukturen direkt. Därför är svälten
-abrupt — det finns ingen buffert mellan "reserven tog slut" och "jag äter min
-egen kropp".
+Avsnittet hette tidigare *"Den långsamma poolen är inte långsam"* och beskrev
+ett uttag i proportion till poolernas storlek med en fast fördelning 85/15 in —
+alltså en pool med två namn. Resonemanget nedan är det som ledde till dagens
+form. Revisionen i `docs/revision-faunans-balans.md` (M5) fann att taket gäller
+per anrop och inte per tick.
 
 **Fettet behöver ingen ny pool.** `M_slow` är fettet; den behöver bara ett tak
 på hur mycket som får mobiliseras per tick. Blir den långsam faller tre saker
