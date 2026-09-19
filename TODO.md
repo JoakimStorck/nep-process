@@ -2597,6 +2597,11 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0215~~ | accessorer för våt massa införda där fysiken läser (steg 1a i skissen) | serien | **klart**, se nedan — bitidentisk |
 | ~~0216~~ | kroppens kemi: torrsubstans per komponent, verkliga tätheter, kvävefri reserv, kvävepool, urea, endogen förlust, kvävebegränsad tillväxt, kadavrets kväve (steg 1b–1d) | serien | **klart**, se nedan — fettandel 4–12 %, kvävepoolen tom hos ~30 % |
 | ~~0217~~ | födans sammansättning och matsmältning: labilt, jäsbar fiber och lignin; jäsningen följer uppehållstiden i tarmen (steg 2) | serien | **klart**, se nedan — energin per kg 2,4×, faunan lever längre men bär sig inte |
+| ~~—~~ | mätning: varför faunan inte bär sig — ungarna dör, de vuxna är mätta | ekologin | **klart**, se nedan (`runs/dod`) |
+| — | laktationen är ren väntetid: ungen måste födosöka från tick ett, med tom kvävepool | reproduktionen | **öppen**, nästa — se mätningen |
+| — | hungern ser bara energi; 38 % av ungarnas tick är energirika men kvävefattiga | budgeten | **öppen** — se mätningen |
+| — | kvävepoolen rymmer ~2 tick, så 58–80 % av det intagna kvävet deamineras bort | budgeten | **öppen** — se mätningen |
+| — | `Body._add_N` har ingen anropare: intaget skriver samma logik inline | städning | **öppen** — funnen i mätningen |
 | — | kadavrets energi för asätare räknas med förnans konstant och underskattar fettet | ekologin | **öppen**, rättas i steg 2 |
 | — | reserven belastar basal, värmeledning och termoreglering men inte rörelse, kroppsdjup, betesräckvidd eller predationens massjämförelse | budgeten | **öppen**, funnen i 0215 |
 | — | en graviditet som avstannar avbryts aldrig (ingen resorption) | reproduktionen | **öppen**, se 0214 |
@@ -2732,6 +2737,63 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Varför faunan inte bär sig (mätning efter 0217)
+
+*`runs/dod`: `f6-256`, tre frön, 2 400 tick med livs- och poplogg, plus fyra
+sonder i scratchpad som läser kropparna direkt. Ingen kodändring.*
+
+**De vuxna är mätta; det är ungarna som dör.** Bland de levande ligger
+reservens median **på taket** genom hela körningen, kvävepoolen på 82–88 % och
+bara 0–5 % har energiunderskott. Ändå faller beståndet. Dödsorsaken är svält i
+126 av 128 fall (frö 1), 549 av 550 (frö 2) och 158 av 158 (frö 3) — och de
+döda är unga: medianålder 2,8–3,7 månader för dem som föds i körningen, med
+tom reserv och en massa långt under vuxenstorlek.
+
+**Nyfödda har varken mjölk eller kväveförråd.** En unge på `M_birth_min` utan
+föda tappar **1,9 % av kroppsmassan per tick** och dör på tio tick — fem
+dygn — trots att reserven är 61 % full. Det är inte energin som tar slut utan
+kvävet: den obligatoriska förlusten måste tas ur den egna vävnaden, eftersom
+ungen föds med tom pool och laktationen är ren väntetid (revisionen L4). Med
+full pool undviks katabolismen i **en enda tick**: poolen rymmer ~2 tick av
+den obligatoriska förlusten. Av 45 ungar i frö 2 dog åtta inom två tick, med
+intag/basal 0,08 — de hann aldrig äta.
+
+**Kvävet är inte brist i miljön — det slängs bort.** Per agenttick:
+
+```
+klass     N in mg    obligatorisk förlust mg    deaminerat bort
+unge       168,7              28,4                   98,2   (58 %)
+vuxen      836,2             144,2                  672,1   (80 %)
+```
+
+Intaget är sex gånger den obligatoriska förlusten, men poolen rymmer bara 2 %
+av den magra torrsubstansen och tillväxten kan inte förbruka mer än
+tillväxtkurvan tillåter. Resten deamineras och går ut som urea. Djuren kan
+alltså inte spara det kväve de faktiskt får i sig, och varje tick utan föda
+kostar vävnad.
+
+**Hungern ser bara energi.** 38 % av ungarnas agenttick är energirika men
+kvävefattiga (reserv > 70 %, pool < 20 %). De äter ändå i 99 % av tickarna, så
+hungergrinden stoppar dem inte — men det finns ingen drift som söker protein,
+och en mätt unge har ingen anledning att söka den föda den behöver.
+
+**Slutsats.** Faunan är inte födobegränsad i genomsnitt: de vuxna är mätta och
+kastar fyra femtedelar av kvävet. Beståndet faller på **rekryteringen** —
+ungar som ska försörja sig själva från tick ett, med två tick kväve i lager
+och fem dygns marginal utan föda. Tre mekanismer saknas, i den ordning de
+troligen betyder mest:
+
+1. **Laktation.** Modern överför mjölk — energi och protein — under en period
+   efter födseln. I dag är laktationen bara en väntetid i honans cykel.
+2. **Ett kväveförråd som är värt namnet.** Labilt kroppsprotein, inte bara den
+   fria aminosyrapoolen, så att ett djur kan bära kväve mellan måltider i
+   stället för att deaminera 58–80 % av det.
+3. **Hunger som ser kvävet.** Födodriften bör kunna drivas av proteinbehov och
+   inte bara av energiunderskott.
+
+En städrad kom också ur mätningen: `Body._add_N` har ingen anropare, eftersom
+intaget skriver samma logik inline.
 
 ### Födans sammansättning och matsmältningen (0217)
 
