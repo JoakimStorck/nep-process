@@ -809,6 +809,28 @@ _FAUNA_PASSES = frozenset({
     "_step_interaction_system",
 })
 
+# Delpassen i `_step_world_and_flora`. Utan fauna är det passet i praktiken
+# hela ticken, och passtidtagningen säger då bara att allt går åt till ett
+# ställe. Delpassen wrappas på instanserna precis som systempassen — värld,
+# population och store — så att anropen inifrån `world.step()` och
+# `_step_world_and_flora` träffar omslagen. Raderna är inneslutna i sitt
+# föräldrapass och indenteras i rapporten; andelarna summerar alltså inte.
+_WORLD_SUBPASSES = (
+    "temperature_pass",
+    "nutrient_input_pass",
+    "hydro_pass",
+    "transport_pass",
+    "leaching_pass",
+    "sediment_pass",
+    "decomposition_pass",
+    "update_flux",
+)
+_FLORA_SUBPASSES = (
+    "_drift_system",
+    "_growth_system_flora",
+    "_dispersal_system_flora",
+)
+
 _INNER_CLASSES_DONE = False
 
 
@@ -854,6 +876,17 @@ class PassTimer:
         """Passen wrappas på instansen; ingen annan körning påverkas."""
         for name in _PASSES:
             self._wrap(pop, name, name)
+            if name == "_step_world_and_flora":
+                # Direkt efter föräldern, så att rapporten visar dem under den.
+                self._wrap(pop.world, "step", "  world.step")
+                for sub in _WORLD_SUBPASSES:
+                    self._wrap(pop.world, sub, f"    world.{sub}")
+                for sub in _FLORA_SUBPASSES:
+                    self._wrap(pop, sub, f"  {sub}")
+                # Anropas två gånger per tick; det andra anropet, utanför det
+                # här passet, är ett no-op via smutsflaggan och räknas med.
+                self._wrap(pop.store, "rebuild_spatial_index",
+                           "  store.rebuild_spatial_index")
 
     def install_inner(self) -> None:
         """

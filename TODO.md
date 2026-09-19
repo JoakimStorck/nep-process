@@ -2589,6 +2589,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~—~~ | mättnadskörningen om: `f6-256-utan-fauna` 80 000 tick, `--world-every 12` | jämvikten | **klart**, `runs/p201`, se nedan — floran står nästan still, näringen inte |
 | ~~0202~~ | `nutrient_init` och `detritus_init` kalibreras mot p201:s jämvikt, inte mot 0086:s identitet | inkörningen | **klart**, se nedan — näringen inom 1–3 % av jämvikten från tick 0; faunan dör ut snabbare |
 | — | faunan bär sig inte i `f6-256`: utdöd vid månad ~84 före 0202 och ~24 efter, 93 av 94 döda av svält | ekologin | **öppen**, nästa — se 0202; hör ihop med 0197 och `f6-256-mager` |
+| ~~0203~~ | passtidtagningen delar upp `_step_world_and_flora` i världens delpass, florans tre system och spatialindexet | mätningen | **klart**, se nedan — bitidentisk bana; hydro väntar på trådar under last |
 | — | sådden skapar plantor som inte bär sig: 20 % svälter ihjäl vid första ticken, 23 % efter 0202 | sådden | **öppen**, se p198 och 0202 |
 | — | ~~fröregnet halveras på ~100 mån~~ (falsifierat i p201: bottnar kring 220 frön/tick); 95 % av reproduktionspoolen hos omogna | florarevisionen | **öppen**, se p198 och p201 |
 | — | sammanfattningen saknar väg för en körning utan fauna: massakvot 2,9e17, "ingen omsättning alls" | mätningen | **öppen**, se p198 |
@@ -2712,6 +2713,37 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Passtidtagningen ser in i världspasset (0203)
+
+Instrumentering, ingen dynamikändring. Utan fauna är `_step_world_and_flora`
+i praktiken hela ticken, och `--pass-timing` sade då bara att allt gick åt
+till ett ställe. Passet delas nu upp: `world.step` och dess åtta delpass,
+`_drift_system`, `_growth_system_flora`, `_dispersal_system_flora` och
+`store.rebuild_spatial_index`. Metoderna wrappas på instanserna precis som
+systempassen, så att anropen inifrån `world.step()` träffar omslagen;
+raderna indenteras under sin förälder och deras andelar summerar inte.
+Kostnaden är tolv klockavläsningar per tick.
+
+Bitprov mot `55aebef`: noll skillnad utan flaggan, och med `--pass-timing`
+påslaget är banan identisk — enda skillnaden är tidtagningsblocket.
+
+**Första fyndet, under last.** Maskinen delades med ett tiotal externa
+processer (load 13–16 av 24 kärnor). `liten6`, 150 tick efter uppvärmning:
+
+```
+NUMBA_NUM_THREADS    hydro_pass    tick totalt
+        1              0,10 ms      12,5 ms
+        4              0,22 ms      12,1 ms
+       24 (standard)  11,07 ms      24,2 ms
+```
+
+Hydrokärnorna `soil_pass` och `derive_water` är kompilerade med
+`parallel=True`, och `kor.sh` sätter sedan 0117 inte längre trådantalet.
+Med maskinens alla trådar och kärnorna upptagna av andra väntar varje
+parallell region på trådar som inte får köra — samma patologi som 0118
+beskrev för tillväxtkärnan. Hur stor den är på ledig maskin och vid f6-256
+är **inte mätt**; det är nästa mätning, och den avgör om något ska byggas.
 
 ### Utgångsläget sås vid jämvikten (0202)
 
