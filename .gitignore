@@ -37,3 +37,4 @@ runs/
 *.rej
 *.patch
 *.b64
+patches/
