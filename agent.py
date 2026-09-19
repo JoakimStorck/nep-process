@@ -21,6 +21,13 @@ from phenotype import (
     body_depth,
     LENGTH_UNIT_M,
     NUTRIENT_PER_KG_LABILE,
+    NUTRIENT_PER_KG_STRUCT,
+    E_FOOD_LABILE_J_PER_KG,
+    E_FIBER_J_PER_KG,
+    FERMENTATION_LOSS,
+    fiber_fraction,
+    retention_time_h,
+    fermented_fraction,
     LEAN_DM_FRAC,
     GLYCOGEN_WATER_PER_KG,
     ADIPOSE_LIPID_FRAC,
@@ -1707,6 +1714,10 @@ class Body:
         food_carcass_J: float,
         assim_bio_kg: float = 0.0,
         assim_carcass_kg: float = 0.0,
+        assim_bio_J: float = 0.0,
+        assim_carcass_J: float = 0.0,
+        assim_bio_N: float = 0.0,
+        assim_carcass_N: float = 0.0,
         pheno: Phenotype,
         extra_drain: float = 0.0,
         T_env: float = 0.0,
@@ -1900,9 +1911,12 @@ class Body:
         m_assim_car = max(0.0, float(assim_carcass_kg))
         m_assim = m_assim_bio + m_assim_car
 
-        E_in_bio = m_assim_bio * _E_labile
-        E_in_car = m_assim_car * _E_labile
+        # Energin och kvävet räknas i matsmältningen, ur födans sammansättning
+        # (steg 2, 0217), och kommer hit färdiga.
+        E_in_bio = max(0.0, float(assim_bio_J))
+        E_in_car = max(0.0, float(assim_carcass_J))
         E_in = E_in_bio + E_in_car
+        N_in_food = max(0.0, float(assim_bio_N)) + max(0.0, float(assim_carcass_N))
 
         # Förlusterna är nu massa som ligger i detrituspoolen, inte energi som
         # försvann. Termerna behålls som diagnostik.
@@ -1943,8 +1957,7 @@ class Body:
             # täthet. Ett kilo glykogen väger nio gånger mer än ett kilo fett
             # per lagrad joule, räknat vått, och det är den kostnaden som gör
             # axeln till en verklig avvägning.
-            N_in = m_assim * NUTRIENT_PER_KG_LABILE
-            p_equiv = N_in / N_PER_KG_PROTEIN
+            p_equiv = N_in_food / N_PER_KG_PROTEIN
             E_prot = p_equiv * E_PROTEIN_J_PER_KG
             if E_prot > E_in and E_prot > 0.0:
                 # Födans energi räcker inte till proteinets — kan inträffa så
@@ -3074,6 +3087,10 @@ class BodyStepInput:
     food_carcass_J: float
     assim_bio_kg: float
     assim_carcass_kg: float
+    assim_bio_J: float
+    assim_carcass_J: float
+    assim_bio_N: float
+    assim_carcass_N: float
     E_move: float
     Tloc: float
     B0: float
@@ -4491,48 +4508,104 @@ class Agent:
 
         herb_eff, scav_eff = diet_efficiency(diet)
 
-        a_l = self._excrete(world, got_l, e_l, herb_eff)
-        a_d = self._excrete(world, got_d, e_d, scav_eff)
+        # Uppehållstiden i tarmen följer kroppsstorleken (steg 2).
+        tau_h = retention_time_h(self.body.M_wet())
+        a_l, E_l, N_l = self._digest(world, got_l, e_l, herb_eff, tau_h)
+        a_d, E_d, N_d = self._digest(world, got_d, e_d, scav_eff, tau_h,
+                                     fermentable=False)
 
         _ing = float(got_l) + float(got_d)
         if _ing > 1e-12:
             self._assim_ratio = min(1.0, max(0.02, (float(a_l) + float(a_d)) / _ing))
 
-        return float(got_l), float(got_d), float(e_l), float(e_d), float(a_l), float(a_d)
+        return (float(got_l), float(got_d), float(e_l), float(e_d),
+                float(a_l), float(a_d), float(E_l), float(E_d),
+                float(N_l), float(N_d))
 
-    def _excrete(self, world: World, mass_kg: float, energy_J: float,
-                 diet_eff: float) -> float:
+    def _digest(self, world: World, mass_kg: float, energy_J: float,
+                diet_eff: float, tau_h: float,
+                *, fermentable: bool = True) -> tuple[float, float, float]:
         """
-        Återför den massa som inte assimileras till cellen som detritus.
-        Returnerar den assimilerade massan i kilo.
+        Smält en måltid. Returnerar (assimilerad massa, energi J, kväve kg).
 
-        Utan detta försvinner allt ätet ur modellen: kroppsmassan växer ur
-        energibudgeten och den ingesterade massan bokförs ingenstans.
+        **Födan har en sammansättning sedan steg 2** (0217). Torrsubstansen
+        delas i labilt, jäsbar fiber och lignin, och varje del behandlas för
+        sig:
 
-        Assimilationsandelen är (1 - struktur) * matsmältning * kostpreferens.
-        Resten passerar igenom. Eftersom strukturmaterialet passerar i sin
-        helhet medan bara en del av det labila gör det, är exkrementet mer
-        strukturrikt än födan — betning koncentrerar segt material i
-        detrituspoolen.
+        - det labila smälts med tarmens verkningsgrad gånger kostpreferensen,
+          och ger 17,2 MJ per kilo, alltså kemins tal och inte den gamla
+          konstanten 9,3 som var våt kroppsvävnad räknad på torr föda;
+        - fibern jäses av symbionter till den andel som hinner brytas ned
+          under uppehållstiden i tarmen, och ger cellulosans energi minus
+          jäsningens förluster;
+        - ligninet passerar orört.
+
+        Kvävet följer materialet: det labila bär `N_L` per kilo och resten
+        `N_S`. Det som inte assimileras lämnar kroppen som exkrement, och dess
+        strukturandel väljs så att kvävet stämmer. Går det inte — exkrementet
+        kan bara bära mellan `N_S` och `N_L` per kilo — bokförs skillnaden
+        direkt mot cellens fria näring.
+
+        Kadaver jäses inte: animalisk vävnad har ingen fiber. Dess labila del
+        värderas ännu med växtens tal, vilket underskattar fettet; se raden i
+        TODO.md.
         """
         m = float(mass_kg)
         if m <= 1e-15:
-            return 0.0
+            return 0.0, 0.0, 0.0
 
         e_lab = float(self.AP.E_labile_J_per_kg)
         s_in = 1.0 - (float(energy_J) / max(m * e_lab, 1e-30))
         s_in = min(1.0, max(0.0, s_in))
 
-        m_assim = m * assimilated_fraction(s_in, diet_eff)
-        out_kg = max(0.0, m - m_assim)
-        if out_kg <= 1e-15:
-            return float(m_assim)
+        dig = min(1.0, max(0.0, 0.80 * float(diet_eff)))
+        m_lab = m * (1.0 - s_in)
+        m_lab_assim = m_lab * dig
+        E_avail = m_lab_assim * E_FOOD_LABILE_J_PER_KG
+        N_assim = m_lab_assim * NUTRIENT_PER_KG_LABILE
 
-        s_out = min(1.0, max(0.0, m * s_in / out_kg))
+        m_ferm = 0.0
+        if fermentable:
+            fib = m * fiber_fraction(s_in)
+            m_ferm = fib * fermented_fraction(tau_h) * float(diet_eff)
+            E_avail += m_ferm * E_FIBER_J_PER_KG * (1.0 - FERMENTATION_LOSS)
+
+        N_food = m * (NUTRIENT_PER_KG_LABILE * (1.0 - s_in)
+                      + NUTRIENT_PER_KG_STRUCT * s_in)
+        out_kg = max(0.0, m - m_lab_assim - m_ferm)
+        N_ut = max(0.0, N_food - N_assim)
+        if out_kg <= 1e-15:
+            if N_ut > 0.0:
+                self.out_nutrient_kg_pending(world, N_ut)
+            return float(m_lab_assim + m_ferm), float(E_avail), float(N_assim)
+
+        span = NUTRIENT_PER_KG_LABILE - NUTRIENT_PER_KG_STRUCT
+        s_out = (NUTRIENT_PER_KG_LABILE - N_ut / out_kg) / max(1e-30, span)
+        s_out = min(1.0, max(0.0, s_out))
         world.excrete_at(self.x, self.y, out_kg, s_out)
-        return float(m_assim)
-    
-    
+        N_i_exkrement = out_kg * (NUTRIENT_PER_KG_LABILE * (1.0 - s_out)
+                                  + NUTRIENT_PER_KG_STRUCT * s_out)
+        diff = N_ut - N_i_exkrement
+        if abs(diff) > 1e-18:
+            self.out_nutrient_kg_pending(world, diff)
+        return float(m_lab_assim + m_ferm), float(E_avail), float(N_assim)
+
+    def out_nutrient_kg_pending(self, world: World, kg_N: float) -> None:
+        """
+        Kväve som varken följde med exkrementet eller kroppen.
+
+        Uppstår när exkrementets halt hamnar utanför vad `s` kan uttrycka.
+        Positivt läggs i cellen som fri näring, negativt tas därifrån.
+        """
+        n = float(kg_N)
+        if n == 0.0:
+            return
+        cell = int(world.grid.cell_of(float(self.x), float(self.y)))
+        if n > 0.0:
+            world.add_nutrient(cell, n)
+        else:
+            world.take_nutrient(cell, -n)
+
     def _activity_proxy(
         self,
         speed: float,
@@ -4744,6 +4817,10 @@ class Agent:
             food_carcass_J,
             assim_bio_kg,
             assim_carcass_kg,
+            assim_bio_J,
+            assim_carcass_J,
+            assim_bio_N,
+            assim_carcass_N,
         ) = self._perform_feeding(
             world=world,
             dt=dt,
@@ -4766,6 +4843,10 @@ class Agent:
             food_carcass_J=float(food_carcass_J),
             assim_bio_kg=float(assim_bio_kg),
             assim_carcass_kg=float(assim_carcass_kg),
+            assim_bio_J=float(assim_bio_J),
+            assim_carcass_J=float(assim_carcass_J),
+            assim_bio_N=float(assim_bio_N),
+            assim_carcass_N=float(assim_carcass_N),
             E_move=float(E_move),
             Tloc=float(plan.Tloc),
             B0=float(plan.B0),

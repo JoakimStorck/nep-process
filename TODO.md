@@ -2596,10 +2596,11 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0214~~ | fostret byggs efter underhållet; katabolism för fostret med skada och strikt över avmagringströskeln | budgeten | **klart**, se nedan — rättelse; utfallet inom frönas spridning |
 | ~~0215~~ | accessorer för våt massa införda där fysiken läser (steg 1a i skissen) | serien | **klart**, se nedan — bitidentisk |
 | ~~0216~~ | kroppens kemi: torrsubstans per komponent, verkliga tätheter, kvävefri reserv, kvävepool, urea, endogen förlust, kvävebegränsad tillväxt, kadavrets kväve (steg 1b–1d) | serien | **klart**, se nedan — fettandel 4–12 %, kvävepoolen tom hos ~30 % |
+| ~~0217~~ | födans sammansättning och matsmältning: labilt, jäsbar fiber och lignin; jäsningen följer uppehållstiden i tarmen (steg 2) | serien | **klart**, se nedan — energin per kg 2,4×, faunan lever längre men bär sig inte |
 | — | kadavrets energi för asätare räknas med förnans konstant och underskattar fettet | ekologin | **öppen**, rättas i steg 2 |
 | — | reserven belastar basal, värmeledning och termoreglering men inte rörelse, kroppsdjup, betesräckvidd eller predationens massjämförelse | budgeten | **öppen**, funnen i 0215 |
 | — | en graviditet som avstannar avbryts aldrig (ingen resorption) | reproduktionen | **öppen**, se 0214 |
-| — | växtföda ger en tredjedel av sin energi (våt vävnads 9,3 MJ/kg på torrsubstans, cellulosa noll) | födobudgeten | **öppen**, steg 2 i skissen — revisionen F1; fettets täthet rättad i 0216 |
+| ~~—~~ | växtföda gav en tredjedel av sin energi | födobudgeten | **klart** i 0217 — revisionen F1 |
 | — | startdjuren sätts in med 6 % reserv: 14 av 80 svälter inom en månad; nyfödda har ~3 ticks reserv | utgångsläget | **öppen** — revisionen, mätkörningen, L6 |
 | ~~0203~~ | passtidtagningen delar upp `_step_world_and_flora` i världens delpass, florans tre system och spatialindexet | mätningen | **klart**, se nedan — bitidentisk bana; hydro väntar på trådar under last |
 | ~~0204~~ | hydrokärnorna `soil_pass` och `derive_water` blir seriella | prestanda | **klart**, se nedan — −6,8 ms/tick (−14 %); banan oberoende av kärnantalet |
@@ -2731,6 +2732,64 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Födans sammansättning och matsmältningen (0217)
+
+Dynamikändring, steg 2 i `docs/sammansattning-och-vatten.md`. Revisionens F1:
+floran räknas i torrsubstans men värderades med `E_labile = 9,3 MJ/kg`, som är
+våt kroppsvävnad, och strukturmaterialet gav noll. Ett kilo torrt bete gav
+3,2 MJ mot verklighetens ~10 smältbara.
+
+Födans torrsubstans har nu en sammansättning. Ligninandelen härleds ur
+strukturandelen — `lignin = 0,35·s²`, alltså 0,1 % av torrsubstansen vid
+`s` = 0,05, elva procent vid 0,57 och tjugofem vid 0,85, vilket är vedens
+nivå — och resten av strukturen är jäsbar fiber. Varje del behandlas för sig:
+
+- **labilt** smälts med tarmens verkningsgrad gånger kostpreferensen och ger
+  17,2 MJ/kg, kemins tal för socker, stärkelse och protein;
+- **fibern** jäses till den andel som hinner brytas ned under uppehållstiden,
+  `1 − exp(−0,015·τ)`, och ger cellulosans 17,5 MJ/kg minus 20 % i metan och
+  jäsningsvärme;
+- **ligninet** passerar orört.
+
+**Uppehållstiden är Jarman–Bell som mekanism:** tarmvolymen växer som M¹ och
+behovet som M^0,75, så `τ = 20 h · (M/2 kg)^0,25`. Det ger 8 timmar vid 100 g,
+20 vid 2 kg och 80 vid 500 — och jäst fiberandel 11 %, 26 % respektive 70 %,
+mot uppmätta 15–25 % hos kanin och 50–60 % hos nöt. Små djur kan alltså inte
+leva på fiber och måste välja labilt bete; stora kan.
+
+Kvävet följer materialet: det labila bär `N_L`, resten `N_S`, och exkrementets
+strukturandel väljs så att kvävet stämmer. Ligger den utanför vad `s` kan
+uttrycka bokförs skillnaden mot cellens fria näring. Kadaver jäses inte —
+animalisk vävnad har ingen fiber — och dess labila del värderas ännu med
+växtens tal, vilket underskattar fettet; raden står kvar i kön.
+
+**Uträknat för medianfloran** (`s` = 0,567, djur på 2 kg, ren herbivor):
+labilt ger 5,96 MJ per kg torrsubstans och fibern 1,65, alltså 7,6 mot
+tidigare 3,2 — **2,4 gånger mer**, varav fibern är 22 %.
+
+**Utfall**, tre frön, HEAD (0216) mot 0217 (`runs/p217`):
+
+```
+f6-256, 1 200 tick   födslar          djurmånader         intag/basal   ätet kg
+  HEAD               52 / 82 / 36     775 / 1045 / 565    1,31–1,33     7 985 / 9 157 / 5 469
+  0217               45 / 215 / 78    813 / 1819 / 835    1,81–1,90     5 134 / 7 151 / 4 913
+liten6, 3 000 tick   utdöd vid mån
+  HEAD               13 / 21 / 13     359 / 370 / 190     1,23–1,30     3 164 / 2 765 / 1 431
+  0217               53 / 35 / 52     915 / 460 / 415     1,68–1,71     2 890 / 1 822 / 1 684
+```
+
+Djuren äter **mindre massa och får mer energi**: betestrycket faller 20–35 %
+medan intaget per basalomsättning stiger från 1,3 till 1,8. `liten6`-faunan
+lever två till fyra gånger längre, och i `f6-256` frö 2 står beståndet på 48
+djur efter 24 månader mot 2 på HEAD. **Men den bär sig ännu inte:** alla tre
+`liten6`-körningar dör ut inom 60 månader, och två av tre f6-körningar slutar
+på ett fåtal djur.
+
+Näringsinvarianten driver 8e-9 relativt över rökprovet och 0210:s energirest
+är högst 2e-12. Kvar i serien: växternas vatten, vätskebalansen, törsten och
+avdunstningskylningen, samt delpatch 1e (inlagringseffektiviteten), som drar
+åt andra hållet.
 
 ### Kroppens kemi (0216)
 

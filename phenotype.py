@@ -741,6 +741,55 @@ ENDOGENOUS_N_PER_J = 4.8e-10
 # ~1–2 % av kroppsproteinet som fri pool.
 N_POOL_CAP_FRAC = 0.02
 
+# --- Födans sammansättning och matsmältning (steg 2) ----------------------
+# Se docs/sammansattning-och-vatten.md. Växtens torrsubstans delas i labilt,
+# jäsbar fiber (cellulosa och hemicellulosa) och lignin.
+#
+# Ligninandelen härleds ur strukturandelen: graden av vedartad struktur *är*
+# lignininnehållet. Andelen av strukturen växer linjärt med `s`, så
+# lignin = LIGNIN_SHARE_MAX·s². Vid `s` = 0,05 ger det 0,1 % av
+# torrsubstansen (ungt gräs), vid 0,57 elva procent, och vid 0,85 tjugofem —
+# ved ligger på 25–30 %.
+LIGNIN_SHARE_MAX = 0.35
+# Metaboliserbar energi i labil växtsubstans: socker, stärkelse och protein
+# ligger alla kring 17 MJ/kg (Atwater).
+E_FOOD_LABILE_J_PER_KG = 17.2e6
+# Cellulosans förbränningsvärme. Jäsningen förlorar metan och jäsningsvärme.
+E_FIBER_J_PER_KG = 17.5e6
+FERMENTATION_LOSS = 0.20
+# Jäsningens takt och uppehållstiden i tarmen. Tarmvolymen växer som M¹ och
+# behovet som M^0,75, så uppehållstiden växer som M^0,25 — Jarman–Bell som
+# mekanism. 20 timmar vid 2 kg ger 80 timmar vid 500 kg, vilket är idisslarens
+# storleksordning. Takten 0,015/h ger 26 % jäst fiber vid 2 kg och 70 % vid
+# 500 — mot uppmätta 15–25 % hos kanin och 50–60 % hos nöt.
+FERM_RATE_PER_H = 0.015
+RETENTION_H_REF = 20.0
+RETENTION_REF_KG = 2.0
+
+
+def lignin_fraction(structure: float) -> float:
+    """Ligninets andel av torrsubstansen, härledd ur strukturandelen."""
+    s = min(1.0, max(0.0, float(structure)))
+    return LIGNIN_SHARE_MAX * s * s
+
+
+def fiber_fraction(structure: float) -> float:
+    """Jäsbar fiber som andel av torrsubstansen."""
+    s = min(1.0, max(0.0, float(structure)))
+    return max(0.0, s - lignin_fraction(s))
+
+
+def retention_time_h(M_wet: float) -> float:
+    """Uppehållstid i tarmen, timmar. Växer som M^0,25."""
+    m = max(1e-9, float(M_wet))
+    return RETENTION_H_REF * (m / RETENTION_REF_KG) ** 0.25
+
+
+def fermented_fraction(tau_h: float) -> float:
+    """Andel av fibern som hinner jäsas under uppehållstiden."""
+    return 1.0 - math.exp(-FERM_RATE_PER_H * max(0.0, float(tau_h)))
+
+
 STRUCTURE_MIN = 0.05
 STRUCTURE_MAX = 0.85
 
