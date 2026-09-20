@@ -1,0 +1,36 @@
+# liten6 utan fauna: kontrollen till betningsmätningen.
+#
+# Identisk med `liten6` i allt utom att inga djur sätts in — samma terrängfrö,
+# samma bördighet, samma sådd — så att florans egen bana går att skilja från
+# vad betarna gör med den. Skapad i betningsmätningen efter 0222, när
+# världsloggen visade floran falla från ~15 000 plantor till ~4 000 på sextio
+# månader i en värld med bara ett hundratal djur.
+#
+namn: liten6-utan-fauna
+varld:
+  bredd: 64
+  hojd: 64
+  dt: 0.02
+  bordighet: 4.0
+  latitud: 30.0
+  kontinentalitet: 0.55
+  terrang:
+    seed: 1
+    lambda_max_frac: 0.75
+    lambda_min: 3.0
+    beta: 2.4
+    hav_andel: 0.2
+    hav_lutning: 1.0
+flora:
+  sadd: bordighet
+  plantmassa: 1.32
+fauna:
+  antal: 0
+  insatts_vid: start
+  flackar: 2
+  flackradie: 12.0
+  max_antal: 1024
+fysiologi:
+  fartskala: 1.0
+  sociability: 0.8
+  sociability_sd: 0.5

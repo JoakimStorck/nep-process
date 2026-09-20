@@ -2608,6 +2608,8 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | — | hungern ser bara energi; 38 % av ungarnas tick är energirika men kvävefattiga | budgeten | **öppen** — se mätningen |
 | ~~0222~~ | kväveförrådet blir labilt kroppsprotein med ärftligt tak, buret som vävnad | budgeten | **klart**, se nedan — dräktighetsintervallet 10,7 → 1,4 mån, och `f6-256` skjuter över |
 | — | reproduktionen har ingen annan broms än kvävet: `f6-256` går 80 → 6 169 djur på 36 månader med 24 g per djur | ekologin | **öppen** — funnen i 0222 |
+| ~~—~~ | revision: faunans storleksskalning — vilka termer beror på massan och med vilken exponent | storleken | **klart**, se nedan (`docs/revision-storleksskalningen.md`) |
+| — | betning mot kontroll: `liten6` faller till hälften utan djur, betningen tar resten | ekologin | **öppen** — se mätningen nedan |
 | — | `_T_N_POOL` nålas mot taket 0,093 av 0,10 redan i första fjärdedelen: bärkostnaden är för svag mot nyttan | budgeten | **öppen** — funnen i 0222 |
 | ~~—~~ | `Body._add_N` har ingen anropare: intaget skriver samma logik inline | städning | **klart** i 0220 — borttagen |
 | — | kadavrets energi för asätare räknas med förnans konstant och underskattar fettet | ekologin | **öppen**, rättas i steg 2 |
@@ -2745,6 +2747,75 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Faunans storleksskalning (revision) och betningen mot kontroll
+
+*Två mätningar utan kodändring, efter 0222. Full revision i
+`docs/revision-storleksskalningen.md`; underlag `runs/betning`, `runs/p219`,
+`runs/p222`.*
+
+**Betningen mot kontroll.** `liten6` kördes 3 000 tick med och utan fauna,
+samma frö. Kontrollscenariot `scenarios/liten6-utan-fauna.yaml` är identiskt
+med `liten6` så när som på noll djur.
+
+```
+                        t=0      t=60 utan fauna    t=60 med fauna
+  plantor             15 118          7 494             3 952
+  floramassa (kg)     19 576          6 648             1 308
+  kväve i flora          302             86                18
+  fri näring             156            159               306
+  frön per loggpunkt     948          1 088               168
+```
+
+**Halva nedgången sker utan en enda betare.** `liten6` är inte i jämvikt — den
+relaxerar från sitt såddtillstånd, och förnans strukturfraktion har en
+halveringstid på ~60 månader, alltså fyra gånger körningens längd. Scenariots
+eget huvud säger dessutom att den inte är ett ekologiskt scenario. **Slutsatser
+om faunans bärkraft får inte dras ur `liten6` ensam.** Betningen står för den
+andra halvan och är brutal: 6 648 → 1 308 kg, och fröskörden faller till en
+sjättedel.
+
+**Storleksskalningen.** Frågan var om `M_target`-fallet i 0222 är en verklig
+fitnessgradient eller modellens egen konstruktion. Mönstret är systematiskt:
+*varje term som härletts skalar rätt; varje term som är en konstant kalibrerad
+vid en kroppsstorlek är massfri — och samtliga sådana gynnar det lilla djuret.*
+Elva termer är riktiga (Kleiber, yta, Taylor, marschfart, reservtak, fastetid,
+uppehållstid, mjölktak, endogent kväve, kroppsskala, kvävepool). Fem är det
+inte:
+
+```
+  term                     modellen   biologin       effekt
+  födosökets bansträcka      M^0      M^0,25         gynnar litet
+  fosterbyggets takt         M^0      M^0,75         gynnar litet, starkt
+  åldrandets takt            M^0      M^-0,25        gynnar litet
+  mognadsåldern              M^0      M^0,25         gynnar litet
+  synvidden                  M^0      växer          gynnar litet
+```
+
+Ingen pekar åt andra hållet. Betesyta per enhet underhåll skalar därför som
+**M^−0,42**: ett fyrtiogramsdjur får 4,9 gånger mer bete per joule underhåll än
+baslinjens median. Dräktigheten går som M^1 i stället för M^0,25, vilket är
+varför kullintervallet föll till 1,44 månader när kvävet slutade strypa bygget.
+Och åldrandet är massfritt, så dvärgen lever lika länge som den stora kroppen
+och förökar sig sju gånger snabbare.
+
+**Det är också internt motsägelsefullt sedan 0219:** modellen har två mått på
+hur långt ett djur rör sig, och bara det mindre — den riktade färden, 1 200
+lu/mån · M^0,2 — är härlett. Födosökets bana, 4 340 lu/mån, är en konstant
+kalibrerad vid 1,2 kg.
+
+**Dvärgarna svälter inte.** Skadeinflödet är 81,7 % metabol stress, 0,6 %
+svält, 2,6 % kyla. De når sitt program exakt; programmet är litet. En regel av
+typen "dö om du inte når din programmerade storlek" skulle därför inte röra
+dem — och den prövades redan en gång, som svältskada mot `expected_mass(age)`,
+och gav den motsatta rusningen (p179, se `Body._uppdatera_topp`).
+
+**Ordningsföljd för rättelserna**, en per körning: bansträckan, fosterbyggets
+takt, åldrandet, mognadsåldern, därefter synvidd och munkapacitet om de binder.
+Ingen är en motkraft — var och en låter en kalibrerad konstant följa kroppen
+som de elva riktiga termerna redan gör. **Efter varje steg körs om och
+evolutionen får svara.** Drivs massan fortfarande mot golvet när allt skalar
+rätt, då är litenhet svaret i den här världen och ska stå som resultat.
 
 ### Kväveförrådet blir labilt kroppsprotein (0222)
 
