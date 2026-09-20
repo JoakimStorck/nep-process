@@ -23,6 +23,18 @@ from phenotype import (
     _T_SOC,
     LEAN_DM_FRAC,
     N_PER_KG_PROTEIN,
+    MILK_DM_PROTEIN,
+    MILK_DM_FAT,
+    MILK_DM_CARB,
+    MILK_EFF,
+    MILK_MAX_X_BASAL,
+    MILK_MOTHER_FLOOR,
+    MILK_RADIUS_CELLS,
+    WEAN_FRAC_OF_A_MATURE,
+    E_LIPID_J_PER_KG,
+    E_GLYCOGEN_J_PER_KG,
+    milk_energy_per_kg_dm,
+    milk_reserve_energy_per_kg_dm,
     derive_pheno,
     flora_adult_mass,
     dispersal_scale,
@@ -335,9 +347,12 @@ _EFL_LEDGER_KEYS = ("E_store", "E_out_drain", "E_material", "E_overflow")
 #   E_death             reserven som lämnar beståndet vid döden (till kadavret)
 # `E_unaccounted` är förändringen minus posternas summa och ska vara noll på
 # avrundning när; allt annat är en väg som inte bokförs.
+#   E_milk_mor          moderns reserv, mjölken och dess syntesarbete
+#   E_milk_unge         ungens reserv, mjölkens fett och laktos
 _EFL_POSTS = (
     "E_step_store", "E_step_store_dying", "E_mating", "E_birth_parent",
     "E_newborn", "E_attack", "E_founders", "E_death",
+    "E_milk_mor", "E_milk_unge",
 )
 
 
@@ -458,6 +473,8 @@ class Population:
         # Här summeras varje tick, och reservens förändringar utanför
         # `Body.step` bokförs som egna poster, så att populationens energi
         # kan stängas: se `_emit_population`.
+        # Diande ungars massa per mor, för bördan i `M_carry` (0218).
+        self._diande_per_mor: dict[int, float] = {}
         self._efl: dict[str, float] = {}
         self._efl_ticks = 0
         self._efl_E_prev = 0.0
@@ -1615,6 +1632,11 @@ class Population:
                 break
             ungar.append(child)
             self._efl_add("E_newborn", float(child.body.E_total()))
+            # Laktationen: ungen dias tills den är avvand, och avvänjningen
+            # härleds ur moderns mognadsålder (0218).
+            child.mother_id = int(getattr(parent, "id", -1))
+            child.wean_t = float(ctx.t) + WEAN_FRAC_OF_A_MATURE * float(
+                getattr(parent.pheno, "A_mature", 1.0))
 
             # Fostret bars med moderns askandel. Vid födseln får barnet sin
             # egen, och kvävet per kilo ändras därmed (0216). Mellanskillnaden
@@ -4349,11 +4371,23 @@ class Population:
         body_inputs = []
         body_slots: list[int] = []
         
+        # Diande ungar bärs av modern (0218). Uppmätt utan detta: modern rör
+        # sig 5,0 cellbredder per tick och ungen 0,93, så ungen hamnar utanför
+        # mjölkradien inom ett par tick — bara 14 procent av de diande tickarna
+        # skedde inom radien. Ett litet däggdjur håller inte jämna steg med sin
+        # mor; det bärs eller ligger i ett bo hon återvänder till. Här bärs
+        # det, och hon betalar med dess massa i `M_carry`.
+        _mor = {int(a.id): a for a in self.agents if a.body.alive}
+
         for i, (a, plan) in enumerate(plans):
             if not a.body.alive:
                 continue
         
             body_in = a.execute_action_plan(self.world, ctx, plan)
+            if a.dias(float(ctx.t)):
+                m = _mor.get(int(a.mother_id))
+                if m is not None and m is not a:
+                    a.x, a.y = float(m.x), float(m.y)
             self._write_spatial_to_store(a.store_slot, a.x, a.y)
         
             body_inputs.append((a, body_in))
@@ -4387,6 +4421,18 @@ class Population:
             self.world.add_nutrient(int(self.grid.cell_of(float(a.x), float(a.y))), out_n)
         b.out_nutrient_kg = 0.0
 
+    def _uppdatera_diande(self, ctx: "StepCtx") -> None:
+        """Summera de diande ungarnas våta massa per mor, för `M_carry`."""
+        t = float(ctx.t)
+        d: dict[int, float] = {}
+        for a in self.agents:
+            if not a.body.alive:
+                continue
+            if not a.dias(t):
+                continue
+            d[int(a.mother_id)] = d.get(int(a.mother_id), 0.0) + a.body.M_wet()
+        self._diande_per_mor = d
+
     def _step_body_system(
         self,
         ctx: "StepCtx",
@@ -4410,6 +4456,11 @@ class Population:
             slot = int(body_slots[i])
             age_s = float(self.store.age[slot]) if slot >= 0 else 0.0
             _E_pre = float(a.body.E_total())
+            # Modern bär sina diande ungar: deras våta massa belastar hennes
+            # basal, värmeledning och rörelse som all annan massa (0218).
+            buren = 0.0
+            if self._diande_per_mor:
+                buren = float(self._diande_per_mor.get(int(a.id), 0.0))
             
             a.body.step(
                 ctx,
@@ -4430,6 +4481,7 @@ class Population:
                 T_env=body_in.Tloc,
                 submersion=a._water_factor(),
                 age_s=age_s,
+                carried_kg=buren,
             )
 
             self._flush_body_outputs(a)
@@ -4563,6 +4615,86 @@ class Population:
                 self._write_alive_to_store(prey.store_slot, False)
     
     
+    def _step_lactation(self, ctx: "StepCtx") -> None:
+        """
+        Modern mjölkar sina ungar (0218).
+
+        **Varför en överföring per tick och inte en gåva vid födseln.** Ungens
+        reservtak är `reserve_cap · mager våt massa`, och en unge på fyrtio
+        gram kan inte bära veckors energi — det är därför laktation finns.
+        Mätningen efter 0217 visade vad följden blev utan den: nyfödda tappade
+        1,9 % av kroppsmassan per tick och dog på tio tick, eftersom den
+        obligatoriska kväveförlusten måste tas ur den egna vävnaden.
+
+        **Mjölken bär både energi och protein.** Det andra är det som
+        mätningen pekade ut: ungen föds med tom kvävepool.
+
+        **Radien är liten.** Kommer ungen utanför får den ingen mjölk, vilket
+        ger ett verkligt selektionstryck på att hålla ihop — flockdriften
+        finns redan som bärare. Dör modern upphör mjölken.
+
+        Modern betalar materialet och syntesarbetet ur sin reserv och sin
+        kvävepool, och mjölkar inte under `MILK_MOTHER_FLOOR` av sitt
+        reservtak: kullen får inte tömma hennes sista buffert.
+        """
+        t = float(ctx.t)
+        dt = float(ctx.dt)
+        ungar = [a for a in self.agents if a.body.alive and a.dias(t)]
+        if not ungar:
+            return
+        levande = {int(a.id): a for a in self.agents if a.body.alive}
+
+        E_dm = milk_energy_per_kg_dm()
+        E_res_dm = milk_reserve_energy_per_kg_dm()
+        # Moderns kostnad per kilo mjölktorrsubstans: fettets och laktosens
+        # energi plus syntesarbetet på hela mjölken. Proteinet tas ur hennes
+        # kvävepool och räknas därför inte här.
+        kostnad_dm = E_res_dm + E_dm * (1.0 / MILK_EFF - 1.0)
+        k_basal = float(self.AP.k_basal)
+
+        for ung in ungar:
+            mor = levande.get(int(ung.mother_id))
+            if mor is None or mor is ung:
+                continue
+            _, _, dist = ung._torus_delta_to(mor)
+            if dist > MILK_RADIUS_CELLS:
+                continue
+
+            b = mor.body
+            u = ung.body
+            P_basal = k_basal * (b.M_wet() ** 0.75)
+            spar = max(0.0, b.E_total() - MILK_MOTHER_FLOOR * b.E_cap())
+            m = min(
+                MILK_MAX_X_BASAL * P_basal * dt / E_dm,   # hennes takt
+                spar / max(1e-30, kostnad_dm),            # hennes reserv
+                float(b.N_pool) / MILK_DM_PROTEIN,        # hennes kväve
+                max(0.0, u.E_cap() - u.E_total()) / max(1e-30, E_res_dm),
+                max(0.0, u.N_pool_cap() - float(u.N_pool)) / MILK_DM_PROTEIN,
+            )
+            if m <= 1e-15:
+                continue
+
+            _E_mor_pre = float(b.E_total())
+            betalt = float(b.take_energy(m * kostnad_dm, dt=dt, strypt=False))
+            if kostnad_dm > 0.0:
+                m = min(m, betalt / kostnad_dm)
+            if m <= 1e-15:
+                continue
+            b.N_pool = max(0.0, float(b.N_pool) - m * MILK_DM_PROTEIN)
+
+            _E_ung_pre = float(u.E_total())
+            u.N_pool = float(u.N_pool) + m * MILK_DM_PROTEIN
+            u.M_slow = float(u.M_slow) + m * MILK_DM_FAT
+            u.M_fast = float(u.M_fast) + m * MILK_DM_CARB
+
+            self._efl_add("E_milk_mor", float(b.E_total()) - _E_mor_pre)
+            self._efl_add("E_milk_unge", float(u.E_total()) - _E_ung_pre)
+
+            if int(getattr(mor, "store_slot", -1)) >= 0:
+                self._write_body_surface_to_store(int(mor.store_slot), mor)
+            if int(getattr(ung, "store_slot", -1)) >= 0:
+                self._write_body_surface_to_store(int(ung.store_slot), ung)
+
     def _step_deaths(self) -> int:
         """
         Hantera död, carcass, slot-release och death events.
@@ -4818,6 +4950,7 @@ class Population:
                      if float(self.PP.fauna_spawn_radius) > 0.0 else " jämnt utspridda"))
         self._tick += 1
 
+        self._uppdatera_diande(ctx)
         dM_growth_flora, flora_established, flora_dispersed_mass = self._step_world_and_flora()
 
         self._step_metabolism_system(ctx)
@@ -4829,6 +4962,7 @@ class Population:
     
         deaths = self._step_deaths()
         births = self._step_births(ctx)
+        self._step_lactation(ctx)
     
         self._births_total += births
         self._deaths_total += deaths

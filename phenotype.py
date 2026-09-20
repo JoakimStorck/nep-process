@@ -741,6 +741,36 @@ ENDOGENOUS_N_PER_J = 4.8e-10
 # ~1–2 % av kroppsproteinet som fri pool.
 N_POOL_CAP_FRAC = 0.02
 
+# --- Laktationen ----------------------------------------------------------
+# Mjölkens sammansättning är förbestämd och satt efter kaninmjölk, som är den
+# koncentrerade typ ett litet däggdjur har: ~30 % torrsubstans, och av den
+# 40 % protein, 45 % fett och 15 % laktos. Det ger 26,4 MJ per kg torrsubstans
+# och ~7,9 MJ per kg färsk mjölk, vilket är kaninens uppmätta ~8.
+MILK_DM_PROTEIN = 0.40
+MILK_DM_FAT = 0.45
+MILK_DM_CARB = 0.15
+# Verkningsgrad från moderns reserv till mjölk (ARC: kl ≈ 0,6–0,7).
+MILK_EFF = 0.65
+# Mjölkens energiutbyte som mest, i gånger moderns basalmetabolism. Laktationen
+# är den dyraste fasen hos ett litet däggdjur: 2–4 × basal på toppen.
+MILK_MAX_X_BASAL = 2.0
+# Honan mjölkar inte under den här andelen av sitt reservtak: modern töms inte
+# på sin sista buffert för kullens skull.
+MILK_MOTHER_FLOOR = 0.10
+# **Avvänjningen är massbaserad.** Uppmätt med ett rent tidskriterium
+# (0,15 · `A_mature`) avvandes ungen vid ~5 % av vuxenmassan och svalt sedan
+# ihjäl: ett så litet djur sveper för liten yta för att försörja sig, och dog
+# vid 4–6 månaders ålder med tom reserv. Verklig avvänjningsvikt hos
+# smådäggdjur är 20–40 % av vuxenvikten, och modern avvänjer när ungen klarar
+# sig själv — inte när klockan går ut. Tidstaket finns kvar som spärr, så att
+# ett par som aldrig når massan inte diar i evighet.
+WEAN_MASS_FRAC = 0.25
+WEAN_FRAC_OF_A_MATURE = 0.60
+# Mjölkradien i cellbredder. Ungen måste hålla sig hos modern under början av
+# sitt liv; kommer den utanför upphör mjölken.
+MILK_RADIUS_CELLS = 1.0
+
+
 # --- Födans sammansättning och matsmältning (steg 2) ----------------------
 # Se docs/sammansattning-och-vatten.md. Växtens torrsubstans delas i labilt,
 # jäsbar fiber (cellulosa och hemicellulosa) och lignin.
@@ -765,6 +795,19 @@ FERMENTATION_LOSS = 0.20
 FERM_RATE_PER_H = 0.015
 RETENTION_H_REF = 20.0
 RETENTION_REF_KG = 2.0
+
+
+def milk_energy_per_kg_dm() -> float:
+    """Metaboliserbar energi per kg mjölktorrsubstans."""
+    return (MILK_DM_PROTEIN * E_PROTEIN_J_PER_KG
+            + MILK_DM_FAT * E_LIPID_J_PER_KG
+            + MILK_DM_CARB * E_GLYCOGEN_J_PER_KG)
+
+
+def milk_reserve_energy_per_kg_dm() -> float:
+    """Den del av mjölkens energi som hamnar i ungens reserv (fett och laktos)."""
+    return (MILK_DM_FAT * E_LIPID_J_PER_KG
+            + MILK_DM_CARB * E_GLYCOGEN_J_PER_KG)
 
 
 def lignin_fraction(structure: float) -> float:

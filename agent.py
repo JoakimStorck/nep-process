@@ -29,6 +29,7 @@ from phenotype import (
     retention_time_h,
     fermented_fraction,
     LEAN_DM_FRAC,
+    WEAN_MASS_FRAC,
     GLYCOGEN_WATER_PER_KG,
     ADIPOSE_LIPID_FRAC,
     FETUS_DM_FRAC,
@@ -1723,6 +1724,7 @@ class Body:
         T_env: float = 0.0,
         submersion: float = 0.0,
         age_s: float = 0.0,
+        carried_kg: float = 0.0,
     ) -> None:
         """
         Hazard removed.
@@ -1988,6 +1990,8 @@ class Body:
         M_carry = self.M_wet()
         if bool(self.gestating):
             M_carry += _gest_burden * max(0.0, self.M_fetus_wet())
+        # Diande ungar bärs och belastar som all annan massa (0218).
+        M_carry += max(0.0, float(carried_kg))
 
         M_eff = max(1e-9, M_carry)
         metab = float(pheno.metabolism_scale)
@@ -3128,6 +3132,23 @@ class Agent:
     obs_trace: np.ndarray = field(init=False)
 
     birth_t: float = 0.0
+    # Laktationen (0218): moderns id och när ungen är avvand. `mother_id` = -1
+    # betyder ingen mor — startdjur och avvanda ungar.
+    mother_id: int = -1
+    wean_t: float = -1.0
+
+    def dias(self, t: float) -> bool:
+        """
+        Dias ungen just nu? Massan avgör, tiden är en spärr (0218).
+
+        Modern avvänjer när ungen är stor nog att försörja sig själv,
+        `WEAN_MASS_FRAC` av sin vuxenmassa. Tidstaket hindrar att ett par som
+        aldrig når dit diar i evighet.
+        """
+        if int(self.mother_id) < 0 or float(self.wean_t) <= float(t):
+            return False
+        mal = float(getattr(self.pheno, "M_target", 0.0)) * LEAN_DM_FRAC
+        return float(self.body.M) < WEAN_MASS_FRAC * mal
     pheno: Phenotype = field(init=False)
 
     last_speed: float = 0.0

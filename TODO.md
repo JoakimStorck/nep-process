@@ -2598,7 +2598,8 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0216~~ | kroppens kemi: torrsubstans per komponent, verkliga tätheter, kvävefri reserv, kvävepool, urea, endogen förlust, kvävebegränsad tillväxt, kadavrets kväve (steg 1b–1d) | serien | **klart**, se nedan — fettandel 4–12 %, kvävepoolen tom hos ~30 % |
 | ~~0217~~ | födans sammansättning och matsmältning: labilt, jäsbar fiber och lignin; jäsningen följer uppehållstiden i tarmen (steg 2) | serien | **klart**, se nedan — energin per kg 2,4×, faunan lever längre men bär sig inte |
 | ~~—~~ | mätning: varför faunan inte bär sig — ungarna dör, de vuxna är mätta | ekologin | **klart**, se nedan (`runs/dod`) |
-| — | laktationen är ren väntetid: ungen måste födosöka från tick ett, med tom kvävepool | reproduktionen | **öppen**, nästa — se mätningen |
+| ~~0218~~ | laktation: mjölk per tick inom en liten radie, ungen bärs av modern, massbaserad avvänjning | reproduktionen | **klart**, se nedan — mekanismen når fram men vänder inte rekryteringen |
+| — | ungarnas fart är en tiondel av de vuxnas (1,2 mot 13 cellbredder per tick) medan massan skiljer åtta gånger; intaget kollapsar till noll i utbetad omgivning | rörelsen | **öppen**, nästa — se 0218 |
 | — | hungern ser bara energi; 38 % av ungarnas tick är energirika men kvävefattiga | budgeten | **öppen** — se mätningen |
 | — | kvävepoolen rymmer ~2 tick, så 58–80 % av det intagna kvävet deamineras bort | budgeten | **öppen** — se mätningen |
 | — | `Body._add_N` har ingen anropare: intaget skriver samma logik inline | städning | **öppen** — funnen i mätningen |
@@ -2737,6 +2738,55 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Laktation (0218)
+
+Dynamikändring, den första av mätningens tre mekanismer. Modern överför mjölk
+till sina ungar varje tick inom en liten radie; ungen bärs av henne tills den
+är avvand; avvänjningen är massbaserad.
+
+**Mjölken** har förbestämd sammansättning efter kaninmjölk: 40 % protein,
+45 % fett och 15 % laktos av torrsubstansen, alltså 26,4 MJ/kg TS och 7,9 per
+kg färsk mjölk mot kaninens uppmätta ~8. Den bär därmed både energi **och**
+protein, vilket var mätningens poäng: ungen föds med tom kvävepool. Modern
+betalar materialet ur reserv och kvävepool plus syntesarbetet (kl = 0,65),
+mjölkar högst 2 × sin basalmetabolism och aldrig under 10 % av sitt reservtak.
+
+**Ungen bärs.** Första mätningen visade varför det behövs: modern rör sig 5,0
+cellbredder per tick och ungen 0,93, så bara **14 %** av de diande tickarna
+skedde inom radien — ungen kan inte hålla jämna steg. Med bärandet är
+andelen **92 %**. Modern betalar med ungens våta massa i `M_carry`, alltså i
+basal, värmeledning och rörelse.
+
+**Avvänjningen blev massbaserad efter mätning.** Med tidskriteriet
+0,15 · `A_mature` avvandes ungen vid ~5 % av vuxenmassan och dog sedan vid
+4–6 månader med tom reserv och ett intag på 0–28 kJ mot ett behov på ~32.
+Verklig avvänjningsvikt är 20–40 % av vuxenvikten. Nu avvänjs ungen vid 25 %
+av sin vuxenmassa, med 0,6 · `A_mature` som tidsspärr.
+
+**Utfall**, tre frön, HEAD (0217) mot 0218 (`runs/p218`):
+
+```
+f6-256, 2 400 tick   födslar          djurmånader          döda ungar < 1 mån
+  HEAD               48 / 474 / 78    885 / 2646 / 852     17 / 26 / 21 %
+  0218               57 / 149 / 75    760 / 1467 / 699     53 / 19 / 32 %
+liten6, 3 000 tick
+  HEAD               255 / 53 / 47    915 / 460 / 415      37 / 32 / 19 %
+  0218               108 / 66 / 41    515 / 434 / 385      48 / 53 / 24 %
+```
+
+**Mekanismen fungerar men vänder inte rekryteringen.** Ungarna växer 6–9
+gånger medan de dias — från 4,1 till 26–36 g torrsubstans — men nästan ingen
+når vuxen ålder, varken före eller efter. De vuxna dör lika mycket i båda
+(240 mot 240 över tre frön). Utfallet är oförändrat till något sämre;
+mödrarnas kostnad för att bära och mjölka tas ut mot ungarnas vinst.
+
+**Vad mätningen pekar på i stället.** I individspåren kollapsar ungarnas intag
+till noll medan de vuxna fortsätter äta. Ungen rör sig 1,2 cellbredder per
+tick mot moderns 13 — en faktor tio vid åtta gångers masskillnad, medan
+verklig löphastighet skalar som M^0,2, alltså 1,5 gånger. Ett litet djur som
+inte kan förflytta sig ur en betad fläck svälter där. Det är nästa rad i kön,
+och den ligger före mekanism 2 och 3.
 
 ### Varför faunan inte bär sig (mätning efter 0217)
 
