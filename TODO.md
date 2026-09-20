@@ -2613,6 +2613,8 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0224~~ | fosterbygget skalar med moderns ämnesomsättning, dräktighet `∝ M^0,25` (rättelse 2 av 4) | storleken | **klart**, se nedan — storleksglidningen vänder; `M_target` stiger i stället |
 | ~~—~~ | mätning: 150 månader i `f6-256`, och varför skadesystemet aldrig biter | dödligheten | **klart**, se nedan — åldrandets klocka är 53× för långsam; rättelse 3 kan inte mätas förrän den går |
 | — | dödligheten har **en** kanal: svält 3 188, skada 4 av 3 192 dödsfall på 150 månader. Ingen ålderstermin i hazarden (`death_h_age = 0`) | dödligheten | **öppen**, nästa — blockerar rättelse 3 och 4 |
+| ~~—~~ | konstruktionsskiss: åldrandet som två flöden med härledd klocka | dödligheten | **klart** — `docs/aldrandet.md`; rättelse 3 utgår som egen patch, allometrin faller ut ur mekanismen |
+| — | instrumentering: `D`, `W`, omsättningens andel av basalen och skadetermerna per massakvintil i pop-loggen | dödligheten | **öppen**, nästa — steg 1 i `docs/aldrandet.md` |
 | — | `M_target` går till 3,645 och fryser — men med p10–p90 på 0,02 efter en flaskhals på sju individer: drift, inte selektion | storleken | **öppen** — kräver flera frön och ett skadesystem som biter |
 | — | betning mot kontroll: `liten6` faller till hälften utan djur, betningen tar resten | ekologin | **öppen** — se mätningen nedan |
 | — | `_T_N_POOL` nålas mot taket 0,093 av 0,10 redan i första fjärdedelen: bärkostnaden är för svag mot nyttan | budgeten | **öppen** — funnen i 0222 |
