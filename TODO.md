@@ -2619,7 +2619,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0227~~ | `repair_capacity`-intervallet ankrat om till 0,95–1,60 efter locusets nya innebörd | dödligheten | **klart**, se nedan — `liten6` återställt; optimumet 1,21 bekräftat från ett annat håll |
 | ~~0229~~ | skadan sänker farten och bansträckan: åldrandet dödar genom svälten (steg 3 i `docs/aldrandet.md`) | dödligheten | **klart**, se nedan — Gompertz-formen faller ut som utfall |
 | ~~0230~~ | `weakness()` mäter mot kroppens egen topp i stället för mot `M_crit`; konstanten borttagen | storleken | **klart**, se nedan — en dold storleksbroms försvann, och jämviktsmassan halverades |
-| — | `sense_cost_L1..L3` ger 1e−5 procent av basal — sinnena är gratis och `sense_strength` nålas mot nivå 3 | budgeten | **öppen**, nästa — enhetsfel på sju tiopotenser; kostnaden ska härledas ur nervvävnadens pris |
+| ~~0232~~ | sinnenas kostnad härledd som andel av basalen ur provtagningsvolymen; enhetsfelet på sju tiopotenser rättat | budgeten | **klart**, se nedan — traiten går från fri drift till stabiliserande selektion på nivå 1 |
 | — | `M_target` landar på 1,57 utan den dolda bromsen mot 2,95 med den: vilket är rätt, och vad sätter nivån? | storleken | **öppen** — funnen i 0230; kräver flera frön och en lång körning |
 | ~~0228~~ | `k_age0`, `k_age1` och `k_ageD` borttagna — den kalenderdrivna åldrandeklockans konstanter | städning | **klart** — bitidentisk |
 | — | `M_target` går till 3,645 och fryser — men med p10–p90 på 0,02 efter en flaskhals på sju individer: drift, inte selektion | storleken | **öppen** — kräver flera frön och ett skadesystem som biter |
@@ -2651,7 +2651,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | — | `dD_starve` kan inte döda: 0,025/mån mot `D_max = 1` är fyrtio månader vid full svält | dödligheten | **öppen** — del av dödlighetsmätningen nedan |
 | — | tio procent av dödsfallen sker med fett kvar, för att taket binder vid hög dränering | svälten | **öppen**, bieffekt av 0193 |
 | — | reparationen är näst största posten och betalas till 80–86 %; `repair_E_per_D` saknar härledning | budgeten | **öppen** |
-| — | `sense_cost_L1..L3` ligger 1e6 fel i enhet — sensing är gratis | A2 | **öppen**, se 0190 |
+| ~~—~~ | `sense_cost_L1..L3` ligger fel i enhet — sensing är gratis | A2 | **klart** i 0232 — felet var sju tiopotenser, inte sex |
 | ~~0231~~ | fostret bärs: `M_carry` räknar det, och dess underhåll faller ut ur Kleiber | reproduktionen | **klart**, se nedan — jämviktsmassan nära fördubblad |
 | — | nyfödda utrustas mot `E_cap_per_M`, inte mot sin egen `reserve_cap` | livshistorien | **öppen**, se 0190 |
 | — | Fishers jämvikt nås inte; bärarandelen beror på `lactation_k` | reproduktionen | **öppen**, se 0187 |
@@ -2774,6 +2774,70 @@ fortfarande bär det och en jämförelse bakåt mot p219–p226 ska kunna göras
 
 **Bitprov:** ren HEAD mot arbetsträdet, `liten6` 400 tick frö 1, med pop- och
 världslogg på båda sidor. Noll skillnad i konsoll, världslogg och pop-logg.
+
+### Sinnenas kostnad härleds (0232)
+
+Dynamikändring. `sense_cost_L1..L3 = 0,2 / 0,5 / 1,0` var i joule per kilo och
+tidsenhet, mot en basal på 9e6 J per kg^0,75. Nivå 3 kostade därmed **0,000013
+procent av basalomsättningen** — ett enhetsfel på sju tiopotenser, och sinnena
+var i praktiken gratis.
+
+**Härledningen.** Sinnesapparaten är nervvävnad, vars massaspecifika
+ämnesomsättning ligger omkring tjugo gånger kroppens genomsnitt. En
+uppgradering som fyrdubblar provtagningen motsvarar i storleksordningen en
+fjärdedels hjärna extra, alltså ~0,25 procent av kroppsmassan, och
+`0,25 % · 20 = 5 %` av basalen. Det är ankaret för nivå 3. Nivåerna emellan
+skalar med vad de faktiskt köper — antalet prov per skanning, strålar gånger
+räckvidd, räknat som tillägg över nivå 0:
+
+```
+   nivå 0   12 strålar x  7,0 celler =  84 prov   tillägg    0    0,00 %
+   nivå 1   16 x  8,0                = 128        tillägg   44    0,73 %
+   nivå 2   24 x 10,0                = 240        tillägg  156    2,60 %
+   nivå 3   32 x 12,0                = 384        tillägg  300    5,00 %
+```
+
+Tabellen räknas ur samma tal som `_apply_sense_to_AP` sätter, så kostnaden och
+förmågan kan inte glida isär. Att uttrycka den som **andel av basalen** rättar
+också massberoendet: nervvävnad skalar som `M^0,75` (Jerison), inte som `M^1`.
+Den gamla formen gjorde sinnena relativt dyrare för stora kroppar, alltså åt
+fel håll.
+
+**Rättelse av vad jag sa efter 0230.** Jag skrev att `sense_strength` nålas mot
+nivå 3. Det stämde i p230 men inte i p231:
+
+```
+  sense_strength per fjärdedel
+    p230 (gratis)   0,462  0,462  0,958  0,957
+    p231 (gratis)   0,503  0,222  0,156  0,096
+    p232 (kostar)   0,480  0,378  0,370  0,377
+```
+
+Två körningar utan kostnad, två **motsatta** riktningar. Det är inte nålning
+utan **fri drift**, vilket är den riktiga signaturen för en trait utan
+selektion. Med kostnaden på plats stabiliseras den i stället på 0,377 och
+ligger still genom tre fjärdedelar — alltså nivå 1, den blygsamma
+uppgraderingen. Stabiliserande selektion, inte en vägg och inte brus.
+
+**Utfall**, `f6-256` frö 1 till månad 36 (`runs/p232`) mot 0231:
+
+```
+                        0231        0232
+  bestånd                128         158
+  toppbestånd            750         520
+  dödsfall             1 535       1 220
+  livslängd median      3,86 mån    4,08 mån
+  kroppsmassa p50       0,561       0,487
+  M_target              2,968       2,095
+```
+
+`M_target` ligger dessutom helt still på 2,095 från första fjärdedelen, mot
+0231:s vandring upp till 2,968.
+
+I `liten6`: 2 018/1 373/1 751 djurmånader mot 0231:s 2 003/2 014/1 169, utdöd i
+alla tre frön.
+
+Invariantsviten godkänd i alla fyra körningar.
 
 ### Fostret bärs (0231)
 

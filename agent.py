@@ -92,6 +92,18 @@ def _apply_sense_to_AP(AP: "AgentParams", level: int) -> None:
         AP.ray_len_front = 12.0
         AP.noise_sigma = 0.045
 
+
+# Provtagningen per nivå — strålar gånger räckvidd — och varje nivås tillägg
+# över nivå 0 som andel av nivå 3:s tillägg. Sinnenas kostnad skalar med den
+# här tabellen; se `AgentParams.SENSE_SHARE_L3` för härledningen. Tabellen
+# räknas ur samma tal som `_apply_sense_to_AP` sätter, så de kan inte glida
+# isär.
+_SENSE_PROV = {0: 12 * 7.0, 1: 16 * 8.0, 2: 24 * 10.0, 3: 32 * 12.0}
+_SENSE_ANDEL = {
+    L: (_SENSE_PROV[L] - _SENSE_PROV[0]) / (_SENSE_PROV[3] - _SENSE_PROV[0])
+    for L in _SENSE_PROV
+}
+
 # reproduction helpers
 
 def sigmoid(x: float) -> float:
@@ -217,10 +229,34 @@ class AgentParams:
     sense_alert_steps: int = 3
     sense_alert_thresh: float = 0.15
 
-    # Sensing upkeep costs (per mass, per second via metabolism_scale)
-    sense_cost_L1: float = 0.2
-    sense_cost_L2: float = 0.5
-    sense_cost_L3: float = 1.0
+    # **Sinnenas kostnad som andel av basalen (0232).**
+    #
+    # Var `sense_cost_L1..L3 = 0,2 / 0,5 / 1,0` i J per kilo och tidsenhet, mot
+    # en basal på 9e6 J per kg^0,75. Uppmätt kostade nivå 3 därmed **0,000013
+    # procent av basalomsättningen** — ett enhetsfel på sju tiopotenser, och
+    # sinnena var i praktiken gratis. `sense_strength` gjorde vad en kostnadsfri
+    # trait alltid gör: medianen gick 0,462 -> 0,958 och nålades mot nivå 3.
+    #
+    # **Härledningen.** Sinnesapparaten är nervvävnad, och nervvävnad är dyr:
+    # den massaspecifika ämnesomsättningen ligger omkring tjugo gånger kroppens
+    # genomsnitt. En uppgradering som fyrdubblar provtagningen motsvarar i
+    # storleksordningen en fjärdedels hjärna extra, alltså ~0,25 procent av
+    # kroppsmassan, och `0,25 % · 20 = 5 %` av basalen. Det är ankaret för
+    # nivå 3.
+    #
+    # Nivåerna emellan skalar med vad de faktiskt köper, alltså antalet prov
+    # per skanning — strålar gånger räckvidd — räknat som tillägg över nivå 0:
+    #
+    #     nivå 0   12 strålar x  7,0 celler =  84 prov    tillägg     0   0,0 %
+    #     nivå 1   16 x  8,0                = 128         tillägg    44   0,7 %
+    #     nivå 2   24 x 10,0                = 240         tillägg   156   2,6 %
+    #     nivå 3   32 x 12,0                = 384         tillägg   300   5,0 %
+    #
+    # Att uttrycka kostnaden som en **andel av basalen** i stället för som ett
+    # tal per kilo rättar också massberoendet: nervvävnad skalar som `M^0,75`
+    # (Jerison), inte som `M^1`. Den gamla formen gjorde sinnena relativt dyrare
+    # för stora kroppar, vilket är fel håll.
+    SENSE_SHARE_L3: float = 0.05
 
     # ------------------------
     # Feeding: world pool units -> internal energy units
@@ -1851,11 +1887,11 @@ class Body:
     def _sense_cost(self, pheno: Phenotype) -> float:
         level = _sense_level(float(getattr(pheno, "sense_strength", 0.0)))
         if level == 1:
-            return float(self.AP.sense_cost_L1)
+            return _SENSE_ANDEL[1] * float(self.AP.SENSE_SHARE_L3)
         if level == 2:
-            return float(self.AP.sense_cost_L2)
+            return _SENSE_ANDEL[2] * float(self.AP.SENSE_SHARE_L3)
         if level >= 3:
-            return float(self.AP.sense_cost_L3)
+            return _SENSE_ANDEL[3] * float(self.AP.SENSE_SHARE_L3)
         return 0.0
 
     def _uppdatera_topp(self, dt: float) -> float:
@@ -2248,6 +2284,7 @@ class Body:
         # Det obligatoriska tillväxtdrivet (sektion 2C.5) är den mekanism som
         # förhindrar r-strategi via minimerad massa — inte metaboliken.
         out_basal   = dt * metab * (M_eff ** 0.75) * _k_basal
+        _basal_full = out_basal      # före omsättningens avdrag; läses av (2b)
 
         # --- Omsättningen, inom basalen (0226) -----------------------------
         #
@@ -2280,8 +2317,11 @@ class Body:
 
         out_compute = dt * metab * M_eff * _compute_cost * float(activity)
 
+        # Andel av **full** basal, alltså före omsättningens avdrag (0226) —
+        # sinnenas nervvävnad underhålls oavsett hur kroppen prioriterar sin
+        # proteinomsättning.
         sense_cost = float(self._sense_cost(pheno))
-        out_sense  = dt * metab * M_eff * sense_cost
+        out_sense  = _basal_full * sense_cost
 
         out_loco = max(0.0, float(extra_drain))
     
