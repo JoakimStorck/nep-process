@@ -2620,7 +2620,10 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0229~~ | skadan sänker farten och bansträckan: åldrandet dödar genom svälten (steg 3 i `docs/aldrandet.md`) | dödligheten | **klart**, se nedan — Gompertz-formen faller ut som utfall |
 | ~~0230~~ | `weakness()` mäter mot kroppens egen topp i stället för mot `M_crit`; konstanten borttagen | storleken | **klart**, se nedan — en dold storleksbroms försvann, och jämviktsmassan halverades |
 | ~~0232~~ | sinnenas kostnad härledd som andel av basalen ur provtagningsvolymen; enhetsfelet på sju tiopotenser rättat | budgeten | **klart**, se nedan — traiten går från fri drift till stabiliserande selektion på nivå 1 |
-| — | `M_target` landar på 1,57 utan den dolda bromsen mot 2,95 med den: vilket är rätt, och vad sätter nivån? | storleken | **öppen** — funnen i 0230; kräver flera frön och en lång körning |
+| ~~—~~ | `M_target` landar på 1,57 utan den dolda bromsen mot 2,95 med den: vilket är rätt? | storleken | **besvarad** i baslinjen — ingendera; locus driver fritt mellan 1,38 och 2,82 mellan frön |
+| ~~—~~ | baslinje: tre frön av `f6-256`, 150 månader, efter 0226–0232 | ekologin | **klart**, se nedan — två av tre frön dör ut kring månad 105 |
+| — | faunan dör ut i 2 av 3 frön kring månad 105 genom **parningsmisslyckande**, inte svält: under ~500 djur är medelavståndet till närmaste granne större än parningsradien | ekologin | **öppen**, nästa |
+| — | kontroll saknas: vi vet inte om utdöendet vid månad 105 är nytt efter 0226–0232 eller fanns före | ekologin | **öppen** — kräver samma trefrökörning på 0224 |
 | ~~0228~~ | `k_age0`, `k_age1` och `k_ageD` borttagna — den kalenderdrivna åldrandeklockans konstanter | städning | **klart** — bitidentisk |
 | — | `M_target` går till 3,645 och fryser — men med p10–p90 på 0,02 efter en flaskhals på sju individer: drift, inte selektion | storleken | **öppen** — kräver flera frön och ett skadesystem som biter |
 | — | betning mot kontroll: `liten6` faller till hälften utan djur, betningen tar resten | ekologin | **öppen** — se mätningen nedan |
@@ -2774,6 +2777,88 @@ fortfarande bär det och en jämförelse bakåt mot p219–p226 ska kunna göras
 
 **Bitprov:** ren HEAD mot arbetsträdet, `liten6` 400 tick frö 1, med pop- och
 världslogg på båda sidor. Noll skillnad i konsoll, världslogg och pop-logg.
+
+### Baslinje: tre frön, 150 månader (mätning)
+
+*Utan kodändring, efter 0232. `runs/baslinje`: `f6-256`, tre frön, 7 500 tick.
+Syftet var att ge vattenarbetet ett referenstillstånd och att pröva om de
+senaste patcharnas utfall håller i mer än ett frö.*
+
+```
+  frö 1: utdöd vid 105 mån   topp 520   2 417 döda   livslängd median 3,58
+  frö 2: överlever, 34 kvar  topp 662   3 752 döda   livslängd median 2,98
+  frö 3: utdöd vid 106 mån   topp 401   1 498 döda   livslängd median 4,40
+```
+
+**Två av tre frön dör ut.** Det är det viktigaste resultatet, och det syns inte
+alls i de 36-månaderskörningar hela serien har mätt med.
+
+#### Vad som håller och vad som inte gör det
+
+```
+  locus              frö 1   frö 2   frö 3    omdöme
+  repair_capacity     1,50    1,30    1,37    reproducerbart
+  sinnenas nivå          1       1       1    reproducerbart
+  M_target            2,82    1,38    2,26    inte reproducerbart
+```
+
+`repair_capacity` landar i 1,30–1,50 i alla tre — åldrandeoptimumet från 0226,
+0227 och 0230 håller. Sinnena landar på nivå 1 i alla tre, så 0232:s
+stabiliserande selektion håller också.
+
+**`M_target` gör det inte.** Spannet 1,38–2,82 mellan frön är större än
+skillnaden mellan 0231 (2,97) och 0232 (2,10) som vi resonerade om. **Båda de
+talen var brus.** Varje slutsats om kroppsstorlekens jämvikt som dragits ur ett
+enskilt 36-månadersfrö i den här serien måste därmed betraktas som obekräftad.
+
+#### Utdöendet är parningsmisslyckande, inte svält
+
+Floran är riklig hela tiden och *återhämtar sig*: 241 000 plantor faller till
+~125 000 vid månad 50 och stiger sedan till 157 000–171 000 vid månad 150.
+Världen har mat.
+
+Nedgångens form i frö 1:
+
+```
+   t= 60,6  pop= 42  föd/mån  5,0  död/mån  2,0   M median 0,535
+   t= 72,7  pop= 54  föd/mån 16,7  död/mån  9,8   M median 0,491
+   t= 85,0  pop= 17  föd/mån  4,9  död/mån  2,9   M median 0,650
+   t= 90,1  pop=  9  föd/mån  0,0  död/mån  6,9   M median 0,756
+   t= 96,2  pop=  2  föd/mån  0,0  död/mån  0,0   M median 0,806
+   t=103,3  pop=  1  föd/mån  0,0  död/mån  1,0   M median 1,050
+```
+
+**Under sjutton djur upphör födslarna helt**, tjugo månader före det sista
+dödsfallet, medan de överlevande är de största och fetaste i hela körningen.
+De svälter inte — de hittar inte varandra.
+
+Talen bekräftar det. `mate_search_radius = 5,0` celler mot medelavståndet till
+närmaste artfrände vid slumpmässig fördelning i 65 536 celler:
+
+```
+   520 djur (toppen)    5,6 celler     precis inom radien
+   200 djur             9,1            utanför
+    50 djur            18,1            fyra gånger radien
+    17 djur            31,0            sex gånger
+```
+
+Beståndet är alltså **bara vid parningstäthet i sina toppar**. Flockningen
+räddar det däremellan, men under ett par hundra individer räcker inte den
+heller. Det är en Allee-effekt, och den förklarar varför boom-bust-cykeln inte
+är stabil utan en absorberande vägg: varje dal är en chansning, och två av tre
+frön förlorar den.
+
+Det kopplar ihop tre rader som legat öppna sedan p97: att den effektiva
+populationsstorleken mättes till fem, att 48 procent av de reproduktivt klara
+tickarna är "utanför parningsradie", och att 20 procent inte ser någon alls.
+
+#### Vad mätningen inte kan säga
+
+**Om utdöendet är nytt.** `runs/p224-lang` överlevde 150 månader, men det var
+ett frö och före åldrandeserien. Utan samma trefrökörning på 0224 går det inte
+att avgöra om 0226–0232 orsakade det eller om mönstret fanns hela tiden och
+p224-lang bara hade tur. Den kontrollen kostar tio minuter och bör göras före
+någon slutsats dras om serien.
 
 ### Sinnenas kostnad härleds (0232)
 
