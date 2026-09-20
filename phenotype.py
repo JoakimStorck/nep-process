@@ -456,8 +456,40 @@ class PhenoRanges:
     n_pool_cap_min: float = 0.01
     n_pool_cap_max: float = 0.10
 
-    repair_capacity_min: float = 0.10
-    repair_capacity_max: float = 1.50   # höjt — k_age1 ger lägre inflöde än k_age0=0.2
+    # **Omsättningskapaciteten, andel av behovet (0227).**
+    #
+    # Locus bytte innebörd i 0226: det var en absolut reparationstakt i enheter
+    # `D` per månad, och är nu **andelen av den proteinomsättning kroppen
+    # behöver**. Intervallet 0,10–1,50 följde med oförändrat och betydde därför
+    # plötsligt något annat — ett värde under ett är ett djur som kroniskt
+    # underhåller sig själv för lite.
+    #
+    # Uppmätt i 0226 slog det igenom direkt: i `liten6`, med fyrtio grundare,
+    # dog beståndet ut inom 22 respektive 28 månader i två frön av tre, eftersom
+    # halva grundaruppsättningen drogs under 0,9 och alltså var icke-livsduglig
+    # från början. I `f6-256` med åttio grundare hann selektionen arbeta.
+    #
+    # Golvet härleds ur livscykeln. Åldrandeklockan vid kapaciteten `c < 1` är
+    # `1 / (Φ · (1 − c·(1 − f_irr)))`, och den måste räcka till mognad plus en
+    # dräktighet för att genotypen ska kunna föra sig vidare alls:
+    #
+    #     kapacitet   tid till A = 1
+    #       0,85          6,9 mån      hinner inte mogna
+    #       0,90         10,3          knappt, bara för den tidigast mogna
+    #       0,95         20,0          mognad (median 12) plus dräktighet (2)
+    #       0,97         32,1
+    #
+    # 0,95 är alltså den snabbaste åldrandeklocka som fortfarande låter
+    # medianindividen reproducera sig — under den är genotypen inte en strategi
+    # utan ett dödfall.
+    #
+    # Taket sätts över det uppmätta optimumet. Ovanför ett äts kapaciteten upp
+    # av slitaget i stället, och `ln(c)/(repair_W_decay · wear_a0)` ger antalet
+    # månader innan nedgången börjar: 13,8 vid 1,281 och 26,1 vid 1,60. 0226
+    # mätte jämvikten till **1,281**, som därmed ligger mitt i det nya
+    # intervallet i stället för i nedre tredjedelen av det gamla.
+    repair_capacity_min: float = 0.95
+    repair_capacity_max: float = 1.60
 
     frailty_gain_min: float = 0.0
     frailty_gain_max: float = 3.0

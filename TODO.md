@@ -2616,7 +2616,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~—~~ | konstruktionsskiss: åldrandet som två flöden med härledd klocka | dödligheten | **klart** — `docs/aldrandet.md`; rättelse 3 utgår som egen patch, allometrin faller ut ur mekanismen |
 | ~~0225~~ | instrumentering: `W`, `D`, ålder och skadetermer per massakvintil, plus reparationens tre kapningar (steg 1 i `docs/aldrandet.md`) | dödligheten | **klart**, se nedan — bitidentisk; taket binder i 100 %, skadan i 95,5 %, energin aldrig |
 | ~~0226~~ | de två flödena: omsättningen inom basalen, irreversibel skada `A`, `dD_age` borttagen (steg 2 i `docs/aldrandet.md`) | dödligheten | **klart**, se nedan — åldrandet biter: 18 % av dödsfallen mot 0,2 % |
-| — | `repair_capacity`-intervallet 0,10–1,50 betyder sedan 0226 *andel av behövd omsättning*: grundare under ~0,9 är icke-livsdugliga och slås ut de första månaderna | dödligheten | **öppen** — funnen i 0226 |
+| ~~0227~~ | `repair_capacity`-intervallet ankrat om till 0,95–1,60 efter locusets nya innebörd | dödligheten | **klart**, se nedan — `liten6` återställt; optimumet 1,21 bekräftat från ett annat håll |
 | — | `k_age0`, `k_age1` och `k_ageD` har inga läsare kvar sedan `dD_age` utgick | städning | **öppen** — funnen i 0226 |
 | — | `M_target` går till 3,645 och fryser — men med p10–p90 på 0,02 efter en flaskhals på sju individer: drift, inte selektion | storleken | **öppen** — kräver flera frön och ett skadesystem som biter |
 | — | betning mot kontroll: `liten6` faller till hälften utan djur, betningen tar resten | ekologin | **öppen** — se mätningen nedan |
@@ -2757,6 +2757,66 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Omsättningskapacitetens intervall ankras om (0227)
+
+Dynamikändring, följdrättelse till 0226. Locus bytte innebörd — från en absolut
+reparationstakt till **andelen av den proteinomsättning kroppen behöver** — men
+intervallet 0,10–1,50 följde med oförändrat och betydde därför plötsligt något
+annat. Ett värde under ett är ett djur som kroniskt underhåller sig för lite.
+
+Golvet härleds ur livscykeln. Åldrandeklockan vid kapacitet `c < 1` är
+`1 / (Φ · (1 − c·(1 − f_irr)))`:
+
+```
+   kapacitet   tid till A = 1
+     0,85          6,9 mån     hinner inte mogna
+     0,90         10,3         knappt, bara den tidigast mogna
+     0,95         20,0         mognad (median 12) plus dräktighet (2)
+     0,97         32,1
+```
+
+**0,95 är den snabbaste åldrandeklocka som fortfarande låter medianindividen
+reproducera sig.** Under den är genotypen inte en strategi utan ett dödfall.
+Taket 1,60 ligger över det uppmätta optimumet: ovanför ett äts kapaciteten upp
+av slitaget, och `ln(c)/(repair_W_decay · wear_a0)` ger 13,8 månader orörd vid
+1,281 och 26,1 vid 1,60.
+
+**Utfall.** `liten6`, tre frön, djurmånader:
+
+```
+  0224 (före åldrandet)   1 640 / 1 505 / 1 589
+  0226                      205 /   228 / 1 071     utdöd 22 och 28 mån
+  0227                    1 538 / 1 332 / 1 147
+```
+
+Beståndet är tillbaka på nivån före åldrandet. Det bekräftar diagnosen: 0226:s
+ras i `liten6` var grundaruppsättningen och inte mekanismen.
+
+`f6-256` frö 1 till månad 36:
+
+```
+                        0226        0227
+  bestånd                139         122
+  toppbestånd            406         485
+  dödsfall               470         976
+  därav skada           17,7 %      10,8 %
+  livslängd median      3,62 mån    3,82 mån
+  u                     0,990       0,963
+  A p90                 0,127       0,595
+```
+
+**Optimumet bekräftas från ett annat håll.** `repair_capacity` går
+1,276 → 1,267 → 1,218 → **1,207** och stannar där — inte vid taket. I 0226,
+med intervallet 0,10–1,50 och en helt annan startfördelning, landade den på
+1,281. Två olika avbildningar, samma granne. Det är starkare belägg för ett
+verkligt inre optimum än en enskild körning kan ge, och farhågan att ett smalt
+intervall skulle nåla axeln mot taket besannades inte.
+
+`A` i p90 stiger från 0,127 till 0,595: åldrandet syns nu i den övre svansen,
+alltså hos de gamla, vilket är där det hör hemma.
+
+Invariantsviten godkänd i alla fyra körningar.
 
 ### De två flödena: omsättningen och den irreversibla skadan (0226)
 
