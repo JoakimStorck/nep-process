@@ -2615,6 +2615,9 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | — | dödligheten har **en** kanal: svält 3 188, skada 4 av 3 192 dödsfall på 150 månader. Ingen ålderstermin i hazarden (`death_h_age = 0`) | dödligheten | **öppen**, nästa — blockerar rättelse 3 och 4 |
 | ~~—~~ | konstruktionsskiss: åldrandet som två flöden med härledd klocka | dödligheten | **klart** — `docs/aldrandet.md`; rättelse 3 utgår som egen patch, allometrin faller ut ur mekanismen |
 | ~~0225~~ | instrumentering: `W`, `D`, ålder och skadetermer per massakvintil, plus reparationens tre kapningar (steg 1 i `docs/aldrandet.md`) | dödligheten | **klart**, se nedan — bitidentisk; taket binder i 100 %, skadan i 95,5 %, energin aldrig |
+| ~~0226~~ | de två flödena: omsättningen inom basalen, irreversibel skada `A`, `dD_age` borttagen (steg 2 i `docs/aldrandet.md`) | dödligheten | **klart**, se nedan — åldrandet biter: 18 % av dödsfallen mot 0,2 % |
+| — | `repair_capacity`-intervallet 0,10–1,50 betyder sedan 0226 *andel av behövd omsättning*: grundare under ~0,9 är icke-livsdugliga och slås ut de första månaderna | dödligheten | **öppen** — funnen i 0226 |
+| — | `k_age0`, `k_age1` och `k_ageD` har inga läsare kvar sedan `dD_age` utgick | städning | **öppen** — funnen i 0226 |
 | — | `M_target` går till 3,645 och fryser — men med p10–p90 på 0,02 efter en flaskhals på sju individer: drift, inte selektion | storleken | **öppen** — kräver flera frön och ett skadesystem som biter |
 | — | betning mot kontroll: `liten6` faller till hälften utan djur, betningen tar resten | ekologin | **öppen** — se mätningen nedan |
 | — | `_T_N_POOL` nålas mot taket 0,093 av 0,10 redan i första fjärdedelen: bärkostnaden är för svag mot nyttan | budgeten | **öppen** — funnen i 0222 |
@@ -2754,6 +2757,71 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### De två flödena: omsättningen och den irreversibla skadan (0226)
+
+Dynamikändring, steg 2 i `docs/aldrandet.md`. Kroppen bär nu två flöden i
+stället för ett.
+
+**Omsättningen ligger inom basalen.** `k_basal` är Kleiber och innehåller redan
+proteinomsättningen, så en egen post ovanpå vore samma dubbelbokföring som 0212
+rättade i termoregleringen. I stället:
+
+```
+    Φ = andel · basal / (M · E_synt)          andel = 0,11 av BMR
+    u = min(1, repair_capacity · e^(−repair_W_decay · W))
+    out_basal *= (1 − andel · (1 − u))
+    dA        = dt · Φ · (1 − u · (1 − f_irr))       f_irr = 0,0031
+```
+
+`repair_capacity` är **dimensionslöst** sedan nu: andel av den omsättning
+kroppen behöver, inte en absolut takt. Det tar bort skalkrocken 0225 mätte, där
+taket 0,10–1,50 var ett omsättningstal medan inflödet 0,0013 var ett
+åldrandetal. Den som utför mindre omsättning betalar mindre basal och betalar i
+stället med skada som aldrig lagas — *disposable soma*, med avvägning åt båda
+håll.
+
+**`A` är ett nytt tillstånd.** `D` är akut, reparerbar skada — ansträngning,
+svält, kyla — och återställs som förut. `A` återställs aldrig. Dödströskeln
+läser summan. `dD_age` utgår: den var en andra, parallell åldrandeklocka.
+
+**Utfall**, `f6-256` frö 1 till månad 36 (`runs/p226`) mot 0224:
+
+```
+                           0224        0226
+  bestånd vid månad 36      128         139
+  toppbestånd               436         406
+  dödsfall totalt         1 530         470
+  därav skada                 3          83   (0,2 % -> 17,7 %)
+  livslängd median         3,00 mån    3,62 mån
+  Φ                           —        0,945 /mån
+  u                           —        0,990
+  A median / p90              —        0,023 / 0,128
+```
+
+**Åldrandet biter, och beståndet bär det.** Antalet dödsfall faller till en
+tredjedel medan beståndet är oförändrat — djuren lever längre — och nästan var
+femte dödsfall är nu skada i stället för ett av femhundra. Φ landar på 0,945
+per månad, mitt i vad härledningen förutsade.
+
+**Avvägningen fungerar, och den har ett inre optimum.** `repair_capacity` går
+från 0,863 till **1,281** och stannar där — inte vid taket 1,50. Under 1,0
+sparar man basal men ackumulerar skada; över 1,0 betalar man full basal och
+köper tid innan slitaget eroderar kapaciteten under ett. Vid 1,281 dröjer det
+`ln(1,281)/0,018 ≈ 14 månader` innan nedgången börjar. Det är första gången en
+livshistorieaxel i modellen hittar ett inre optimum i stället för en vägg.
+
+**Priset syns i `liten6`:** 205/228/1 071 djurmånader mot 0224:s
+1 640/1 505/1 589, och utdöd i två frön inom 22 respektive 28 månader.
+Orsaken är att `repair_capacity`-intervallet 0,10–1,50 numera betyder *andel av
+behövd omsättning*, så grundare under ~0,9 är icke-livsdugliga genotyper som
+slås ut de första månaderna. I `f6-256` med 80 grundare överlever tillräckligt
+många för att selektionen ska hinna arbeta; i `liten6` med 40 gör den inte
+alltid det. Intervallet ska ankras om — egen rad i kön, egen patch.
+
+`k_age0`, `k_age1` och `k_ageD` har inga läsare kvar. Städas separat.
+
+Invariantsviten godkänd i alla fyra körningar.
 
 ### Instrument: slitage, skada och reparation per massakvintil (0225)
 

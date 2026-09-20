@@ -1002,6 +1002,42 @@ class AgentParams:
     growth_R_min: float = 0.30   # ingen aktiv tillväxt under denna reservgrad
     growth_R_full: float = 0.60  # full tillväxthastighet först här
 
+    # --- Omsättningen och den irreparabla skadan (0226) ---------------------
+    #
+    # Se `docs/aldrandet.md`. Kroppen bär två flöden, inte ett.
+    #
+    # **Omsättningen ligger inom basalen, inte ovanpå.** `k_basal` är Kleibers
+    # helkroppsmetabolism och innehåller redan proteinomsättningen; att dra
+    # omsättningen som en egen post vore samma dubbelbokföring som 0212 rättade
+    # i termoregleringen. Andelen sätts därför som en del *av* basalen, och den
+    # som utför mindre omsättning betalar mindre basal — sänkt proteinomsättning
+    # är en verklig energisparstrategi.
+    #
+    # **Andelen har två oberoende ankare som möts.** Energiandelen av BMR och
+    # den uppmätta fraktionella syntestakten är mätningar av samma sak:
+    #
+    #     andel av BMR   flöde Φ (kroppar/mån)   %/dygn    uppmätt FSR
+    #        10 %              0,72               2,4      2–3 %/dygn
+    #        15 %              1,08               3,6
+    #        20 %              1,43               4,8
+    #
+    # De skär varandra vid omkring elva procent, och ingenting justerades för
+    # att få dem dit.
+    TURNOVER_SHARE_BMR: float = 0.11
+
+    # **Allometrin faller ut gratis.** Flödet per kilo är
+    # `Φ = andel · k_basal · M_våt^0,75 / (M · E_synt) ∝ M^−0,25`, alltså
+    # exakt fria-radikal-teorins takt: klockan går i takt med ämnesomsättningen
+    # per kilo, och livslängden blir `∝ M^0,25` utan att någon exponent skrivs
+    # någonstans. Därmed utgår rättelse 3 ur storleksrevisionen som egen patch.
+    #
+    # **Kalibrerad konstant.** Den irreparabla andelen av omsättningen är det
+    # enda talet i mekanismen som inte är härlett. Ankaret är maxlivslängd: en
+    # växtätare på två kilo blir tio till tolv år, och 0,31 procent ger
+    # `A = 0,5` vid 150 månader för referenskroppen. Den är alltså satt mot en
+    # uppmätt livslängd och **inte** mot ett önskat populationsutfall.
+    IRREPARABLE_FRAC: float = 0.0031
+
     # Gestationstillväxthastighet (kg fetal torrsubstans per tidsenhet).
     # Föräldern kataboliserar ~0,2 kg kroppsmassa under gestationen.
     gestation_growth_kg_per_s: float = 0.085
@@ -1204,6 +1240,12 @@ class Body:
     # (0222). Förvalet är den fria aminosyrapoolen ensam, för en kropp som inte
     # fått sin fenotyp än.
     _n_pool_cap_frac: float = N_POOL_CAP_FRAC
+
+    # **Irreversibel skada (0226).** Den andel av omsättningsflödet som inte
+    # lagas: det som `D` aldrig var. `D` är akut, reparerbar skada — ansträngning,
+    # svält, kyla — och återställs. `A` återställs aldrig, och det är åldrandet.
+    # Dödströskeln läser summan.
+    A: float = 0.0
 
     # structural state
     M: float = 0.0        # body mass
@@ -2138,6 +2180,36 @@ class Body:
         # Det obligatoriska tillväxtdrivet (sektion 2C.5) är den mekanism som
         # förhindrar r-strategi via minimerad massa — inte metaboliken.
         out_basal   = dt * metab * (M_eff ** 0.75) * _k_basal
+
+        # --- Omsättningen, inom basalen (0226) -----------------------------
+        #
+        # Flödet är den massa som måste byggas om per tidsenhet, härlett ur
+        # omsättningens andel av basalen och syntesarbetet per kilo:
+        #
+        #     Φ = andel · basal / (M · E_synt)          [kroppar per tidsenhet]
+        #
+        # `u` är den andel av flödet individen faktiskt utför. Locus
+        # `repair_capacity` är **dimensionslöst** sedan 0226: det betyder andel
+        # av den omsättning kroppen behöver, inte en absolut takt. Det tar bort
+        # den skalkrock mätningen efter 0224 hittade, där taket 0,10–1,50 var
+        # ett omsättningstal medan inflödet 0,0013 var ett åldrandetal.
+        #
+        # Slitaget sänker `u` med den kurva som redan fanns — det var aldrig
+        # felet — så åldrandet accelererar av sig självt: mindre omsättning ger
+        # mer skada ger mer slitage.
+        _E_synt_oms = float(AP.E_labile_J_per_kg) * (1.0 / max(1e-9, float(AP.anabolism_eff)) - 1.0)
+        _andel_oms = float(AP.TURNOVER_SHARE_BMR)
+        _flode_oms = 0.0
+        _u_oms = 1.0
+        if _andel_oms > 0.0 and float(self.M) > 0.0 and _E_synt_oms > 0.0:
+            _flode_oms = (_andel_oms * out_basal / dt) / (float(self.M) * _E_synt_oms)
+            _kap = float(pheno.repair_capacity) * math.exp(
+                -float(AP.repair_W_decay) * float(self.W))
+            _u_oms = _kap if _kap < 1.0 else 1.0
+            _u_oms = _u_oms if _u_oms > 0.0 else 0.0
+            # Den som utför mindre omsättning betalar mindre basal.
+            out_basal *= (1.0 - _andel_oms * (1.0 - _u_oms))
+
         out_compute = dt * metab * M_eff * _compute_cost * float(activity)
 
         sense_cost = float(self._sense_cost(pheno))
@@ -2511,8 +2583,17 @@ class Body:
         dD_eff = dt * (_k_damage * susc * (1.0 + 1.2 * e_lack) * frail * effort * starve_stress)
         dD_met = dt * (float(pheno.stress_per_drain) * drain_rate_n * starve_stress)
 
-        age_rate = max(0.0, _k_age0 + _k_age1 * float(age_s))
-        dD_age   = dt * age_rate * (1.0 + _k_ageD * d_norm) * (1.0 + frailty_gain)
+        # **`dD_age` utgår (0226).** Den var en andra, parallell åldrandeklocka
+        # vid sidan av skadeackumulationen — två ägare till ett fenomen. Åldrandet
+        # bärs nu av `A`, den irreparabla andelen av omsättningsflödet, och den
+        # klockan går i takt med ämnesomsättningen per kilo i stället för med
+        # kalendern. `k_age0`, `k_age1` och `k_ageD` har inga läsare kvar; de
+        # städas i en egen patch.
+        dD_age   = 0.0
+
+        # Den irreparabla skadan: vad omsättningen inte hinner med, plus den
+        # andel av det den *gör* som ändå inte återställer vävnaden.
+        dA = dt * _flode_oms * (1.0 - _u_oms * (1.0 - float(AP.IRREPARABLE_FRAC)))
 
         # Svältskada: massan relativt kroppens **egen topp**, inte relativt en
         # utlovad kurva. Se `_uppdatera_topp` för varför.
@@ -2547,6 +2628,9 @@ class Body:
             "dD_age": float(dD_age),
             "dD_starve": float(dD_starve),
             "dD_cold": float(dD_cold),
+            "dA": float(dA),
+            "flode_oms": float(_flode_oms),
+            "u_oms": float(_u_oms),
             "effort": float(effort),
             "rest": float(rest),
             "speed_n": float(speed_n),
@@ -2565,6 +2649,9 @@ class Body:
         # för det äldsta djur som någonsin dött i samma körning.
         D_raw = D_before + dD_in
         self.D = clamp(D_raw, 0.0, _D_max)
+        # `A` återställs aldrig. Dödströskeln läser summan av akut och
+        # irreversibel skada.
+        self.A = float(self.A) + dA
 
         E_pain_repair = float(self.step_pain_and_repair(ctx, pheno, D_before=D_before))
         E_out_repair  = E_pain_repair
@@ -2615,8 +2702,9 @@ class Body:
         # ensamt.
         _M_top = float(getattr(self, "_M_peak", 0.0))
         _M_dod = max(_M_min, float(self.AP.M_waste_frac) * _M_top) if _M_top > 0.0 else _M_min
-        if float(D_raw) >= _D_max or float(self.M) <= _M_dod:
-            self.death_cause = "damage" if float(D_raw) >= _D_max else "starvation"
+        _skada_total = float(D_raw) + float(self.A)
+        if _skada_total >= _D_max or float(self.M) <= _M_dod:
+            self.death_cause = "damage" if _skada_total >= _D_max else "starvation"
             self.alive = False
             return
 

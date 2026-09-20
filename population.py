@@ -724,6 +724,7 @@ class Population:
         # `effort`-normeringen mot något mätt: den går i dag mot `v_max = 100`,
         # som är en klampningsgräns och ingen biologisk fart.
         dmg_keys = ["dD_eff", "dD_met", "dD_age", "dD_starve", "dD_cold",
+                    "dA", "flode_oms", "u_oms",
                     "effort", "rest", "speed_n"]
         dmg_sums = {k: 0.0 for k in dmg_keys}
         for a in alive:
@@ -737,7 +738,7 @@ class Population:
         if pop_n > 0:
             # De tre sista är tillstånd och inte flöden; de rapporteras som
             # medelvärde över beståndet.
-            for k in ("effort", "rest", "speed_n"):
+            for k in ("effort", "rest", "speed_n", "flode_oms", "u_oms"):
                 dmg_sums[k] /= float(pop_n)
         flow_sums.update(dmg_sums)
 
@@ -761,6 +762,8 @@ class Population:
                              dtype=np.float64, count=pop_n)
             _Dv = np.fromiter((float(getattr(a.body, "D", 0.0)) for a in alive),
                               dtype=np.float64, count=pop_n)
+            _Av = np.fromiter((float(getattr(a.body, "A", 0.0)) for a in alive),
+                              dtype=np.float64, count=pop_n)
             _alder = np.fromiter(
                 (max(0.0, float(t) - float(getattr(a, "birth_t", 0.0))) for a in alive),
                 dtype=np.float64, count=pop_n)
@@ -773,8 +776,9 @@ class Population:
                 flow_sums[_pre + "D"] = float(np.median(_Dv[_idx]))
                 flow_sums[_pre + "W"] = float(np.median(_W[_idx]))
                 flow_sums[_pre + "alder"] = float(np.median(_alder[_idx]))
+                flow_sums[_pre + "A"] = float(np.median(_Av[_idx]))
                 _dsum = {k: 0.0 for k in ("dD_eff", "dD_met", "dD_age",
-                                          "dD_starve", "dD_cold")}
+                                          "dD_starve", "dD_cold", "dA")}
                 for _j in _idx:
                     _dm = getattr(alive[int(_j)].body, "last_damage_terms", None)
                     if isinstance(_dm, dict):
@@ -784,6 +788,8 @@ class Population:
                     flow_sums[_pre + _k] = float(_v)
 
             # Slitaget över hela beståndet — fältet saknades i loggen.
+            flow_sums["median_A"] = float(np.median(_Av))
+            flow_sums["p90_A"] = float(np.percentile(_Av, 90.0))
             flow_sums["median_W"] = float(np.median(_W))
             flow_sums["p10_W"] = float(np.percentile(_W, 10.0))
             flow_sums["p90_W"] = float(np.percentile(_W, 90.0))
