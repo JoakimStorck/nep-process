@@ -2606,7 +2606,9 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | — | steget är 11–28 cellbredder per tick mot en synvidd på 7: djuret planerar inte om inom ticken, det stannar bara vid vatten. Ticklängd, synvidd och fart är samma fråga | rörelsen | **öppen** |
 | ~~—~~ | `docs/tidens-skalor.md` refererades på tre ställen men finns inte | städning | **klart** i 0220 — hänvisningarna pekar nu på kön |
 | — | hungern ser bara energi; 38 % av ungarnas tick är energirika men kvävefattiga | budgeten | **öppen** — se mätningen |
-| — | kvävepoolen rymmer ~2 tick, så 58–80 % av det intagna kvävet deamineras bort | budgeten | **öppen** — se mätningen |
+| ~~0222~~ | kväveförrådet blir labilt kroppsprotein med ärftligt tak, buret som vävnad | budgeten | **klart**, se nedan — dräktighetsintervallet 10,7 → 1,4 mån, och `f6-256` skjuter över |
+| — | reproduktionen har ingen annan broms än kvävet: `f6-256` går 80 → 6 169 djur på 36 månader med 24 g per djur | ekologin | **öppen** — funnen i 0222 |
+| — | `_T_N_POOL` nålas mot taket 0,093 av 0,10 redan i första fjärdedelen: bärkostnaden är för svag mot nyttan | budgeten | **öppen** — funnen i 0222 |
 | ~~—~~ | `Body._add_N` har ingen anropare: intaget skriver samma logik inline | städning | **klart** i 0220 — borttagen |
 | — | kadavrets energi för asätare räknas med förnans konstant och underskattar fettet | ekologin | **öppen**, rättas i steg 2 |
 | — | reserven belastar basal, värmeledning och termoreglering men inte rörelse, kroppsdjup, betesräckvidd eller predationens massjämförelse | budgeten | **öppen**, funnen i 0215 |
@@ -2743,6 +2745,74 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Kväveförrådet blir labilt kroppsprotein (0222)
+
+Dynamikändring, mekanism 2 ur dödlighetsmätningen. Förrådet var konstanten
+`N_POOL_CAP_FRAC = 0,02`, alltså bara den fria aminosyrapoolen. Den rymde
+**två tick**, och 58–80 procent av det intagna kvävet deaminerades samma steg
+som det åts: energi gick att lagra i veckor, kväve inte alls. Nu spänner
+locus `_T_N_POOL` från den fria poolen ensam (0,01) till fri pool plus en
+labil proteindepå (0,10) — lever, tarmslemhinna och plasmaproteiner, som
+verkliga djur mobiliserar vid kvävebrist. Depån är vävnad och hydratiseras som
+sådan, så den bärs i `M_wet` och kostar basal, rörelse och värmeförlust: vid
+taket är kroppen tio procent tyngre och basalen sju procent högre. Det är
+avvägningen.
+
+**Utfallet är motsatt på de två skalorna.**
+
+```
+f6-256, avbruten vid tick 1 850   p219/0221        0222
+  födslar t.o.m. månad 36               862      39 817
+  mödrar                                183       7 443
+  median mellan kullar             10,72 mån    1,44 mån
+  bestånd vid månad 36                  ~50       6 169
+  flora, plantor                    222 000     137 000
+  median ålder vid död              3,7–5,1     0,64 mån
+
+liten6, 3 000 tick, tre frön      p219/0221                 0222
+  födslar                          627 / 167 / 206     343 / 171 / 157
+  djurmånader                     2547 / 1462 / 1584  2068 / 1351 / 1430
+  utdöd                            39 / 55 / 48 mån    38 / 46 / 46 mån
+  median ålder vid död             2,00 mån            3,50 mån
+```
+
+**Dräktighetsintervallet är det som ändras, och det ändras till det riktiga.**
+Kullarna kom med 10,7 månaders mellanrum för en kropp på två kilo; nu kommer
+de med 1,4. En kanin föder ungefär varje månad. Dräktigheten var alltså
+kvävestrypt, inte tidsstyrd, och strypningen satt i en pool som rymde två
+tick. Att ta bort den är rätt — men den var samtidigt den enda broms
+reproduktionen hade.
+
+**`f6-256` skjuter över.** Beståndet går från 80 till 6 169 djur på 36
+månader, floran faller 38 procent, och djuren blir små: 147 kg fördelat på
+6 169 individer är 24 gram styck, alltså en population av nyfödda. 64 procent
+dör före en månads ålder, mot 3,7–5,1 månaders medianålder i 0219. Det är en
+klassisk överskjutning, och den kostar körtid: 1,9 s/tick vid 6 000 djur, mot
+0,07 vid 50. Körningen stoppades därför vid tick 1 850 och jämförelsen
+flyttades till `liten6`, som är sexton gånger mindre. **Serien om tre frön på
+f6-256-skala gick alltså inte att slutföra, och slutbestånd och eventuell krasch
+är omätta.**
+
+I `liten6`, som dör ut i varje version som mätts, blir utfallet något sämre
+räknat i djurmånader och något bättre räknat i livslängd: medianåldern vid död
+stiger 2,00 → 3,50 månader medan födslarna halveras. Den extra vävnaden kostar
+i en fodermager värld vad kvävet ger i en riklig.
+
+**Locus nålas mot taket.** Medianen går till 0,093 av 0,10 redan i första
+fjärdedelen av körningen och stannar där. Bärkostnaden — sju procent basal —
+väger lätt mot att slippa kasta fyra femtedelar av sitt kväve, så axeln bär
+ingen information i den här världen. Taket är dock en **fysisk** gräns och inte
+en ratt: mer än en tiondel av kroppsproteinet kan inte vara labilt. Att
+selektionen står vid en verklig vägg är ett riktigt utfall, men det betyder att
+locus tills vidare är en konstant förklädd till gen.
+
+**Vad mätningen därmed pekar ut som nästa fråga.** Reproduktionen har ingen
+broms kvar utom födan, och födobristen slår igenom först efter att beståndet
+redan mångdubblats. Det saknas alltså en täthetsberoende mekanism — eller så är
+ungarnas dödlighet den enda regulatorn, och då är beståndet en churn där mödrar
+förvandlar bete till dödsdömda nyfödda. Båda alternativen går att skilja åt med
+en mätning, och den ska göras före mekanism 3.
 
 ### `fartskala` kopplad till farten igen (0221)
 

@@ -1139,6 +1139,10 @@ class Body:
     _kg_ut_forra: float = 0.0
     # Reservkapacitet per kilo, cachad från fenotypen så E_cap() kan läsa den.
     _reserve_cap: float = 0.0
+    # Kväveförrådets tak som andel av `M`, cachad från fenotypen på samma sätt
+    # (0222). Förvalet är den fria aminosyrapoolen ensam, för en kropp som inte
+    # fått sin fenotyp än.
+    _n_pool_cap_frac: float = N_POOL_CAP_FRAC
 
     # structural state
     M: float = 0.0        # body mass
@@ -1187,8 +1191,23 @@ class Body:
     gest_M_target: float = 0.0   # target fetal mass
     
     def N_pool_cap(self) -> float:
-        """Kvävepoolens tak, i proteinekvivalent torrsubstans (0216)."""
-        return N_POOL_CAP_FRAC * max(0.0, float(self.M))
+        """
+        Kväveförrådets tak, i proteinekvivalent torrsubstans (0216).
+
+        Andelen är ärftlig sedan 0222 och cachas ur fenotypen i
+        `Agent.apply_traits`; se `_T_N_POOL`.
+        """
+        return float(self._n_pool_cap_frac) * max(0.0, float(self.M))
+
+    def M_pool_wet(self) -> float:
+        """
+        Kväveförrådets våta massa (0222).
+
+        Depån är labilt kroppsprotein och hydratiseras som mager vävnad, så
+        den bärs i `M_wet` och belastar basal, rörelse och värmeförlust. Det
+        är avvägningen mot ett större förråd.
+        """
+        return float(self.N_pool) / LEAN_DM_FRAC
 
     def E_pool(self) -> float:
         """Energin i kvävepoolens aminosyror (0216)."""
@@ -1243,8 +1262,11 @@ class Body:
         return float(self.gest_M) / FETUS_DM_FRAC
 
     def M_wet(self) -> float:
-        """Kroppens våta massa utan foster: mager vävnad plus reserv (1a)."""
-        return self.M_lean_wet() + self.M_reserve_wet()
+        """
+        Kroppens våta massa utan foster: mager vävnad, reserv och
+        kväveförråd (1a; förrådet tillkom i 0222).
+        """
+        return self.M_lean_wet() + self.M_reserve_wet() + self.M_pool_wet()
 
     def M_reserve(self) -> float:
         """Total mobiliserbar reservmassa i kilo."""
@@ -3346,6 +3368,9 @@ class Agent:
 
     def apply_traits(self) -> None:
         self.pheno = derive_pheno(self.genome.traits)
+        # Kväveförrådets tak behövs innan första steget: grundare och nyfödda
+        # får sitt förråd satt vid födseln, och `Body` har ingen fenotyp.
+        self.body._n_pool_cap_frac = float(self.pheno.n_pool_cap_frac)
         
     def phenotype_summary(self) -> dict:
         return phenotype_summary(self.pheno)

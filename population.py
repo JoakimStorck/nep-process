@@ -241,7 +241,7 @@ class PopParams:
     store_growth_min_chunk: int = 256
     store_growth_factor: float = 2.0
     
-    n_traits: int = 44   # +1: _T_BEARER = 43, bärarbenägenhet
+    n_traits: int = 45   # +1: _T_N_POOL = 44, kväveförrådets storlek
 
     spawn_jitter_r: float = 1.5
 

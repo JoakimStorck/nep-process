@@ -53,6 +53,7 @@ class Phenotype:
     repair_capacity: float
     reserve_cap: float
     fast_frac: float
+    n_pool_cap_frac: float
     frailty_gain: float
     E_rep_min: float
 
@@ -324,6 +325,32 @@ _T_LITTER          = 42
 # någonstans.
 _T_BEARER          = 43
 
+# **Kväveförrådets storlek.** Hur mycket kväve kroppen kan bära mellan
+# måltider, som andel av den magra torrsubstansen.
+#
+# Förrådet var konstanten `N_POOL_CAP_FRAC = 0,02`, alltså bara den fria
+# aminosyrapoolen. Uppmätt rymde den **två tick**, och 58–80 procent av det
+# intagna kvävet deaminerades bort samma steg som det åts — ett djur kunde
+# inte bära kväve från en proteinrik måltid till nästa, medan energin gick att
+# lagra i veckor. De två valutorna hade alltså helt olika tidshorisont utan att
+# något i fysiologin sa att de skulle ha det.
+#
+# Verkliga djur har två kvävelager. Den fria poolen är liten, ~1–2 procent av
+# kroppsproteinet, men **labilt kroppsprotein** — lever, tarmslemhinna,
+# plasmaproteiner — omsätts snabbt och mobiliseras vid kvävebrist utan att
+# funktionen tar skada. Storleksordningen är fem till tio procent av
+# kroppsproteinet. Locus spänner därför från den fria poolen ensam till fri
+# pool plus en labil depå.
+#
+# **Avvägningen ligger i att depån är vävnad.** Labilt protein är hydratiserat
+# som all annan mager vävnad och bärs därför i `M_wet`: det kostar basal,
+# rörelse och värmeförlust som vilken kropp som helst. Vid taket 0,10 är
+# kroppen tio procent tyngre och basalmetabolismen sju procent högre, varje
+# tick, mot en buffert som räcker tio gånger längre. Ett djur i en kväverik
+# nisch vinner på en liten depå, ett i en kvävefattig på en stor — och det är
+# floran som avgör vilken nisch det är, inte en konstant.
+_T_N_POOL          = 44
+
 @dataclass(frozen=True)
 class PhenoRanges:
     # maturity
@@ -422,6 +449,12 @@ class PhenoRanges:
     # tio vid det gamla.
     reserve_cap_min: float = 0.5e6
     reserve_cap_max: float = 1.1e7
+
+    # Kväveförrådet som andel av den magra torrsubstansen; se `_T_N_POOL`.
+    # Golvet är den fria aminosyrapoolen ensam, taket fri pool plus en labil
+    # proteindepå på nio procent.
+    n_pool_cap_min: float = 0.01
+    n_pool_cap_max: float = 0.10
 
     repair_capacity_min: float = 0.10
     repair_capacity_max: float = 1.50   # höjt — k_age1 ger lägre inflöde än k_age0=0.2
@@ -581,6 +614,8 @@ def derive_pheno(traits: np.ndarray | None, R: PhenoRanges = PhenoRanges()) -> P
                                 _sigmoid(_get_trait(traits, _T_RESERVE)))),
         fast_frac=float(_lerp(R.fast_frac_min, R.fast_frac_max,
                               _sigmoid(_get_trait(traits, _T_FAST_FRAC)))),
+        n_pool_cap_frac=float(_lerp(R.n_pool_cap_min, R.n_pool_cap_max,
+                                    _sigmoid(_get_trait(traits, _T_N_POOL)))),
         litter=float(_lerp(R.litter_min, R.litter_max,
                            _sigmoid(_get_trait(traits, _T_LITTER)))),
         bearer_p=float(_sigmoid(_get_trait(traits, _T_BEARER))),
@@ -629,6 +664,7 @@ def phenotype_summary(p: Phenotype) -> dict[str, float]:
         "stress_per_drain": float(p.stress_per_drain),
         "repair_capacity": float(p.repair_capacity),
         "reserve_cap": float(p.reserve_cap),
+        "n_pool_cap_frac": float(p.n_pool_cap_frac),
         "frailty_gain": float(p.frailty_gain),
 
         "child_E_fast": float(p.child_E_fast),
@@ -738,7 +774,8 @@ N_PER_KG_PROTEIN = 0.16
 # Obligatorisk kväveförlust: Brodys ~2 mg N per kcal basalmetabolism.
 ENDOGENOUS_N_PER_J = 4.8e-10
 # Fria aminosyror som andel av den magra torrsubstansen. Verkliga djur bär
-# ~1–2 % av kroppsproteinet som fri pool.
+# ~1–2 % av kroppsproteinet som fri pool. Talet är förvalet för en kropp utan
+# locus; storleken är ärftlig sedan 0222, se `n_pool_cap_frac` och `_T_N_POOL`.
 N_POOL_CAP_FRAC = 0.02
 
 # --- Laktationen ----------------------------------------------------------
