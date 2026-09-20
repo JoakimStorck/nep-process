@@ -1178,6 +1178,11 @@ def build_population(a: argparse.Namespace, seed: int, hub=None) -> Population:
     ):
         if _cli is not None:
             setattr(AP, _name, type(getattr(AP, _name))(_cli))
+    # Scenariots fartskala skalar marschfarten. Den satt tidigare i
+    # kraftbalansens `drag_lin` och tappade sin verkan när kraftbalansen togs
+    # bort (0219); här går den direkt på det tal som `Body.marschfart()` läser.
+    if _sc_terr is not None:
+        AP.v_travel_ref = float(AP.v_travel_ref) * _sc_terr.v_travel_ref_skala
     PP = PopParams(init_pop=int(a.init_pop), max_pop=int(a.max_pop))
     if getattr(a, "flora_growth", None) is not None:
         PP.flora_growth_backend = str(a.flora_growth)

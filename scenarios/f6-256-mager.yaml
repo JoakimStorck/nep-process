@@ -64,6 +64,6 @@ fauna:
   flackradie: 20.0
   max_antal: 8192
 fysiologi:
-  fartskala: 0.5
+  fartskala: 1.0
   sociability: 0.8
   sociability_sd: 0.5

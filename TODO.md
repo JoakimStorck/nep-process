@@ -2602,12 +2602,12 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~—~~ | mätning: fartens massberoende och skala | rörelsen | **klart**, se nedan — M^0,95 mot biologins M^0,2, och 40 gånger för långsamt |
 | ~~0219~~ | marschfarten härleds biomekaniskt (`v ∝ M^0,2`) och sträckan gås i delsteg inom ticken | rörelsen | **klart**, se nedan — faunan överlever i `f6-256` för första gången |
 | ~~0220~~ | kraftbalansens döda konstanter och `Body._add_N` borttagna; `store.mobility` speglar marschfarten | städning | **klart**, se nedan — bitidentisk |
-| — | scenariernas `fartskala` implementerades via `drag_lin` och har ingen verkan sedan 0219: `liten6` och `f6-256` sätter 0,5 som ignoreras | scenarioformen | **öppen**, nästa — funnen i 0220 |
+| ~~0221~~ | `fartskala` kopplad till marschfarten igen, och scenariernas 0,5 satt till 1,0 | scenarioformen | **klart**, se nedan — mätt vad 0,5 hade betytt; banan bitidentisk |
 | — | steget är 11–28 cellbredder per tick mot en synvidd på 7: djuret planerar inte om inom ticken, det stannar bara vid vatten. Ticklängd, synvidd och fart är samma fråga | rörelsen | **öppen** |
 | ~~—~~ | `docs/tidens-skalor.md` refererades på tre ställen men finns inte | städning | **klart** i 0220 — hänvisningarna pekar nu på kön |
 | — | hungern ser bara energi; 38 % av ungarnas tick är energirika men kvävefattiga | budgeten | **öppen** — se mätningen |
 | — | kvävepoolen rymmer ~2 tick, så 58–80 % av det intagna kvävet deamineras bort | budgeten | **öppen** — se mätningen |
-| — | `Body._add_N` har ingen anropare: intaget skriver samma logik inline | städning | **öppen** — funnen i mätningen |
+| ~~—~~ | `Body._add_N` har ingen anropare: intaget skriver samma logik inline | städning | **klart** i 0220 — borttagen |
 | — | kadavrets energi för asätare räknas med förnans konstant och underskattar fettet | ekologin | **öppen**, rättas i steg 2 |
 | — | reserven belastar basal, värmeledning och termoreglering men inte rörelse, kroppsdjup, betesräckvidd eller predationens massjämförelse | budgeten | **öppen**, funnen i 0215 |
 | — | en graviditet som avstannar avbryts aldrig (ingen resorption) | reproduktionen | **öppen**, se 0214 |
@@ -2743,6 +2743,47 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### `fartskala` kopplad till farten igen (0221)
+
+Rättelse funnen i 0220. Scenariernas `fartskala` implementerades som
+`drag_lin = 220 / s`, alltså genom kraftbalansens linjära dragterm. 0219 tog
+bort kraftbalansen och 0220 tog bort konstanten, så multiplikatorn har inte
+haft någon verkan sedan dess — `liten6` och `f6-256` bad om halv fart och fick
+hel, tyst, i hela 0219:s mätunderlag. Nu skalar den `AgentParams.v_travel_ref`,
+talet `Body.marschfart()` läser, och `Scenario.drag_lin` ersätts av
+`Scenario.v_travel_ref_skala`.
+
+**Vad 0,5 hade betytt**, tre frön (`runs/p221`) mot 0219/0220, där skalan
+ignorerades:
+
+```
+f6-256, 2 400 tick    födslar           djurmånader            vid slutet
+  skala 1,0 (körd)    1018 / 740 / 850  8185 / 6883 / 6259     42 / 54 / 49 djur
+  skala 0,5            318 / 342 / 308  3208 / 3167 / 2732     21 / 27 / 24 djur
+liten6, 3 000 tick
+  skala 1,0 (körd)     627 / 167 / 206  2547 / 1462 / 1584     utdöd 39/55/48 mån
+  skala 0,5            411 / 200 / 120  1709 / 1310 / 1124     utdöd 35, 1 kvar, 58
+```
+
+Halv marschfart halverar beståndet och tar bort två tredjedelar av
+rekryteringen, men faunan överlever fortfarande i `f6-256` i alla tre frön.
+Mediansteget faller 1,76 → 1,18 cellbredder och det längsta 36 → 22; andelen
+tick i vatten stiger 10,4 → 13,5 %, alltså motsatt riktning mot 0219 — ett
+långsammare djur hinner inte ut ur vattnet inom ticken.
+
+**Scenariernas 0,5 sätts till 1,0.** Talet kalibrerades mot kraftbalansens
+jämviktsfart, som gav 37–44 cellbredder per tick; det var en motvikt mot en
+mekanism som inte finns kvar. `v_travel_ref = 1200` är i stället härlett ur
+energimodellens egen bansträcka, och ett scenario ska inte tyst halvera en
+härledd konstant. Vill vi ha långsammare djur ändras härledningen, inte en
+multiplikator vid sidan om — och frågan om världen blir för trång hör till den
+öppna raden om ticklängd, synvidd och fart, som är samma fråga sedd från tre
+håll.
+
+Därmed är banan **bitidentisk** med HEAD: enda skillnaden i utskriften är
+scenariots egen rad, som nu skriver `fartskala 1`. Mätningen ovan står kvar som
+underlag för vad skalan gör, den dagen någon vill använda den.
 
 ### Städning efter kraftbalansen (0220)
 

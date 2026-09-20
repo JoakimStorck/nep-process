@@ -23,7 +23,7 @@ att omöjliggöra.
 `bordighet: 4.0` i stället för tre näringskonstanter. `sadd: bordighet` i
 stället för ett plantantal. `insatts_vid: jamvikt` i stället för ett gissat
 tick — det felet gjorde både p87 och p97 ogiltiga, eftersom faunan mötte en
-halvfärdig flora. `fartskala: 0.5` i stället för `drag_lin: 440`.
+halvfärdig flora. `fartskala: 0.5` i stället för ett eget marschfartstal.
 
 Varje härledning ligger i `scenario.py` som en `@property` med sin motivering.
 Ett tal i filen som inte är en avsikt är ett tal som kommer att gå isär från sitt
@@ -89,8 +89,10 @@ hittar en partner bidrar med ingenting.
 
 ### `fysiologi` — vad som skalas
 
-`fartskala` är en multiplikator på jämviktsfarten, implementerad via `drag_lin =
-220 / s` eftersom den linjära dragtermen dominerar den kvadratiska fyra mot ett.
+`fartskala` är en multiplikator på marschfarten: den skalar
+`AgentParams.v_travel_ref`, talet `Body.marschfart()` läser. Fram till 0220 gick
+den via kraftbalansens `drag_lin = 220 / s`, och när kraftbalansen togs bort
+(0219) förlorade den sin verkan tyst — rättat i 0221.
 
 **`sociability` och `sociability_sd` gör något annat och allvarligare: de låser
 en ärftlig egenskap.** En låst trait kan inte selekteras, och just den axeln är

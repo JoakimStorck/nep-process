@@ -116,9 +116,13 @@ class FaunaSpec:
 
 @dataclass
 class FysiologiSpec:
-    # Multiplikator på farten. Implementeras via drag_lin, som sätter
-    # jämviktsfarten: kraftbalansen F0·M^(2/3) mot drag_lin·v + drag_quad·v².
-    # 1,0 ger uppmätt 37–44; 0,5 ger omkring 23.
+    # Multiplikator på marschfarten. Skalar `AgentParams.v_travel_ref`, alltså
+    # den riktade förflyttningen vid full gas — se `Body.marschfart()`.
+    #
+    # Fram till 0220 gick skalan via `drag_lin = 220/fartskala`, som satte
+    # jämviktsfarten i den kraftbalans marschfarten härleddes ur. Kraftbalansen
+    # togs bort i 0219 och `drag_lin` i 0220; däremellan hade fartskalan ingen
+    # verkan alls, vilket upptäcktes i 0220 och rättas här (0221).
     fartskala: float = 1.0
     sociability: float | None = None
     sociability_sd: float = 0.5
@@ -187,11 +191,9 @@ class Scenario:
         return int(v)
 
     @property
-    def drag_lin(self) -> float:
-        # Farten skalar i praktiken omvänt mot drag_lin: den linjära termen
-        # dominerar den kvadratiska fyra mot ett vid uppmätt fart.
-        s = max(1e-6, float(self.fysiologi.fartskala))
-        return 220.0 / s
+    def v_travel_ref_skala(self) -> float:
+        """Multiplikator på `AgentParams.v_travel_ref` (0221)."""
+        return max(1e-6, float(self.fysiologi.fartskala))
 
     # -- serialisering ---------------------------------------------------
 
