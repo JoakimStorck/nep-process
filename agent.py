@@ -2066,8 +2066,6 @@ class Body:
         _thermo_Pmax  = float(AP.thermo_Pmax_per_kg)
         _cold_dmg     = float(AP.cold_damage_gain)
         _water_heat   = float(getattr(AP, "water_heatloss_gain", 0.0))
-        _gest_burden  = float(getattr(AP, "gestation_mass_burden", 0.0))
-        _gest_over    = float(getattr(AP, "gestation_P_overhead_per_kg", 0.0))
         _gest_rate    = self.gest_rate()
         _k_damage     = float(getattr(AP, "k_damage", 0.02))
         _h_base       = float(AP.death_h_base)
@@ -2220,7 +2218,26 @@ class Body:
         self._reserve_cap = float(getattr(pheno, "reserve_cap", 0.0))
         M_carry = self.M_wet()
         if bool(self.gestating):
-            M_carry += _gest_burden * max(0.0, self.M_fetus_wet())
+            # **Fostret bärs (0231).** Raden fanns men läste
+            # `gestation_mass_burden`, en konstant som aldrig lades till i
+            # `AgentParams` och därför tyst var noll via `getattr`: en dräktig
+            # hona bar ingenting extra i basal, värmeledning eller
+            # termoreglering. Uppmätt i p230 var en full kull **128 procent av
+            # moderns egen kropp** — hon kunde alltså gå dräktig med mer än sin
+            # egen vikt gratis, vilket subventionerade reproduktionen rakt av.
+            #
+            # Ingen konstant behövs: buren massa är buren massa, faktorn är ett.
+            # Samma princip som reserven fick ovan.
+            #
+            # Att fostret går in i `M_carry` ger **också** dess underhåll, via
+            # Kleiber på summan. Det är därför `gestation_P_overhead_per_kg`
+            # inte återinförs — den hade blivit en andra betalning för samma
+            # vävnad, samma dubbelbokföring som 0212 rättade i termoregleringen
+            # och 0226 i omsättningen. Kleiber på (mor + foster) är dessutom
+            # rätt form: exponenten 0,75 gör fostret billigare att underhålla
+            # inuti en större kropp än fristående, vilket är vad delad cirkulation
+            # och delad värmebalans innebär.
+            M_carry += max(0.0, self.M_fetus_wet())
         # Diande ungar bärs och belastar som all annan massa (0218).
         M_carry += max(0.0, float(carried_kg))
 
@@ -2358,11 +2375,12 @@ class Body:
         dM_cat_gest = 0.0         # kg catabolized specifically to support gestation build
         E_from_M_gest = 0.0       # J injected via that catabolism (then spent)
 
-        if bool(self.gestating):
-            Pg_over = _gest_over * M_eff
-            out_gest_overhead = dt * Pg_over
-
-            # Fostret byggs i (3A), efter underhållet — se där.
+        # `out_gest_overhead` står kvar som noll (0231). Dräktighetens
+        # underhåll betalas sedan dess av basalen, eftersom fostret ingår i
+        # `M_carry`; en egen post skulle vara samma vävnad två gånger. Posten
+        # behålls i ledgern så att jämförelser bakåt mot p210–p230 går att göra.
+        #
+        # Fostret byggs i (3A), efter underhållet — se där.
     
         # ---------------------------------------------------------
         # (2C.5) Aktiv juvenil tillväxt mot M_target

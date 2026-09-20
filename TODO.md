@@ -2619,6 +2619,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0227~~ | `repair_capacity`-intervallet ankrat om till 0,95–1,60 efter locusets nya innebörd | dödligheten | **klart**, se nedan — `liten6` återställt; optimumet 1,21 bekräftat från ett annat håll |
 | ~~0229~~ | skadan sänker farten och bansträckan: åldrandet dödar genom svälten (steg 3 i `docs/aldrandet.md`) | dödligheten | **klart**, se nedan — Gompertz-formen faller ut som utfall |
 | ~~0230~~ | `weakness()` mäter mot kroppens egen topp i stället för mot `M_crit`; konstanten borttagen | storleken | **klart**, se nedan — en dold storleksbroms försvann, och jämviktsmassan halverades |
+| — | `sense_cost_L1..L3` ger 1e−5 procent av basal — sinnena är gratis och `sense_strength` nålas mot nivå 3 | budgeten | **öppen**, nästa — enhetsfel på sju tiopotenser; kostnaden ska härledas ur nervvävnadens pris |
 | — | `M_target` landar på 1,57 utan den dolda bromsen mot 2,95 med den: vilket är rätt, och vad sätter nivån? | storleken | **öppen** — funnen i 0230; kräver flera frön och en lång körning |
 | ~~0228~~ | `k_age0`, `k_age1` och `k_ageD` borttagna — den kalenderdrivna åldrandeklockans konstanter | städning | **klart** — bitidentisk |
 | — | `M_target` går till 3,645 och fryser — men med p10–p90 på 0,02 efter en flaskhals på sju individer: drift, inte selektion | storleken | **öppen** — kräver flera frön och ett skadesystem som biter |
@@ -2651,7 +2652,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | — | tio procent av dödsfallen sker med fett kvar, för att taket binder vid hög dränering | svälten | **öppen**, bieffekt av 0193 |
 | — | reparationen är näst största posten och betalas till 80–86 %; `repair_E_per_D` saknar härledning | budgeten | **öppen** |
 | — | `sense_cost_L1..L3` ligger 1e6 fel i enhet — sensing är gratis | A2 | **öppen**, se 0190 |
-| — | `gestation_mass_burden` och `gestation_P_overhead_per_kg` finns inte i `AgentParams` | reproduktionen | **öppen**, se 0190 |
+| ~~0231~~ | fostret bärs: `M_carry` räknar det, och dess underhåll faller ut ur Kleiber | reproduktionen | **klart**, se nedan — jämviktsmassan nära fördubblad |
 | — | nyfödda utrustas mot `E_cap_per_M`, inte mot sin egen `reserve_cap` | livshistorien | **öppen**, se 0190 |
 | — | Fishers jämvikt nås inte; bärarandelen beror på `lactation_k` | reproduktionen | **öppen**, se 0187 |
 | ~~—~~ | `f6-256-mager`: bär perceptet någon riktning i en fläckig värld? | 0169, kärnan | **scenariot finns**, kör det |
@@ -2773,6 +2774,67 @@ fortfarande bär det och en jämförelse bakåt mot p219–p226 ska kunna göras
 
 **Bitprov:** ren HEAD mot arbetsträdet, `liten6` 400 tick frö 1, med pop- och
 världslogg på båda sidor. Noll skillnad i konsoll, världslogg och pop-logg.
+
+### Fostret bärs (0231)
+
+Dynamikändring. Raden fanns men läste en konstant som aldrig lades till:
+
+```python
+    _gest_burden = float(getattr(AP, "gestation_mass_burden", 0.0))
+    M_carry += _gest_burden * max(0.0, self.M_fetus_wet())      # alltid 0
+```
+
+`M_wet()` räknar uttryckligen "utan foster", så **en dräktig hona bar ingenting
+extra** i basal, värmeledning eller termoreglering. Uppmätt i p230 var en full
+kull 1,179 kg våt mot en mor på 0,924 vid reproduktionströskeln — **128 procent
+av hennes egen kropp, buren gratis.**
+
+Ingen konstant återinförs: buren massa är buren massa, faktorn är ett. Samma
+princip som reserven fick, och samma som kväveförrådet fick i 0222.
+
+**`gestation_P_overhead_per_kg` återinförs inte heller.** Går fostret in i
+`M_carry` får det sitt underhåll via Kleiber på summan, och en egen post vore
+samma vävnad två gånger — samma dubbelbokföring som 0212 rättade i
+termoregleringen och 0226 i omsättningen. Kleiber på (mor + foster) är dessutom
+rätt form: exponenten 0,75 gör fostret billigare att underhålla inuti en större
+kropp än fristående, vilket är vad delad cirkulation och delad värmebalans
+innebär.
+
+**Utfall**, `f6-256` frö 1 till månad 36 (`runs/p231`) mot 0230:
+
+```
+                        0230        0231
+  bestånd                164         128
+  toppbestånd          1 192         750
+  dödsfall             5 605       1 535
+  livslängd median      1,58 mån    3,86 mån
+  kroppsmassa p50       0,112       0,561
+```
+
+**Jämviktsmassan nära fördubblas.** `M_target` bland födda:
+
+```
+  0227 (med den falska bromsen)  2,008  2,773  2,954  2,952
+  0230 (bromsen borttagen)       2,021  1,579  1,571  1,574
+  0231 (fostret bärs)            1,998  2,773  2,968  2,968
+```
+
+Mekanismen är allometrisk och inte en motkraft: `child_M` är absolut, så ett
+foster av given massa är en **mindre andel** av en större mor. Den lilla modern
+krossas av att bära 128 procent av sig själv; den stora bär proportionellt
+mindre. Att neonatmassan skalar underlinjärt mot moderns är ett av de klassiska
+skälen till stor kroppsstorlek i verkligheten, och här faller trycket ut av sig
+självt. `child_M` följer med uppåt, 0,236 → 0,391.
+
+**Noterbart:** 0231 landar på 2,968 och 0227 på 2,952. Den falska bromsen och
+den riktiga mekanismen ger alltså samma jämvikt — men bara den ena är
+försvarbar. Att talen sammanfaller kan vara en slump på ett frö, och det ska
+prövas i baslinjekörningen.
+
+I `liten6`: 2 003/2 014/1 169 djurmånader mot 0230:s 1 788/2 853/1 069, utdöd i
+alla tre frön.
+
+Invariantsviten godkänd i alla fyra körningar.
 
 ### `weakness()` mäter mot kroppens egen topp (0230)
 
