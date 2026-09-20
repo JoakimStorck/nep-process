@@ -2617,6 +2617,8 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0225~~ | instrumentering: `W`, `D`, ålder och skadetermer per massakvintil, plus reparationens tre kapningar (steg 1 i `docs/aldrandet.md`) | dödligheten | **klart**, se nedan — bitidentisk; taket binder i 100 %, skadan i 95,5 %, energin aldrig |
 | ~~0226~~ | de två flödena: omsättningen inom basalen, irreversibel skada `A`, `dD_age` borttagen (steg 2 i `docs/aldrandet.md`) | dödligheten | **klart**, se nedan — åldrandet biter: 18 % av dödsfallen mot 0,2 % |
 | ~~0227~~ | `repair_capacity`-intervallet ankrat om till 0,95–1,60 efter locusets nya innebörd | dödligheten | **klart**, se nedan — `liten6` återställt; optimumet 1,21 bekräftat från ett annat håll |
+| ~~0229~~ | skadan sänker farten och bansträckan: åldrandet dödar genom svälten (steg 3 i `docs/aldrandet.md`) | dödligheten | **klart**, se nedan — Gompertz-formen faller ut som utfall |
+| — | `weakness()` jämför massan med den absoluta konstanten `M_crit = 0,5`: det är inte ett avmagringsmått utan ett dolt storleksmått, och varje kropp under 1,85 kg våt är permanent svag | storleken | **öppen** — funnen i 0229; ska mäta mot kroppens egen topp som svältskadan gör |
 | ~~0228~~ | `k_age0`, `k_age1` och `k_ageD` borttagna — den kalenderdrivna åldrandeklockans konstanter | städning | **klart** — bitidentisk |
 | — | `M_target` går till 3,645 och fryser — men med p10–p90 på 0,02 efter en flaskhals på sju individer: drift, inte selektion | storleken | **öppen** — kräver flera frön och ett skadesystem som biter |
 | — | betning mot kontroll: `liten6` faller till hälften utan djur, betningen tar resten | ekologin | **öppen** — se mätningen nedan |
@@ -2770,6 +2772,76 @@ fortfarande bär det och en jämförelse bakåt mot p219–p226 ska kunna göras
 
 **Bitprov:** ren HEAD mot arbetsträdet, `liten6` 400 tick frö 1, med pop- och
 världslogg på båda sidor. Noll skillnad i konsoll, världslogg och pop-logg.
+
+### Skadan sänker farten: åldrandet dödar genom svälten (0229)
+
+Dynamikändring, steg 3 och sista i `docs/aldrandet.md`. Efter 0226 bar `A`
+åldrandet men rörde ingenting utom dödströskeln — alltså just den väg verkliga
+djur inte tar. Vilda djur dör nästan aldrig av ålderdom; de dör av svält eller
+predation, **för att åldrandet gjorde dem sämre på att undvika det.**
+
+Ny accessor `Body.funktionell_andel() = 1 − (D + A)/D_max`. Formen är härledd
+och inte kalibrerad: `D` och `A` *är* den andel av vävnaden som inte gör sitt
+jobb, och `D_max` är per definition den andel som är oförenlig med liv. Vid
+dödströskeln är faktorn noll, samma villkor som dödsvillkoret läser — de två
+kan inte glida isär.
+
+Faktorn sänker både marschfarten och födosökets bansträcka, och bansträckan
+sätter betesytan sedan 0223. Kedjan går därmed hela vägen i den kanal som redan
+bär nästan alla dödsfall:
+
+```
+   skada upp -> fart ned -> bansträcka ned -> betesyta ned -> svält
+```
+
+**Mätningen hittade ett fel på vägen.** Första försöket lät bansträckan läsa
+hela `move_factor()`, alltså avmagring gånger skada. Men `weakness()` jämför
+massan med den **absoluta** konstanten `M_crit = 0,5 kg` torrsubstans — det är
+inte ett avmagringsmått utan ett dolt storleksmått, och varje kropp under
+1,85 kg våt är permanent "svag". En nyfödd på 25 gram fick 28,7 procent av
+bansträckan. Uppmätt föll medianlivslängden från 3,82 till **1,03 månader**
+medan dödsfallen fyrdubblades till 3 936. Bansträckan läser därför
+`funktionell_andel()` ensam. Att `weakness()` är ett storleksmått förklätt till
+konditionsmått är en egen rad i kön — den ska mäta mot kroppens egen topp, som
+svältskadan gör sedan p179.
+
+**Utfall**, `f6-256` frö 1 till månad 36 (`runs/p229`) mot 0227:
+
+```
+                        0227        0229
+  bestånd                122         131
+  toppbestånd            485         407
+  dödsfall               976       1 139
+  därav skada           10,8 %       4,7 %
+  livslängd median      3,82 mån    2,82 mån
+  A p90                 0,595       0,078
+```
+
+**Åldrandet syns nu i svältkanalen i stället för i tröskeln.** Andelen dödsfall
+märkta "skada" halveras, och `A` slutar ackumuleras till höga värden — ett djur
+vars vävnad börjar svikta betar mindre och svälter innan skadan hinner nå taket.
+Det är precis vad steget skulle åstadkomma.
+
+**Och Gompertz-formen faller ut som utfall.** Åldersspecifik dödsrisk per månad:
+
+```
+  ålder            0–2    2–4    4–6    6–9   9–12  12–18  18–24  24–60
+  p224 utan        0,284  0,169  0,248  0,245  0,124  0,101  0,160  0,175
+  p227 tröskel     0,211  0,165  0,243  0,196  0,099  0,114  0,270  0,242
+  p229 nedsättning 0,270  0,219  0,209  0,246  0,102  0,157  0,236  0,313
+```
+
+Efter ungdomsfasen stiger risken **monotont** i 0229 — 0,102 → 0,157 → 0,236 →
+0,313, alltså tre gånger från botten — medan p224 utan åldrande är platt och
+brusig och p227 stiger men faller tillbaka i sista intervallet. Ingen
+Gompertz-formel är inmatad någonstans; kurvan är vad mekanismen producerar.
+
+I `liten6` ligger utfallet inom frönas spridning: 1 711/1 294/820 djurmånader
+mot 0227:s 1 538/1 332/1 147, utdöd i alla tre frön.
+
+Därmed är `docs/aldrandet.md` genomförd i sin helhet.
+
+Invariantsviten godkänd i alla fyra körningar.
 
 ### Omsättningskapacitetens intervall ankras om (0227)
 

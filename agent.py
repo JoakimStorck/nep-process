@@ -1695,9 +1695,43 @@ class Body:
             float(AP.wear_aD) * float(dD_pos)
         )    
         
+    def funktionell_andel(self) -> float:
+        """
+        Andelen av vävnaden som fortfarande fungerar (0229).
+
+        `D` är akut skada och `A` irreversibel; summan är den andel av kroppen
+        som inte gör sitt jobb, och `D_max` är per definition den andel som är
+        oförenlig med liv. Prestandan skalar därför med `1 − (D + A)/D_max`.
+
+        Härledd och inte kalibrerad: formen följer av vad `D` och `A` betyder.
+        Vid dödströskeln är faktorn noll, vilket är samma villkor som
+        dödsvillkoret läser — de två kan inte glida isär.
+        """
+        d = (float(self.D) + float(self.A)) / max(1e-9, float(self.AP.D_max))
+        return clamp(1.0 - d, 0.0, 1.0)
+
     def move_factor(self) -> float:
+        """
+        Rörelsens nedsättning: avmagring gånger skada (0229).
+
+        Avmagringsdelen är oförändrad. Skadedelen är steg 3 i
+        `docs/aldrandet.md`: **åldrandet dödar inte, det gör djuret sämre.**
+        Vilda djur dör nästan aldrig av ålderdom — de dör av svält eller
+        predation, för att åldrandet gjorde dem sämre på att undvika det. Efter
+        0226 bar `A` åldrandet men rörde ingenting utom dödströskeln, alltså
+        just den väg verkliga djur inte tar.
+
+        Sedan 0223 sätter samma faktor både marschfarten och födosökets
+        bansträcka, och bansträckan sätter betesytan. Kedjan går därmed hela
+        vägen i den kanal som redan bär nästan alla dödsfall:
+
+            skada upp -> fart ned -> bansträcka ned -> betesyta ned -> svält
+
+        Gompertz-kurvan blir ett utfall i stället för en inmatad formel.
+        """
         w = float(self.weakness())
-        return float(self.AP.v_weak_min + (1.0 - float(self.AP.v_weak_min)) * w)
+        avmagring = float(self.AP.v_weak_min + (1.0 - float(self.AP.v_weak_min)) * w)
+        return avmagring * self.funktionell_andel()
 
     def repair_factor(self) -> float:
         w = float(self.weakness())
@@ -4698,7 +4732,22 @@ class Agent:
         M = max(1e-9, self.body.M_lean_wet())
         M_ref = max(1e-9, float(self.AP.forage_ref_mass_kg))
         skala = (M / M_ref) ** float(self.AP.forage_mass_exp)
-        return max(0.0, float(self.AP.forage_path_rate) * float(dt) * skala)
+        # **Skadan sänker bansträckan (0229).** Utan den här faktorn går
+        # åldrandet inte vidare till betesytan och skulle bara sänka
+        # förflyttningen.
+        #
+        # Här står `funktionell_andel()` och **inte** `move_factor()`, trots att
+        # den senare är det som gatar den riktade färden. Skälet är att
+        # `move_factor` bär `weakness()`, som jämför massan med den absoluta
+        # konstanten `M_crit = 0,5` — alltså inte ett avmagringsmått utan ett
+        # dolt **storleksmått**: varje kropp under 1,85 kg våt är permanent
+        # "svag", inklusive alla ungar. Kopplad till bansträckan blev den en
+        # betesstraffskala på storlek, och uppmätt föll medianlivslängden från
+        # 3,82 till 1,03 månader medan dödsfallen fyrdubblades. Se raden i
+        # TODO.md; `weakness()` ska mäta mot kroppens egen topp som
+        # svältskadan gör sedan p179, inte mot ett tal.
+        return max(0.0, float(self.AP.forage_path_rate) * float(dt) * skala
+                   * float(self.body.funktionell_andel()))
 
     def _svept_yta(self, dt: float) -> float:
         """
