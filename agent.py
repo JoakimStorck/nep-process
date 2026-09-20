@@ -516,14 +516,10 @@ class AgentParams:
     D_max: float = 1.0
     frailty_gain_cap: float = 1.0  # NEW: clamp for pheno.frailty_gain
 
-    # Aging background damage.
-    # k_age1 (linjärt med ålder) är biologiskt korrekt: unga är nästan oskadade,
-    # gamla ackumulerar skada exponentiellt snabbare.
-    # k_age0=0 → ingen konstant bakgrund (var 0.200 — dödade unga för snabbt).
-    # k_age1=0.001 → dD/dt = 0.001×age_s: vid 250s ger 0.25 D/s → döden.
-    k_age0: float = 0.000
-    k_age1: float = 0.0003     # 0.0002 gav för lång livslängd; 0.0003 ger tipping ~400-500s.
-    k_ageD: float = 0.4
+    # `k_age0`, `k_age1` och `k_ageD` är borttagna i 0228. De bar den
+    # kalenderdrivna åldrandeklockan `dD_age`, som utgick i 0226 när åldrandet
+    # flyttades till `A` — den irreparabla andelen av omsättningsflödet, som går
+    # i takt med ämnesomsättningen per kilo i stället för med tiden.
 
     # Skadehastighet — grundterm i dD_eff.
     # Kalibrerat så att ung frisk agent har dD << reparationskapacitet (D ≈ 0),
@@ -2016,9 +2012,6 @@ class Body:
         _gest_over    = float(getattr(AP, "gestation_P_overhead_per_kg", 0.0))
         _gest_rate    = self.gest_rate()
         _k_damage     = float(getattr(AP, "k_damage", 0.02))
-        _k_age0       = float(AP.k_age0)
-        _k_age1       = float(AP.k_age1)
-        _k_ageD       = float(AP.k_ageD)
         _h_base       = float(AP.death_h_base)
         _h_age        = float(AP.death_h_age)
         _h_D          = float(AP.death_h_D)
@@ -2587,8 +2580,8 @@ class Body:
         # vid sidan av skadeackumulationen — två ägare till ett fenomen. Åldrandet
         # bärs nu av `A`, den irreparabla andelen av omsättningsflödet, och den
         # klockan går i takt med ämnesomsättningen per kilo i stället för med
-        # kalendern. `k_age0`, `k_age1` och `k_ageD` har inga läsare kvar; de
-        # städas i en egen patch.
+        # kalendern. Konstanterna är borttagna i 0228; termen står kvar som noll
+        # så länge loggen bär sitt fält.
         dD_age   = 0.0
 
         # Den irreparabla skadan: vad omsättningen inte hinner med, plus den

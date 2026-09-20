@@ -2617,7 +2617,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0225~~ | instrumentering: `W`, `D`, ålder och skadetermer per massakvintil, plus reparationens tre kapningar (steg 1 i `docs/aldrandet.md`) | dödligheten | **klart**, se nedan — bitidentisk; taket binder i 100 %, skadan i 95,5 %, energin aldrig |
 | ~~0226~~ | de två flödena: omsättningen inom basalen, irreversibel skada `A`, `dD_age` borttagen (steg 2 i `docs/aldrandet.md`) | dödligheten | **klart**, se nedan — åldrandet biter: 18 % av dödsfallen mot 0,2 % |
 | ~~0227~~ | `repair_capacity`-intervallet ankrat om till 0,95–1,60 efter locusets nya innebörd | dödligheten | **klart**, se nedan — `liten6` återställt; optimumet 1,21 bekräftat från ett annat håll |
-| — | `k_age0`, `k_age1` och `k_ageD` har inga läsare kvar sedan `dD_age` utgick | städning | **öppen** — funnen i 0226 |
+| ~~0228~~ | `k_age0`, `k_age1` och `k_ageD` borttagna — den kalenderdrivna åldrandeklockans konstanter | städning | **klart** — bitidentisk |
 | — | `M_target` går till 3,645 och fryser — men med p10–p90 på 0,02 efter en flaskhals på sju individer: drift, inte selektion | storleken | **öppen** — kräver flera frön och ett skadesystem som biter |
 | — | betning mot kontroll: `liten6` faller till hälften utan djur, betningen tar resten | ekologin | **öppen** — se mätningen nedan |
 | — | `_T_N_POOL` nålas mot taket 0,093 av 0,10 redan i första fjärdedelen: bärkostnaden är för svag mot nyttan | budgeten | **öppen** — funnen i 0222 |
@@ -2757,6 +2757,19 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Städning: den kalenderdrivna åldrandeklockans konstanter (0228)
+
+Städning, bitidentisk bana. `k_age0`, `k_age1` och `k_ageD` bar `dD_age`, som
+utgick i 0226 när åldrandet flyttades till `A` — den irreparabla andelen av
+omsättningsflödet, som går i takt med ämnesomsättningen per kilo i stället för
+med kalendern. De tre hade inga läsare kvar.
+
+`dD_age` står kvar som noll i `last_damage_terms`, eftersom loggens fält
+fortfarande bär det och en jämförelse bakåt mot p219–p226 ska kunna göras.
+
+**Bitprov:** ren HEAD mot arbetsträdet, `liten6` 400 tick frö 1, med pop- och
+världslogg på båda sidor. Noll skillnad i konsoll, världslogg och pop-logg.
 
 ### Omsättningskapacitetens intervall ankras om (0227)
 
