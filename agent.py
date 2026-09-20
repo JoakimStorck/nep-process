@@ -119,7 +119,6 @@ class AgentParams:
     # ------------------------
     # Steering / policy kinematics
     # ------------------------
-    v_max: float = 100.0
 
     # --- Styrningens kinematik -------------------------------------------
     #
@@ -131,13 +130,13 @@ class AgentParams:
     #
     # Taket på vridhastigheten, i rad per månad. Vid 25 vänder en organism 180°
     # på ungefär åtta tick i stället för på ett.
-    turn_rate_max: float = 25.0
+    # `turn_rate_max` borttagen i 0220: kursen sätts direkt varje tick.
 
     # Relaxationstakt mot önskad riktning, 1/månad. Styrningen är analytisk
     # relaxation och inte proportionell förstärkning per tick: den gamla formen
     # hade förstärkningen 1,54 per tick, alltså översläng med teckenbyte varje
     # tick. Formen nedan kan inte slå över vid något dt.
-    turn_gain: float = 6.0
+    # `turn_gain` borttagen i 0220, av samma skäl.
 
     # Lateral acceleration i cellbredder per månad². Svängradien följer av
     # centripetalvillkoret: ω ≤ a_lat / v, alltså r = v²/a_lat. Fart köper
@@ -145,7 +144,8 @@ class AgentParams:
     # kostnadsparameter. Talet är satt så att svängradien vid uppmätt marschfart
     # (37 cellbredder per månad) blir omkring 1,5 cellbredder — en organism ska
     # kunna vända inom sitt eget synfält, annars går födostyrningen sönder.
-    lat_accel_max: float = 900.0
+    # `lat_accel_max` borttagen i 0220: svängradien hörde till den gamla
+    # kursrelaxationen.
 
     # --- Riktningens persistens: områdessökning mot färd -------------------
     #
@@ -323,12 +323,9 @@ class AgentParams:
     v_travel_ref: float = 1200.0
     v_ref_mass_kg: float = 2.0
     v_mass_exp: float = 0.2
-    # Kraftbalansens konstanter. Utan läsare sedan 0219; `drag_lin` finns kvar
-    # eftersom scenariofilerna sätter den.
-    F0: float = 5.0e4
-    force_mass_exp: float = 2.0 / 3.0
-    drag_lin: float = 220.0
-    drag_quad: float = 1.2
+    # Kraftbalansens konstanter — `F0`, `force_mass_exp`, `drag_lin`,
+    # `drag_quad` och `v_max` — är borttagna i 0220. De hade inga läsare kvar
+    # sedan marschfarten härleds biomekaniskt (0219).
 
     # --- Rörelsens energikostnad ------------------------------------------
     #
@@ -698,7 +695,7 @@ class AgentParams:
     # födosökande djur, som lägger fem till tjugofem procent av sin budget på
     # rörelse. Rätt storlek, fel form. Att rätta formen kräver att dragets
     # konstanter prövas mot en verklig transportkostnad, och det är ett eget
-    # arbete. Se `docs/tidens-skalor.md`.
+    # arbete. Gjort i 0219; se raden om ticklängd, synvidd och fart i TODO.md.
     forage_path_rate: float = 4340.0
 
     wear_a0: float = 0.12
@@ -1201,36 +1198,19 @@ class Body:
         """Reserven plus kvävepoolen — den storhet ledgern stänger mot."""
         return self.E_total() + self.E_pool()
 
-    def _add_N(self, kg_N: float) -> None:
-        """
-        Kväve in i kroppen: till poolen så långt den rymmer, resten som urea.
-
-        Urean går till cellen som växttillgängligt kväve — den gödslar marken
-        där djuret står.
-        """
-        n = float(kg_N)
-        if n <= 0.0:
-            return
-        want_p = n / N_PER_KG_PROTEIN
-        room = max(0.0, self.N_pool_cap() - float(self.N_pool))
-        to_pool = want_p if want_p < room else room
-        self.N_pool = float(self.N_pool) + to_pool
-        rest_N = (want_p - to_pool) * N_PER_KG_PROTEIN
-        if rest_N > 0.0:
-            self.out_nutrient_kg += rest_N
-
     def marschfart(self) -> float:
         """
         Kroppens marschfart i cellbredder per månad (0219).
 
-        Biomekanisk allometri: `v = v_ref · (M/M_ref)^0,2`, mätt på den magra
-        våta massan — det är kroppens storlek och inte dess hull som sätter
+        Biomekanisk allometri: `v = v_travel_ref · (M/M_ref)^0,2`, mätt på den
+        magra våta massan — kroppens storlek och inte dess hull sätter
         steglängden. Ersätter kraftbalansen, vars dragkonstanter inte berodde
         på massan och som gav `fart ∝ M^0,95`.
         """
         AP = self.AP
         M = max(1e-9, self.M_lean_wet())
-        return float(AP.v_travel_ref) * (M / max(1e-9, float(AP.v_ref_mass_kg))) ** float(AP.v_mass_exp)
+        return (float(AP.v_travel_ref)
+                * (M / max(1e-9, float(AP.v_ref_mass_kg))) ** float(AP.v_mass_exp))
 
     def M_lean_wet(self) -> float:
         """

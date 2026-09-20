@@ -2601,9 +2601,10 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0218~~ | laktation: mjölk per tick inom en liten radie, ungen bärs av modern, massbaserad avvänjning | reproduktionen | **klart**, se nedan — mekanismen når fram men vänder inte rekryteringen |
 | ~~—~~ | mätning: fartens massberoende och skala | rörelsen | **klart**, se nedan — M^0,95 mot biologins M^0,2, och 40 gånger för långsamt |
 | ~~0219~~ | marschfarten härleds biomekaniskt (`v ∝ M^0,2`) och sträckan gås i delsteg inom ticken | rörelsen | **klart**, se nedan — faunan överlever i `f6-256` för första gången |
-| — | `F0`, `drag_quad`, `v_max`, `lat_accel_max`, `turn_gain`, `turn_rate_max` har inga läsare efter 0219; `drag_lin` sätts av scenariofilerna utan att läsas | städning | **öppen** |
+| ~~0220~~ | kraftbalansens döda konstanter och `Body._add_N` borttagna; `store.mobility` speglar marschfarten | städning | **klart**, se nedan — bitidentisk |
+| — | scenariernas `fartskala` implementerades via `drag_lin` och har ingen verkan sedan 0219: `liten6` och `f6-256` sätter 0,5 som ignoreras | scenarioformen | **öppen**, nästa — funnen i 0220 |
 | — | steget är 11–28 cellbredder per tick mot en synvidd på 7: djuret planerar inte om inom ticken, det stannar bara vid vatten. Ticklängd, synvidd och fart är samma fråga | rörelsen | **öppen** |
-| — | `docs/tidens-skalor.md` refereras på tre ställen men finns inte | städning | **öppen** |
+| ~~—~~ | `docs/tidens-skalor.md` refererades på tre ställen men finns inte | städning | **klart** i 0220 — hänvisningarna pekar nu på kön |
 | — | hungern ser bara energi; 38 % av ungarnas tick är energirika men kvävefattiga | budgeten | **öppen** — se mätningen |
 | — | kvävepoolen rymmer ~2 tick, så 58–80 % av det intagna kvävet deamineras bort | budgeten | **öppen** — se mätningen |
 | — | `Body._add_N` har ingen anropare: intaget skriver samma logik inline | städning | **öppen** — funnen i mätningen |
@@ -2742,6 +2743,27 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Städning efter kraftbalansen (0220)
+
+Städning, bitidentisk bana. Borttaget ur `AgentParams`: `F0`,
+`force_mass_exp`, `drag_lin`, `drag_quad`, `v_max`, `lat_accel_max`,
+`turn_gain` och `turn_rate_max`. De fyra första hörde till kraftbalansen som
+0219 ersatte; `v_max` var det arkitektoniska farttaket; de tre sista hörde
+till kursrelaxationen, som togs bort när kursen blev ett beslut per tick.
+Flaggorna `--drag-lin`, `--drag-quad` och `--v-max` faller med dem.
+
+`Body._add_N` hade ingen anropare — intaget skriver samma logik inline — och
+är borttagen. `store.mobility` speglade `AP.v_max` och speglar nu kroppens
+marschfart; fältet har fortfarande ingen läsare och hör till Steg 6b, där
+kapacitetsfälten får sina kostnader. De tre hänvisningarna till
+`docs/tidens-skalor.md`, som aldrig skrevs, pekar nu på raden i kön.
+
+**Städningen hittade ett fel.** Scenariernas `fartskala` implementerades via
+`drag_lin` — `220 / fartskala` — och har därför ingen verkan sedan 0219. Både
+`liten6` och `f6-256` sätter `fartskala: 0,5`, så halveringen har ignorerats
+tyst i 0219:s mätningar. Det rättas i nästa patch, som en dynamikändring med
+egen körning.
 
 ### Marschfarten härleds biomekaniskt (0219)
 
@@ -6069,7 +6091,7 @@ nio procent sjöyta.
 Bakgrunden är att representationen av djuren ska bli en fördelning i stället för
 en punkt — uppehållsplats plus sannolikhet för rörelse — eftersom ett tick på
 fjorton timmar är längre än djurets perceptuella horisont och positionen därför
-inte är en punkt utan ett revir. Se `docs/tidens-skalor.md` när det finns.
+inte är en punkt utan ett revir. Se raden om ticklängd, synvidd och fart i kön.
 
 Argumentet för att det skulle bli billigt var att fördelningen redan finns:
 `_valj_anspravk` utvärderar `styrka · cos(Δ) − vikt · kostnad(b)` i varje
@@ -6250,7 +6272,7 @@ Den troliga orsaken är en skala och inte en bugg: **synvidden är större än
 födofältets fläckstorlek.** Djuret medelvärdesbildar över så stor yta att varje
 sektor ser samma sak. Det är den rumsliga motsvarigheten till att ticket är
 längre än den perceptuella horisonten — samma motsättning, andra axeln — och det
-hör till `docs/tidens-skalor.md`.
+hör till raden om ticklängd, synvidd och fart i kön.
 
 Följden för 0169 är hård: en rörelsekärna byggd på det här perceptet blir nästan
 isotrop, alltså diffusion och inte födosök. **Kärnan kan inte rätta det.**

@@ -652,7 +652,11 @@ class OrganismStore:
     
         self.sense_radius[slot] = float(getattr(a.AP, "ray_len_front", 0.0))
         self.sense_rate[slot] = 1.0 / max(float(getattr(a.AP, "sense_idle_steps", 1)), 1.0)
-        self.mobility[slot] = float(getattr(a.AP, "v_max", 0.0))
+        # Rörelsekapaciteten är kroppens marschfart (0220). Fältet speglade
+        # tidigare `AP.v_max`, ett arkitektoniskt tak som togs bort med
+        # kraftbalansen; det har fortfarande ingen läsare och hör till Steg 6b,
+        # där kapacitetsfälten får sina kostnader och konsumenter.
+        self.mobility[slot] = float(a.body.marschfart())
         self.attack_capacity[slot] = float(getattr(ph, "predation", 0.0))
         self.repair_capacity[slot] = float(getattr(ph, "repair_capacity", 0.0))
         self.repro_capacity[slot] = float(getattr(ph, "repro_rate", 0.0))

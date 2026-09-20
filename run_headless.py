@@ -1102,12 +1102,6 @@ def parse_args() -> argparse.Namespace:
                     help="YAML-fil med körningens utgångsläge; se scenario.py")
     ap.add_argument("--scenario-out", type=str, default=None,
                     help="skriv scenariot hit för spårbarhet")
-    ap.add_argument("--drag-lin", type=float, default=None,
-                    help="AgentParams.drag_lin — linjärt motstånd; sätter farten")
-    ap.add_argument("--drag-quad", type=float, default=None,
-                    help="AgentParams.drag_quad — kvadratiskt motstånd")
-    ap.add_argument("--v-max", type=float, default=None,
-                    help="AgentParams.v_max — hårt farttak; binder inte vid förval")
     ap.add_argument("--sense-idle", type=int, default=None,
                     help="AgentParams.sense_idle_steps — tick mellan sensingar i vila")
     ap.add_argument("--sense-alert", type=int, default=None,
@@ -1179,9 +1173,6 @@ def build_population(a: argparse.Namespace, seed: int, hub=None) -> Population:
     # Kvoten går att sänka från båda hållen, och båda vägarna ska kunna prövas
     # utan kodändring.
     for _cli, _name in (
-        (a.drag_lin, "drag_lin"),
-        (a.drag_quad, "drag_quad"),
-        (a.v_max, "v_max"),
         (a.sense_idle, "sense_idle_steps"),
         (a.sense_alert, "sense_alert_steps"),
     ):
@@ -1687,8 +1678,6 @@ def apply_scenario(a: argparse.Namespace) -> None:
         a.nutrient_init = sc.nutrient_init
     if a.detritus_init is None:
         a.detritus_init = sc.detritus_init
-    if a.drag_lin is None:
-        a.drag_lin = sc.drag_lin
     if a.fauna_at is None:
         a.fauna_at = sc.fauna_at_tick
     if a.fauna_spawn_radius is None:
