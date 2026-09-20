@@ -2600,7 +2600,9 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~—~~ | mätning: varför faunan inte bär sig — ungarna dör, de vuxna är mätta | ekologin | **klart**, se nedan (`runs/dod`) |
 | ~~0218~~ | laktation: mjölk per tick inom en liten radie, ungen bärs av modern, massbaserad avvänjning | reproduktionen | **klart**, se nedan — mekanismen når fram men vänder inte rekryteringen |
 | ~~—~~ | mätning: fartens massberoende och skala | rörelsen | **klart**, se nedan — M^0,95 mot biologins M^0,2, och 40 gånger för långsamt |
-| — | farten härleds ur biomekanik i stället för en klampningsgräns; `v_max = 100` är 40 × under den bansträcka energimodellen redan betalar | rörelsen | **öppen**, nästa — se mätningen |
+| ~~0219~~ | marschfarten härleds biomekaniskt (`v ∝ M^0,2`) och sträckan gås i delsteg inom ticken | rörelsen | **klart**, se nedan — faunan överlever i `f6-256` för första gången |
+| — | `F0`, `drag_quad`, `v_max`, `lat_accel_max`, `turn_gain`, `turn_rate_max` har inga läsare efter 0219; `drag_lin` sätts av scenariofilerna utan att läsas | städning | **öppen** |
+| — | steget är 11–28 cellbredder per tick mot en synvidd på 7: djuret planerar inte om inom ticken, det stannar bara vid vatten. Ticklängd, synvidd och fart är samma fråga | rörelsen | **öppen** |
 | — | `docs/tidens-skalor.md` refereras på tre ställen men finns inte | städning | **öppen** |
 | — | hungern ser bara energi; 38 % av ungarnas tick är energirika men kvävefattiga | budgeten | **öppen** — se mätningen |
 | — | kvävepoolen rymmer ~2 tick, så 58–80 % av det intagna kvävet deamineras bort | budgeten | **öppen** — se mätningen |
@@ -2740,6 +2742,59 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Marschfarten härleds biomekaniskt (0219)
+
+Dynamikändring, väg A ur mätningen. Kraftbalansen `F_prop = c₁v + c₂v²`
+utgår. Marschfarten sätts i stället av kroppsstorleken,
+
+```
+v = v_travel_ref · (M_mager_våt / 2 kg)^0,2      v_travel_ref = 1200 cb/mån
+```
+
+alltså 0,39 km/dygn för en vuxen på 2 kg och 0,18 för en unge på 40 gram — en
+faktor 2,2 där kraftbalansen gav fyrtio. Talet är härlett ur energimodellens
+egen bansträcka: den betalar för 4 340 cellbredder per månad, 1,4 km/dygn, och
+en födosökande bana är slingrande, så nettoförflyttningen är omkring en
+tredjedel. Motståndet — vatten och lutning — sänker nu farten **och** höjer
+kostnaden per meter, vilket är vad ett motstånd gör. Ansträngningen normeras
+mot djurets egen marschfart i stället för mot `v_max`, som var ett
+arkitektoniskt tak.
+
+**Sträckan gås i delsteg.** Första körningen visade varför det behövs: med
+11–28 cellbredder per tick mot en synvidd på 7 och en vägkostnad som ser 6 gick
+djuren blint, och andelen tick i vatten steg från 12 till **53 procent**.
+Nu vandrar djuret längs sin kurs i steg om högst halva vägkostnadens räckvidd
+och stannar där vattnet blir djupare än det självt. Kursen omprövas inte —
+det är fortfarande ett beslut per tick — men foten sätts ned med ögonen
+öppna. Energin betalar för den sträcka som faktiskt gicks.
+
+**Utfall**, tre frön, HEAD (0218) mot 0219 (`runs/p219`):
+
+```
+f6-256, 2 400 tick   födslar             djurmånader              vid slutet
+  HEAD               57 / 149 / 75       760 / 1467 / 699         utdöd 32/36/23 mån
+  0219               1018 / 740 / 850    8109 / 6833 / 6225       45 / 57 / 54 djur
+liten6, 3 000 tick
+  HEAD               108 / 66 / 41       515 / 434 / 385          utdöd 34/35/47 mån
+  0219               627 / 167 / 206     2510 / 1462 / 1580       utdöd 40/56/49 mån
+```
+
+**Faunan överlever i `f6-256` för första gången** — i alla tre frön, med
+201–350 djur som mest och 45–57 kvar efter fyra år. Ungarnas medianålder vid
+död stiger från 0,8–3,7 till 3,7–5,1 månader. I `liten6` dör den fortfarande
+ut, men tre till sex gånger senare. Andelen tick i vatten föll till 8 procent,
+och tiden i vatten är nu ett val och inte en olycka.
+
+Det bekräftar mätningen efter 0218: rekryteringen föll på att ungar inte kunde
+lämna en betad fläck. Med en fart som skalar biologiskt — och en kropp som
+inte går blint — bär beståndet sig.
+
+**Kvar att ta upp.** Steget är fortfarande 11–28 cellbredder per tick mot en
+synvidd på 7, och delstegen löser bara hindren, inte beslutet: djuret kan inte
+ändra sig inom ticken. Ticklängd, synvidd och fart är samma fråga sedd från tre
+håll, och världen på 2,56 km korsas nu på sex dygn. Kraftbalansens konstanter
+— `F0`, `drag_quad`, `v_max`, `lat_accel_max` — har inga läsare kvar.
 
 ### Fartens massberoende och skala (mätning)
 

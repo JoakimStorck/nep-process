@@ -301,6 +301,30 @@ class AgentParams:
     # ------------------------
     # Kraftbalansen sätter **farten**. Efter 0174 sätter den inte längre
     # energin; se `cot_k`.
+    # --- Marschfarten, biomekanisk (0219) --------------------------------
+    #
+    # Farten löstes tidigare ur en kraftbalans `F_prop = c₁v + c₂v²` med
+    # `F_prop ∝ M^(2/3)` och dragkonstanter som inte berodde på massan. Uppmätt
+    # gav det `fart ∝ M^0,95` mot verklighetens M^0,17–0,24 — en unge på 0,1 kg
+    # rörde sig en fyrtiondel så fort som en vuxen på 2 kg i stället för
+    # hälften — och skalan låg fyrtio gånger under den bansträcka
+    # energimodellen redan betalade för. `v_max = 100` var, med
+    # `docs/rorelsens-arkitektur.md`s egna ord, "en klampningsgräns och ingen
+    # biologisk fart".
+    #
+    # Nu sätts marschfarten av kroppsstorleken och energin ligger kvar på
+    # Taylors transportkostnad, så de två sidorna talar samma språk.
+    #
+    # `v_travel_ref` är **riktad** förflyttning vid full gas för ett djur på
+    # `v_ref_mass_kg`. Energimodellens bansträcka är 4 340 cellbredder per
+    # månad, alltså 1,4 km/dygn, vilket är rätt för en liten växtätare. En
+    # födosökande bana är slingrande, så nettoförflyttningen är omkring en
+    # tredjedel: 1 200 cellbredder per månad, 0,4 km/dygn.
+    v_travel_ref: float = 1200.0
+    v_ref_mass_kg: float = 2.0
+    v_mass_exp: float = 0.2
+    # Kraftbalansens konstanter. Utan läsare sedan 0219; `drag_lin` finns kvar
+    # eftersom scenariofilerna sätter den.
     F0: float = 5.0e4
     force_mass_exp: float = 2.0 / 3.0
     drag_lin: float = 220.0
@@ -1195,6 +1219,19 @@ class Body:
         if rest_N > 0.0:
             self.out_nutrient_kg += rest_N
 
+    def marschfart(self) -> float:
+        """
+        Kroppens marschfart i cellbredder per månad (0219).
+
+        Biomekanisk allometri: `v = v_ref · (M/M_ref)^0,2`, mätt på den magra
+        våta massan — det är kroppens storlek och inte dess hull som sätter
+        steglängden. Ersätter kraftbalansen, vars dragkonstanter inte berodde
+        på massan och som gav `fart ∝ M^0,95`.
+        """
+        AP = self.AP
+        M = max(1e-9, self.M_lean_wet())
+        return float(AP.v_travel_ref) * (M / max(1e-9, float(AP.v_ref_mass_kg))) ** float(AP.v_mass_exp)
+
     def M_lean_wet(self) -> float:
         """
         Den magra vävnadens **våta** massa (1a).
@@ -1814,7 +1851,10 @@ class Body:
         _cat_eff      = max(0.0, float(getattr(AP, 'catabolism_eff', 1.0)))
         _k_basal      = float(AP.k_basal)
         _compute_cost = float(AP.compute_cost)
-        _v_max        = float(AP.v_max)
+        # Ansträngningen normeras mot djurets **egen** marschfart sedan 0219;
+        # `v_max` var ett arkitektoniskt tak och gav små djur en ansträngning
+        # nära noll oavsett hur hårt de faktiskt gick.
+        _v_max        = max(1e-9, self.marschfart())
         _D_max        = float(AP.D_max)
         # Massorna i `AgentParams` och i genomet är våt levande massa;
         # tillstånden är torrsubstans sedan 0216. Omräkningen sker här.
@@ -4231,10 +4271,7 @@ class Agent:
         u = clamp(allow_move * thrust * fatigue_factor * weak_move, 0.0, 1.0)
 
         M_pre = max(1e-9, self.body.M_lean_wet())
-        F_prop = u * float(self.AP.F0) * (M_pre ** float(self.AP.force_mass_exp))
-
-        c1 = float(self.AP.drag_lin)
-        c2 = float(self.AP.drag_quad)
+        v_egen = self.body.marschfart()
 
         # Vattnet som medium. Draget höjs med hur illa kroppen flyter gånger
         # hur djupt vattnet är. En neutral kropp möter inget extra motstånd; en
@@ -4246,8 +4283,6 @@ class Agent:
         w_fac = self._water_factor()
         if w_fac > 0.0:
             mult = 1.0 + float(self.AP.water_drag_gain) * w_fac
-            c1 *= mult
-            c2 *= mult
 
         # Lutningen i färdriktningen. Uppför kostar, nedför är billigt men inte
         # gratis — och asymmetrin mellan de två är fysiologi: koncentriskt
@@ -4272,41 +4307,22 @@ class Agent:
             if smult < 0.1:
                 smult = 0.1
             smult_cot = smult
-            c1 *= smult
-            c2 *= smult
 
-        if F_prop <= 0.0:
-            speed = 0.0
-        elif c2 > 0.0:
-            speed = (math.sqrt(c1 * c1 + 4.0 * c2 * F_prop) - c1) / (2.0 * c2)
-        else:
-            speed = F_prop / max(c1, 1e-12)
-        speed = min(max(0.0, speed), float(self.AP.v_max))
+        # Motståndet — vatten och lutning — sänker farten och höjer kostnaden
+        # per meter. Samma tal verkar alltså åt båda hållen, vilket är vad ett
+        # motstånd gör.
+        motst_fart = 1.0
+        if w_fac > 0.0:
+            motst_fart *= 1.0 + float(self.AP.water_drag_gain) * w_fac
+        if s_along != 0.0:
+            motst_fart *= max(0.1, smult_cot)
+        speed = max(0.0, u * v_egen / max(1e-9, motst_fart))
         self.last_speed = float(speed)
+        self._v_egen = float(v_egen)
 
         # Vid kraftbalans är den mekaniska effekten exakt dragkraftens
         # dissipation. Uttrycket är oförändrat men beror inte längre på
         # föregående ticks numeriska transient.
-        # **Transportkostnad, inte dragdissipation.** Se `AgentParams.cot_k`.
-        #
-        # Kraftbalansen ovan har satt farten och är färdig. Energin räknas i
-        # stället som massa gånger sträcka gånger en massberoende
-        # transportkostnad, och motståndet **höjer kostnaden** i stället för att
-        # sänka farten. Det ger vadandet och klättrandet rätt tecken utan
-        # additiva tillägg: den gamla formen gjorde båda billigare än att gå på
-        # platt torr mark, och bara vadandet hade fått en lapp.
-        #
-        # Sträckan är bansträckan — födosökets vandring plus den riktade färden
-        # — och inte nettoförflyttningen. Samma storhet som betesytan läser.
-        cot = float(self.AP.cot_k) * (M_pre ** float(self.AP.cot_mass_exp))
-        stracka_lu = float(self.AP.forage_path_rate) * dt + dt * max(0.0, speed)
-        motstand = 1.0
-        if w_fac > 0.0:
-            motstand *= 1.0 + float(self.AP.water_drag_gain) * w_fac
-        if s_along != 0.0:
-            motstand *= max(0.1, smult_cot)
-        E_move = cot * M_pre * stracka_lu * LENGTH_UNIT_M * motstand
-
         # --- 2. riktning: omedelbar, plus persistent brus ---------------------
         #
         # **Riktningen relaxerar inte.** En tick är 0,02 månader, alltså knappt
@@ -4381,8 +4397,37 @@ class Agent:
         self.heading = self._signed_angle(float(self.heading) + d_steer + d_noise)
 
         # --- 3. förflyttning och mätning -------------------------------------
-        step_x = dt * speed * math.cos(self.heading)
-        step_y = dt * speed * math.sin(self.heading)
+        #
+        # **Sträckan gås i delsteg (0219).** Med biomekanisk marschfart är
+        # steget 11–28 cellbredder per tick, medan synen når 7 och
+        # vägkostnaden 6: djuret skulle annars gå två till fyra gånger längre
+        # än det kan planera, och uppmätt hamnade det i vatten 53 procent av
+        # tickarna mot 12 före. Ett verkligt djur går inte blint i fjorton
+        # timmar. Här vandrar det längs sin kurs i steg om högst
+        # `kostnad_rackvidd / 2` och stannar där vattnet blir djupare än det
+        # själv — kursen omprövas inte, men foten sätts ned med ögonen öppna.
+        _langd = abs(dt * speed)
+        _delsteg = max(1.0, float(self.AP.kostnad_rackvidd) * 0.5)
+        _n_del = int(min(8.0, math.ceil(_langd / _delsteg))) if _langd > 0.0 else 0
+        _gick = 0.0
+        _cx, _cy = float(self.x), float(self.y)
+        _ref_djup = max(1e-9, self._body_depth())
+        world = getattr(self, "world", None)
+        for _i in range(_n_del):
+            _d = _langd / _n_del
+            _nx, _ny = self.grid.wrap_pos(_cx + _d * math.cos(self.heading),
+                                          _cy + _d * math.sin(self.heading))
+            if world is not None:
+                _c = int(self.grid.cell_of(_nx, _ny))
+                _djup = float(np.asarray(world.water)[_c])
+                if _djup > _ref_djup:
+                    break
+            _cx, _cy = _nx, _ny
+            _gick += _d
+        speed = _gick / dt if dt > 0.0 else 0.0
+        self.last_speed = float(speed)
+        step_x = _gick * math.cos(self.heading)
+        step_y = _gick * math.sin(self.heading)
 
         # Bansträcka och nettoförflyttning ackumuleras utan torusvikning, så att
         # kvoten mellan dem går att läsa i life-loggen. Den kvoten är Del 1:s
@@ -4413,6 +4458,28 @@ class Agent:
             self.disp_y += _ddy
             self._drift_dx = 0.0
             self._drift_dy = 0.0
+
+        # **Transportkostnad, inte dragdissipation.** Se `AgentParams.cot_k`.
+        #
+        # Kraftbalansen ovan har satt farten och är färdig. Energin räknas i
+        # stället som massa gånger sträcka gånger en massberoende
+        # transportkostnad, och motståndet **höjer kostnaden** i stället för att
+        # sänka farten. Det ger vadandet och klättrandet rätt tecken utan
+        # additiva tillägg: den gamla formen gjorde båda billigare än att gå på
+        # platt torr mark, och bara vadandet hade fått en lapp.
+        #
+        # Sträckan är bansträckan — födosökets vandring plus den riktade färden
+        # — och inte nettoförflyttningen. Samma storhet som betesytan läser.
+        cot = float(self.AP.cot_k) * (M_pre ** float(self.AP.cot_mass_exp))
+        # Bansträckan: födosökets vandring plus den sträcka djuret faktiskt
+        # gick, alltså efter delstegen (0219).
+        stracka_lu = float(self.AP.forage_path_rate) * dt + max(0.0, _gick)
+        motstand = 1.0
+        if w_fac > 0.0:
+            motstand *= 1.0 + float(self.AP.water_drag_gain) * w_fac
+        if s_along != 0.0:
+            motstand *= max(0.1, smult_cot)
+        E_move = cot * M_pre * stracka_lu * LENGTH_UNIT_M * motstand
 
         self.x, self.y = self.grid.wrap_pos(float(self.x) + step_x + _ddx,
                                             float(self.y) + step_y + _ddy)
@@ -4634,7 +4701,7 @@ class Agent:
         food_bio_kg: float,
         food_carcass_kg: float,
     ) -> float:
-        speed_n = clamp(speed / max(float(self.AP.v_max), 1e-9), 0.0, 1.0)
+        speed_n = clamp(speed / max(self.body.marschfart(), 1e-9), 0.0, 1.0)
         ate = 1.0 if (allow_eat > 0.20 and (food_bio_kg + food_carcass_kg) > 0.0) else 0.0
         return 0.03 + 0.45 * speed_n + 0.10 * ate
 
