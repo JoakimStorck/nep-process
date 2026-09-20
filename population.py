@@ -1245,9 +1245,13 @@ class Population:
         """
         Avsvalningstiden i månader: dräktighet plus laktation.
 
-        Dräktigheten är redan härledd — `child_M / gestation_growth_kg_per_s` —
-        så tiden behöver ingen egen konstant. Laktationen läggs till som en
-        multipel av dräktigheten; se `AgentParams.lactation_k`.
+        Dräktigheten är redan härledd — `child_M / Body.gest_rate()` — så tiden
+        behöver ingen egen konstant. Laktationen läggs till som en multipel av
+        dräktigheten; se `AgentParams.lactation_k`.
+
+        Takten är massberoende sedan 0224, så avsvalningen måste läsa samma
+        storhet som fosterbygget. Gjorde den inte det skulle en liten hona få
+        en avsvalning räknad på en kropp hon inte har.
 
         Det gör avsvalningen till en **följd av ungens storlek**, som är
         ärftlig. En förälder som bygger en stor unge betalar inte bara i massa
@@ -1258,7 +1262,7 @@ class Population:
         bar och varför de skiljs åt.
         """
         cm = max(1e-6, float(getattr(ag.pheno, "child_M", 0.2)))
-        rate = max(1e-9, float(ag.AP.gestation_growth_kg_per_s))
+        rate = max(1e-9, float(ag.body.gest_rate()))
         drakt = cm / rate
         return float(drakt * (1.0 + max(0.0, float(ag.AP.lactation_k))))
 

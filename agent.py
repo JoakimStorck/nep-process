@@ -1002,10 +1002,40 @@ class AgentParams:
     growth_R_min: float = 0.30   # ingen aktiv tillväxt under denna reservgrad
     growth_R_full: float = 0.60  # full tillväxthastighet först här
 
-    # Gestationstillväxthastighet (kg/s fetal vävnad per sekund).
-    # 0.004 kg/s → 50s för ett 0.2 kg foster (var 0.002 = 100s).
-    # Föräldern kataboliserar ~0.2 kg kroppsmassa under gestationen (M: 1.0→0.8). ✓
+    # Gestationstillväxthastighet (kg fetal torrsubstans per tidsenhet).
+    # Föräldern kataboliserar ~0,2 kg kroppsmassa under gestationen.
     gestation_growth_kg_per_s: float = 0.085
+
+    # **Fosterbygget skalar med moderns ämnesomsättning (0224).**
+    #
+    # Takten ovan var massfri, och dräktighetens längd är `M_foster / takt`.
+    # Fostermassan följer `child_M`, som skalar med moderns storlek, så
+    # dräktigheten gick som **M^1**: halverad kropp gav halverad dräktighet.
+    # Hos däggdjur går dräktigheten som ungefär `M^0,25` — halverad kropp ger
+    # sexton procents förkortning, inte femtio. Se
+    # `docs/revision-storleksskalningen.md`, rättelse 2 av 4.
+    #
+    # Det är den term som betyder mest för kullintervallet. Uppmätt föll
+    # intervallet mellan kullar från 10,72 till 1,44 månader i 0222, när kvävet
+    # slutade strypa bygget och den här konstanten blev det som band — och en
+    # konstant som binder ger det lilla djuret en reproduktionstakt som ingen
+    # biologi ger det.
+    #
+    # Fosterbygget är anabolt arbete och betalas ur moderns budget, så takten
+    # ska följa den budgeten:
+    #
+    #     takt(M) = gestation_growth_kg_per_s · (M_mager_våt / M_ref)^0,75
+    #
+    # Med fostermassa `∝ M` blir dräktigheten då `∝ M^0,25`, vilket är
+    # allometrin. Referensmassan är densamma som 0223 gav bansträckan — den
+    # uppmätta mediankroppen — så att dräktigheten är oförändrad där och bara
+    # skalningen tillkommer.
+    #
+    # Storheten läses på två ställen: fosterbygget i `Body.step` och
+    # avsvalningens längd i `Population._avsvalning`. Båda går genom
+    # `Body.gest_rate()`.
+    gest_ref_mass_kg: float = 1.2
+    gest_mass_exp: float = 0.75
 
     # `gestation_E_per_kg` och `growth_E_per_kg` är borttagna. Båda stod på
     # 10 000 J/kg, alltså en tusendel av det labila innehållet i det som byggdes,
@@ -1229,6 +1259,19 @@ class Body:
         `Agent.apply_traits`; se `_T_N_POOL`.
         """
         return float(self._n_pool_cap_frac) * max(0.0, float(self.M))
+
+    def gest_rate(self) -> float:
+        """
+        Fosterbyggets takt i kg torrsubstans per tidsenhet (0224).
+
+        Allometrisk mot moderns ämnesomsättning: `M^0,75`. Med en fostermassa
+        som skalar med moderns storlek ger det dräktighet `∝ M^0,25`. Se
+        `AgentParams.gest_mass_exp`. Enda ägaren av storheten.
+        """
+        M = max(1e-9, self.M_lean_wet())
+        M_ref = max(1e-9, float(self.AP.gest_ref_mass_kg))
+        return (float(self.AP.gestation_growth_kg_per_s)
+                * (M / M_ref) ** float(self.AP.gest_mass_exp))
 
     def M_pool_wet(self) -> float:
         """
@@ -1907,7 +1950,7 @@ class Body:
         _water_heat   = float(getattr(AP, "water_heatloss_gain", 0.0))
         _gest_burden  = float(getattr(AP, "gestation_mass_burden", 0.0))
         _gest_over    = float(getattr(AP, "gestation_P_overhead_per_kg", 0.0))
-        _gest_rate    = float(AP.gestation_growth_kg_per_s)
+        _gest_rate    = self.gest_rate()
         _k_damage     = float(getattr(AP, "k_damage", 0.02))
         _k_age0       = float(AP.k_age0)
         _k_age1       = float(AP.k_age1)

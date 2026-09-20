@@ -2610,6 +2610,8 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | — | reproduktionen har ingen annan broms än kvävet: `f6-256` går 80 → 6 169 djur på 36 månader med 24 g per djur | ekologin | **öppen** — funnen i 0222 |
 | ~~—~~ | revision: faunans storleksskalning — vilka termer beror på massan och med vilken exponent | storleken | **klart**, se nedan (`docs/revision-storleksskalningen.md`) |
 | ~~0223~~ | födosökets bansträcka skalar allometriskt, `L ∝ M^0,25` (rättelse 1 av 4 ur revisionen) | storleken | **klart**, se nedan — överskjutningen borta, storleksglidningen kvar |
+| ~~0224~~ | fosterbygget skalar med moderns ämnesomsättning, dräktighet `∝ M^0,25` (rättelse 2 av 4) | storleken | **klart**, se nedan — storleksglidningen vänder; `M_target` stiger i stället |
+| — | `M_target` stiger mot 3,0 av taket 4,0 efter 0224: optimum eller spegelvänd rusning? | storleken | **öppen** — avgörs av rättelse 3 och 4 plus en längre körning |
 | — | betning mot kontroll: `liten6` faller till hälften utan djur, betningen tar resten | ekologin | **öppen** — se mätningen nedan |
 | — | `_T_N_POOL` nålas mot taket 0,093 av 0,10 redan i första fjärdedelen: bärkostnaden är för svag mot nyttan | budgeten | **öppen** — funnen i 0222 |
 | ~~—~~ | `Body._add_N` har ingen anropare: intaget skriver samma logik inline | städning | **klart** i 0220 — borttagen |
@@ -2748,6 +2750,82 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Fosterbygget skalar med moderns ämnesomsättning (0224)
+
+Dynamikändring, rättelse 2 av 4 ur `docs/revision-storleksskalningen.md`.
+`gestation_growth_kg_per_s = 0,085` var massfri, och dräktighetens längd är
+`M_foster / takt`. Fostermassan följer `child_M`, som skalar med moderns
+storlek, så **dräktigheten gick som `M^1`**: halverad kropp gav halverad
+dräktighet, mot sexton procents förkortning hos verkliga däggdjur. Fosterbygget
+är anabolt arbete ur moderns budget, så takten följer nu den budgeten:
+
+```
+    takt(M) = gestation_growth_kg_per_s · (M_mager_våt / 1,2 kg)^0,75
+```
+
+Med fostermassa `∝ M` blir dräktigheten `∝ M^0,25`. Referensmassan är densamma
+som 0223 gav bansträckan, så dräktigheten är oförändrad vid mediankroppen.
+Storheten har två läsare — fosterbygget i `Body.step` och avsvalningens längd i
+`Population._avsvalning` — och båda går genom `Body.gest_rate()`; annars skulle
+en liten hona få sin avsvalning räknad på en kropp hon inte har.
+
+```
+   M (ts)   M (våt)   takt kg/mån   dräktighet    (förut)
+    0,011    0,041      0,0067         7,73 mån     0,61
+    0,050    0,185      0,0209         3,82         0,94
+    0,150    0,556      0,0477         2,52         1,41
+    0,500    1,852      0,1177         1,95         2,71
+    1,000    3,704      0,1979         1,77         4,12
+```
+
+**Utfall**, `f6-256` frö 1 till månad 36 (`runs/p224`), hela serien:
+
+```
+                      p219 baslinje    0222      0223      0224
+  bestånd vid mån 36        ~50        5 935      492       128
+  toppbestånd                350       5 935*     983       436
+  kroppsmassa p50          0,485 kg    0,011     0,013     0,493
+  kroppsmassa p90          0,786 kg    0,042     0,558     0,876
+  energi, median            9,3 MJ      0,2       0,35       8,7
+  bete per kg djur          10,6        31,8      14,2      10,5
+  median mellan kullar     10,72 mån    1,44      1,60     10,92
+                                   * steg fortfarande
+```
+
+**Allt är tillbaka på baslinjens skala — men nu av mekanism och inte av
+artefakt.** Medianmassan 0,493 mot baslinjens 0,485, betet per kilo 10,5 mot
+10,6, energin 8,7 MJ mot 9,3. Skillnaden mot 0219 är att talen nu följer av
+allometri i stället för av en kvävepool som rymde två tick.
+
+**Och storleksglidningen vänder.** `M_target` bland födda stiger i stället för
+att falla:
+
+```
+  f6-256, median per fjärdedel        0223                    0224
+    M_target       1,266  1,666  0,358  0,359    1,635  2,021  2,077  3,013
+    M_repro_min    0,350  0,489  0,057  0,057    0,350  0,478  0,405  0,670
+    child_M        0,187  0,237  0,053  0,052    0,214  0,293  0,293  0,402
+```
+
+Det är den starkaste bekräftelsen hittills på att gradienten nedåt var
+modellens egen: en enda term rättad efter allometrin, och riktningen byter
+tecken.
+
+**Men det är inte en seger att fira än.** `M_target` står på 3,013 av taket 4,0
+och steg fortfarande i sista fjärdedelen. Antingen är det ett optimum som ännu
+inte nåtts, eller så är det den **spegelvända rusningen** — och de två
+kvarvarande rättelserna är just de som skulle göra stora kroppar dyra respektive
+billiga: åldrandet är fortfarande massfritt, så en stor kropp får inte den
+längre livslängd den ska ha, och mognadsåldern är ett fritt locus. Frågan avgörs
+av rättelse 3 och 4 plus en körning som är längre än tre år. Egen rad i kön.
+
+I `liten6` ligger utfallet inom frönas spridning: 1 640/1 505/1 589 djurmånader
+mot 0223:s 2 204/1 323/1 431, utdöd i alla tre frön men senare i två av dem
+(54/37/57 mot 48/43/40 månader). Scenariot relaxerar fortfarande från sin sådd
+och säger ingenting om bärkraften.
+
+Invariantsviten godkänd i alla fyra körningar.
 
 ### Födosökets bansträcka skalar med kroppen (0223)
 
