@@ -2588,7 +2588,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0201~~ | förlustvägarna redovisas var för sig; sammanfattningens näringsrad räknar i månader | mätningen | **klart**, se nedan — bitidentisk bana; i `liten6` går 78 % av förlusten som förna till havet |
 | ~~—~~ | mättnadskörningen om: `f6-256-utan-fauna` 80 000 tick, `--world-every 12` | jämvikten | **klart**, `runs/p201`, se nedan — floran står nästan still, näringen inte |
 | ~~0202~~ | `nutrient_init` och `detritus_init` kalibreras mot p201:s jämvikt, inte mot 0086:s identitet | inkörningen | **klart**, se nedan — näringen inom 1–3 % av jämvikten från tick 0; faunan dör ut snabbare |
-| — | faunan bär sig inte i `f6-256`: utdöd vid månad ~84 före 0202 och ~24 efter, 93 av 94 döda av svält | ekologin | **öppen**, nästa — trolig huvudorsak i `docs/revision-faunans-balans.md` (M1, F1, M3) |
+| ~~—~~ | faunan bär sig inte i `f6-256`: utdöd vid månad ~84 före 0202 och ~24 efter | ekologin | **falsifierad** efter 0219–0224: beståndet överlever 150 månader, se 150-månadersmätningen |
 | ~~0210~~ | poploggens energi som flöden över loggintervallet, med poster för allt som ändrar reserven utanför `Body.step`; populationens energi stänger | mätningen | **klart**, se nedan — bitidentisk bana; resten 9e-15 |
 | ~~0211~~ | `docs/sammansattning-och-vatten.md`: torrsubstans och vatten som två tillstånd, kemisk sammansättning, fiberjäsning, djurens vätskebalans | planen | **klart**, designskiss — serien i sex steg står i dokumentet |
 | ~~0212~~ | termoregleringen räknar av den metaboliska värmen; bara det som fattas produceras särskilt | budgeten | **klart**, se nedan — termo 0,5 → 0,02 × basal; faunan lever längre men bär sig inte |
@@ -2607,11 +2607,13 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~—~~ | `docs/tidens-skalor.md` refererades på tre ställen men finns inte | städning | **klart** i 0220 — hänvisningarna pekar nu på kön |
 | — | hungern ser bara energi; 38 % av ungarnas tick är energirika men kvävefattiga | budgeten | **öppen** — se mätningen |
 | ~~0222~~ | kväveförrådet blir labilt kroppsprotein med ärftligt tak, buret som vävnad | budgeten | **klart**, se nedan — dräktighetsintervallet 10,7 → 1,4 mån, och `f6-256` skjuter över |
-| — | reproduktionen har ingen annan broms än kvävet: `f6-256` går 80 → 6 169 djur på 36 månader med 24 g per djur | ekologin | **öppen** — funnen i 0222 |
+| ~~—~~ | reproduktionen har ingen annan broms än kvävet: `f6-256` går 80 → 6 169 djur på 36 månader | ekologin | **klart** i 0223 och 0224 — bromsen var allometrin, beståndet cyklar nu 7–436 |
 | ~~—~~ | revision: faunans storleksskalning — vilka termer beror på massan och med vilken exponent | storleken | **klart**, se nedan (`docs/revision-storleksskalningen.md`) |
 | ~~0223~~ | födosökets bansträcka skalar allometriskt, `L ∝ M^0,25` (rättelse 1 av 4 ur revisionen) | storleken | **klart**, se nedan — överskjutningen borta, storleksglidningen kvar |
 | ~~0224~~ | fosterbygget skalar med moderns ämnesomsättning, dräktighet `∝ M^0,25` (rättelse 2 av 4) | storleken | **klart**, se nedan — storleksglidningen vänder; `M_target` stiger i stället |
-| — | `M_target` stiger mot 3,0 av taket 4,0 efter 0224: optimum eller spegelvänd rusning? | storleken | **öppen** — avgörs av rättelse 3 och 4 plus en längre körning |
+| ~~—~~ | mätning: 150 månader i `f6-256`, och varför skadesystemet aldrig biter | dödligheten | **klart**, se nedan — åldrandets klocka är 53× för långsam; rättelse 3 kan inte mätas förrän den går |
+| — | dödligheten har **en** kanal: svält 3 188, skada 4 av 3 192 dödsfall på 150 månader. Ingen ålderstermin i hazarden (`death_h_age = 0`) | dödligheten | **öppen**, nästa — blockerar rättelse 3 och 4 |
+| — | `M_target` går till 3,645 och fryser — men med p10–p90 på 0,02 efter en flaskhals på sju individer: drift, inte selektion | storleken | **öppen** — kräver flera frön och ett skadesystem som biter |
 | — | betning mot kontroll: `liten6` faller till hälften utan djur, betningen tar resten | ekologin | **öppen** — se mätningen nedan |
 | — | `_T_N_POOL` nålas mot taket 0,093 av 0,10 redan i första fjärdedelen: bärkostnaden är för svag mot nyttan | budgeten | **öppen** — funnen i 0222 |
 | ~~—~~ | `Body._add_N` har ingen anropare: intaget skriver samma logik inline | städning | **klart** i 0220 — borttagen |
@@ -2633,11 +2635,11 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | — | världsloggens `nutrient_in_flora` är bara vävnaden; reserven och reproduktionspoolen, 56 % av florans näring, saknas | mätningen | **öppen**, se p201 |
 | — | **mål: körtiden ned mot 30 ms/tick** (ursprungligen halverad, ~25; sänkt 2026-09-19 — de sista ~5 ms kräver omstrukturerad kärna eller avvikelse i sista biten, se p208). ms/tick i `f6-256-utan-fauna` vid jämvikt (~250 000 plantor), fast frö, ledig maskin; baslinje 49,6 (p203-trad) | prestanda | **pågår** — efter 0208: 35,5 (p208); 0209 ytterligare −1,6 i tidigt tillstånd |
 | — | `f6-256-mager` 800 tick: 36 → 15 djur; magra världen har inte flora nog utan förnan | ekologin | **öppen**, kör `f6-256` |
-| — | skade- och reparationssystemet är nästan inert: `D` har medianen 0,0000 och `repair_capacity` binder i 2 % av tickarna | selektionen | **öppen**, nästa |
+| — | skade- och reparationssystemet är nästan inert: `D` har medianen 0,0000 och `repair_capacity` binder i 2 % av tickarna | selektionen | **öppen** — del av dödlighetsmätningen nedan |
 | — | barnets startreserv betalas till 43–74 %; föräldern har inte råd med den redan minimala gåvan | livshistorien | **öppen**, hör ihop med `E_cap_per_M` |
 | — | ett `cell_idx`-brott i p194/s3 vid tick 2000, en slot av 1,2 miljoner | invarianterna | **öppen** |
 | — | `M_peak_tau = 12` mån är längre än den uppmätta livslängden; avklingningen är i praktiken av | dödligheten | **öppen**, mät efter 0194 |
-| — | `dD_starve` kan inte döda: 0,025/mån mot `D_max = 1` är fyrtio månader vid full svält | dödligheten | **öppen** |
+| — | `dD_starve` kan inte döda: 0,025/mån mot `D_max = 1` är fyrtio månader vid full svält | dödligheten | **öppen** — del av dödlighetsmätningen nedan |
 | — | tio procent av dödsfallen sker med fett kvar, för att taket binder vid hög dränering | svälten | **öppen**, bieffekt av 0193 |
 | — | reparationen är näst största posten och betalas till 80–86 %; `repair_E_per_D` saknar härledning | budgeten | **öppen** |
 | — | `sense_cost_L1..L3` ligger 1e6 fel i enhet — sensing är gratis | A2 | **öppen**, se 0190 |
@@ -2750,6 +2752,90 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### 150 månader i `f6-256`, och varför skadesystemet aldrig biter (mätning)
+
+*Två mätningar utan kodändring efter 0224. Underlag `runs/p224-lang` — ett frö,
+7 500 tick = 150 månader, full loggning — plus läsning av skade- och
+reparationsvägen i `agent.py`.*
+
+**Beståndet överlever, men genom en flaskhals som nästan tog det.**
+
+```
+  mån    0– 36:  pop  78–436,  median 221    M median 0,261
+  mån   36– 72:  pop   9–198,  median  59    M median 0,501
+  mån   72–111:  pop   7– 36,  median  17    M median 0,467
+  mån  111–150:  pop  25–178,  median 121    M median 0,259
+```
+
+Fyra faser: boomcykler med årsperiod, ett långt fall till **sju individer** vid
+månad 76, tre år i flaskhalsen, och därefter återhämtning till 178 och
+stigande. I mittfasen stiger medianmassan till 0,95 kg och medianenergin till
+27 MJ — de som blir kvar är stora, feta vuxna som inte reproducerar sig nog.
+**Detta falsifierar raden om att faunan inte bär sig i `f6-256`.**
+
+**Floran når jämvikt.** 241 838 → 112 647 plantor vid månad 76, sedan tillbaka
+till 135 806 och stabilt kring 168 000 kg; fri näring planar ut kring 3 500 kg.
+Det är första körningen i serien som når något stationärt, och tidsskalan
+60–75 månader är den `f6-256-utan-fauna.yaml` förutsade för såddrelaxationen.
+
+**`M_target` går till 3,645 och fryser** — men p10–p90 spänner 0,02 kg efter
+månad 75. Det är en flaskhals på sju individer, alltså drift och inte
+selektion. Frågan om optimum eller spegelvänd rusning kan inte avgöras på ett
+frö.
+
+#### Dödligheten har en kanal
+
+```
+  dödsorsak, 150 månader      svält  3 188      skada  4      hazard  0
+  livslängd                   median 2,86 mån   p90 10,47    max 72,54
+```
+
+Hela skade- och reparationsapparaten — åldrande, kyla, metabol stress,
+svältskada, reparation, smärta — dödar **fyra djur av 3 192**. `D` har medianen
+0,0000 genom hela körningen och når som mest 0,1437 av taket 1,0. Tre öppna
+rader har pekat på detta från var sitt håll sedan 0179 utan att kopplas ihop.
+
+Talen visar att det inte är marginellt:
+
+```
+  skadeinflöde per agenttick    median 2,7e−05   max 3,2e−05
+    -> per månad                median 0,0013    max 0,0016    (D_max = 1,0)
+  reparationens tak per månad   0,10 – 1,50      (traitintervallet)
+```
+
+**Den svagast möjliga genotypen reparerar 77 gånger snabbare än skadan
+uppstår.** Och med reparationen helt avstängd tar det **745 månader** att nå
+`D_max` vid medianinflödet. Uppmätt medianlivslängd är 2,86 månader.
+
+Orsaken är att klockan är kalibrerad för fel tidsskala. Kommentaren vid
+`repair_capacity` säger att kalibreringen siktade på död vid 153 månader vid
+`repair_capacity` 0,15–0,80. Djuren lever 2,86 månader i median och 10,5 i
+p90 — **klockan är 53 gånger för långsam** mot den livslängd världen faktiskt
+ger.
+
+Dessutom: `death_h_base = 0` och `death_h_age = 0`, så den stokastiska
+hazarden drivs **enbart** av `D` (`death_h_D = 0,01 · d_norm`). Med `D ≈ 0,001`
+är den ~1e−5 per månad. **Det finns alltså ingen åldersberoende dödlighet alls
+i modellen** — varken via skada eller via hazard.
+
+#### Följden för storleksserien
+
+`docs/revision-storleksskalningen.md` har rättelse 3 som "åldrandet skalar med
+massan, `k_age1 ∝ M^−0,25`". **Den kan inte mätas i det här läget.** Att skala
+en term som bidrar med fyra dödsfall av 3 192 ger inget utfall oavsett hur rätt
+skalningen är.
+
+Det förklarar troligen också varför storleksaxeln rusar åt båda hållen. Dör man
+aldrig av ålder sätts livslängden enbart av om man kan fortsätta äta, och då
+saknar kroppsstorleken sin viktigaste avvägning: ett stort djur ska betala med
+långsam mognad och vinna på långt liv. Här finns bara den ena sidan i taget,
+beroende på vilka termer som råkar skala rätt.
+
+**Ordningen ändras därför:** dödligheten före rättelse 3 och 4. Frågan att
+besvara först är vilken av de tre som ska bära ålderdomen — skadeinflödet,
+reparationens tak, eller en egen ålderstermin i hazarden — och den ska
+besvaras med härledning och inte med en faktor 53.
 
 ### Fosterbygget skalar med moderns ämnesomsättning (0224)
 
