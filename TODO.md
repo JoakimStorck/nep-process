@@ -2609,6 +2609,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0222~~ | kväveförrådet blir labilt kroppsprotein med ärftligt tak, buret som vävnad | budgeten | **klart**, se nedan — dräktighetsintervallet 10,7 → 1,4 mån, och `f6-256` skjuter över |
 | — | reproduktionen har ingen annan broms än kvävet: `f6-256` går 80 → 6 169 djur på 36 månader med 24 g per djur | ekologin | **öppen** — funnen i 0222 |
 | ~~—~~ | revision: faunans storleksskalning — vilka termer beror på massan och med vilken exponent | storleken | **klart**, se nedan (`docs/revision-storleksskalningen.md`) |
+| ~~0223~~ | födosökets bansträcka skalar allometriskt, `L ∝ M^0,25` (rättelse 1 av 4 ur revisionen) | storleken | **klart**, se nedan — överskjutningen borta, storleksglidningen kvar |
 | — | betning mot kontroll: `liten6` faller till hälften utan djur, betningen tar resten | ekologin | **öppen** — se mätningen nedan |
 | — | `_T_N_POOL` nålas mot taket 0,093 av 0,10 redan i första fjärdedelen: bärkostnaden är för svag mot nyttan | budgeten | **öppen** — funnen i 0222 |
 | ~~—~~ | `Body._add_N` har ingen anropare: intaget skriver samma logik inline | städning | **klart** i 0220 — borttagen |
@@ -2747,6 +2748,77 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Födosökets bansträcka skalar med kroppen (0223)
+
+Dynamikändring, rättelse 1 av 4 ur `docs/revision-storleksskalningen.md`.
+`forage_path_rate = 4 340` lu/månad var massfri — en fyrtiogramsunge vandrade
+lika långt som en tvåkilos vuxen — och matade både betesytan och
+rörelsearbetet. Nu
+
+```
+    L(M) = forage_path_rate · dt · (M_mager_våt / 1,2 kg)^0,25
+```
+
+efter dagsvandringens allometri hos växtätare (Garland 1983). Referensmassan är
+den `forage_path_rate` en gång kalibrerades vid, så banan är oförändrad vid
+1,2 kg. Båda läsarna går genom `Agent._bansträcka`, så att de inte kan glida
+isär — det var just det de hade gjort sedan 0219, när marschfarten härleddes
+till `M^0,2` medan den större av modellens två sträckor lämnades som ett tal.
+
+Betesyta per enhet underhåll:
+
+```
+   M (ts)   yta/basal före   efter
+    0,011       144,1         61,9
+    0,050        76,7         48,1
+    0,150        48,5         40,0
+    0,500        29,4         32,8
+    1,000        22,0         29,2
+   exponent     M^−0,415     M^−0,167
+```
+
+**Utfall**, `f6-256` frö 1 till månad 36 (`runs/p223`), mot 0222:
+
+```
+                            0222        0223        (0219 baslinje)
+  bestånd vid månad 36      5 935         492            ~50
+  toppbestånd               5 935*        983
+  kroppsmassa p90          0,042 kg    0,558 kg       0,786 kg
+  bete                     4 260 kg/mån  833          243
+  bete per kg djur          31,8         14,2          10,6
+  ms/tick vid månad 36     1 950          244            70
+                                    * steg fortfarande
+```
+
+**Överskjutningen är i allt väsentligt borta.** Beståndet vänder vid 983 i
+stället för att fortsätta uppåt, och **vuxna finns igen**: p90 för kroppsmassan
+går från 0,042 till 0,558 kg, alltså tillbaka till baslinjens skala. Betet per
+kilo djur faller från 31,8 mot baslinjens 10,6. Körtiden vid månad 36 faller
+från 1,95 s/tick till 0,24.
+
+**Men storleksglidningen är kvar, och går djupare än förut.** Medianen för
+`M_target` bland födda faller till 0,359 (0222: 0,529), och `A_mature` till 6,4
+månader:
+
+```
+  f6-256, median per fjärdedel     0222                    0223
+    M_target       1,227  0,531  0,531  0,529    1,266  1,666  0,358  0,359
+    M_repro_min    0,314  0,100  0,097  0,084    0,350  0,489  0,057  0,057
+    A_mature      12,940 12,940 12,633  7,119   11,193 11,092  6,383  6,406
+```
+
+Det är väntat och inte ett misslyckande: **de två tyngsta termerna är ännu inte
+rättade.** Dräktigheten går fortfarande som `M^1` i stället för `M^0,25`, och
+åldrandet är fortfarande massfritt, så dvärgen lever lika länge som den stora
+kroppen och förökar sig snabbare. Rättelse 2 och 3 tar dem.
+
+I `liten6` ligger utfallet inom frönas spridning — 2 204/1 323/1 431 djurmånader
+mot 0222:s 2 068/1 351/1 430, och utdöd i alla tre frön. Det säger ingenting
+om bärkraften: scenariot relaxerar fortfarande från sin sådd, se
+betningsmätningen ovan.
+
+Invariantsviten godkänd i alla fyra körningar.
 
 ### Faunans storleksskalning (revision) och betningen mot kontroll
 

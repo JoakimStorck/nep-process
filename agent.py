@@ -698,6 +698,37 @@ class AgentParams:
     # arbete. Gjort i 0219; se raden om ticklängd, synvidd och fart i TODO.md.
     forage_path_rate: float = 4340.0
 
+    # **Bansträckan skalar med kroppen (0223).**
+    #
+    # Talet ovan var massfritt: en fyrtiogramsunge vandrade lika långt per
+    # månad som en tvåkilos vuxen. Det gjorde betesytan till `2·r·L + π·r²`
+    # med `r ∝ M^⅓` och `L ∝ M⁰`, alltså yta `∝ M^⅓` mot ett behov som växer
+    # som `M^¾`. Betesyta per enhet underhåll gick därmed som **M^−0,42**, och
+    # ett fyrtiogramsdjur fick 4,9 gånger mer bete per joule underhåll än
+    # medianindividen. Det var inte biologi utan en konstant kalibrerad vid en
+    # kroppsstorlek — se `docs/revision-storleksskalningen.md`.
+    #
+    # Motsägelsen var dessutom intern: 0219 härledde marschfarten till
+    # `M^0,2` med motiveringen att farten ska följa kroppen, men lämnade den
+    # **större** av modellens två sträckor — födosökets bana, 3,6 gånger den
+    # riktade färden — som ett tal.
+    #
+    # Dagsvandringen hos växtätare skalar som `M^0,25` (Garland 1983, *Am.
+    # Nat.* 121: 571 — "Scaling the ecological cost of transport"). Formen är
+    #
+    #     L(M) = forage_path_rate · dt · (M_mager_våt / M_ref)^0,25
+    #
+    # Referensmassan är den `forage_path_rate` en gång kalibrerades vid: den
+    # uppmätta medianmassan 1,2 kg, där den svepta ytan blir 7,0 cellareor.
+    # Vid den massan är banan alltså oförändrad, och allt annat följer kroppen.
+    # Betesytan går då som `M^0,58` och gradienten från M^−0,42 till M^−0,17.
+    #
+    # Storheten läses på två ställen — betesytan i `_svept_yta` och
+    # rörelsearbetet i `_integrate_motion` — och båda går genom
+    # `Agent._bansträcka` så att de inte kan glida isär.
+    forage_ref_mass_kg: float = 1.2
+    forage_mass_exp: float = 0.25
+
     wear_a0: float = 0.12
     wear_aE: float = 0.0
     wear_aR: float = 0.0
@@ -4478,7 +4509,7 @@ class Agent:
         cot = float(self.AP.cot_k) * (M_pre ** float(self.AP.cot_mass_exp))
         # Bansträckan: födosökets vandring plus den sträcka djuret faktiskt
         # gick, alltså efter delstegen (0219).
-        stracka_lu = float(self.AP.forage_path_rate) * dt + max(0.0, _gick)
+        stracka_lu = self._bansträcka(dt) + max(0.0, _gick)
         motstand = 1.0
         if w_fac > 0.0:
             motstand *= 1.0 + float(self.AP.water_drag_gain) * w_fac
@@ -4509,6 +4540,20 @@ class Agent:
         )
     
     
+    def _bansträcka(self, dt: float) -> float:
+        """
+        Födosökets bansträcka under steget, i längdenheter (0223).
+
+        Allometrisk: `forage_path_rate · dt · (M/M_ref)^0,25`, alltså
+        dagsvandringens skalning hos växtätare. Se `AgentParams.forage_mass_exp`
+        för härledningen. Enda ägaren av storheten — betesytan och
+        rörelsearbetet läser båda hit.
+        """
+        M = max(1e-9, self.body.M_lean_wet())
+        M_ref = max(1e-9, float(self.AP.forage_ref_mass_kg))
+        skala = (M / M_ref) ** float(self.AP.forage_mass_exp)
+        return max(0.0, float(self.AP.forage_path_rate) * float(dt) * skala)
+
     def _svept_yta(self, dt: float) -> float:
         """
         Ytan organismen betar av under ett tick, i cellareor.
@@ -4528,10 +4573,14 @@ class Agent:
         `graze_take_frac` verkar på. Framför allt: den **följer av
         `dt`**. Ett dygnstick ger en 1,6 gånger längre bana och därmed 1,6
         gånger ytan, utan att någon konstant behöver sättas om.
+
+        Sedan 0223 följer den också av **massan**: `r ∝ M^⅓` som förut, men
+        `L ∝ M^0,25` i stället för att vara massfri, så att ytan går som
+        `M^0,58` och inte `M^⅓`. Se `Agent._bansträcka`.
         """
         r = float(self.AP.graze_reach_k) * body_depth(
             self.body.M_lean_wet(), float(getattr(self.pheno, "structure", 0.25)))
-        L = max(0.0, float(self.AP.forage_path_rate) * float(dt))
+        L = self._bansträcka(dt)
         return 2.0 * r * L + math.pi * r * r
 
     def _perform_feeding(
