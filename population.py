@@ -740,6 +740,72 @@ class Population:
             for k in ("effort", "rest", "speed_n"):
                 dmg_sums[k] /= float(pop_n)
         flow_sums.update(dmg_sums)
+
+        # **Reparationens och slitagets diagnostik, per massakvintil (0225).**
+        #
+        # Steg 1 i `docs/aldrandet.md`. Mätningen efter 0224 visade att `D` har
+        # medianen 0,0000 genom 150 månader och att skadan dödar fyra djur av
+        # 3 192 — men loggen kunde inte säga varför, och den bar inte `W` alls.
+        #
+        # Kvintilerna är nödvändiga för allometrin: åldrandets klocka ska gå
+        # som `M^−0,25`, alltså snabbare hos små kroppar, och det syns bara om
+        # `D` och `W` bryts ned på massa. Aggregatet över ett bestånd som
+        # domineras av nyfödda döljer det.
+        #
+        # Rent additivt: inga tillstånd läses destruktivt och ingenting skrivs
+        # tillbaka till kropparna.
+        if pop_n > 0:
+            _ord = np.argsort(M, kind="stable")
+            _kvint = np.array_split(_ord, 5)
+            _W = np.fromiter((float(getattr(a.body, "W", 0.0)) for a in alive),
+                             dtype=np.float64, count=pop_n)
+            _Dv = np.fromiter((float(getattr(a.body, "D", 0.0)) for a in alive),
+                              dtype=np.float64, count=pop_n)
+            _alder = np.fromiter(
+                (max(0.0, float(t) - float(getattr(a, "birth_t", 0.0))) for a in alive),
+                dtype=np.float64, count=pop_n)
+            for _i, _idx in enumerate(_kvint):
+                if _idx.size == 0:
+                    continue
+                _pre = f"q{_i + 1}_"
+                flow_sums[_pre + "n"] = float(_idx.size)
+                flow_sums[_pre + "M"] = float(np.median(M[_idx]))
+                flow_sums[_pre + "D"] = float(np.median(_Dv[_idx]))
+                flow_sums[_pre + "W"] = float(np.median(_W[_idx]))
+                flow_sums[_pre + "alder"] = float(np.median(_alder[_idx]))
+                _dsum = {k: 0.0 for k in ("dD_eff", "dD_met", "dD_age",
+                                          "dD_starve", "dD_cold")}
+                for _j in _idx:
+                    _dm = getattr(alive[int(_j)].body, "last_damage_terms", None)
+                    if isinstance(_dm, dict):
+                        for _k in _dsum:
+                            _dsum[_k] += float(_dm.get(_k, 0.0))
+                for _k, _v in _dsum.items():
+                    flow_sums[_pre + _k] = float(_v)
+
+            # Slitaget över hela beståndet — fältet saknades i loggen.
+            flow_sums["median_W"] = float(np.median(_W))
+            flow_sums["p10_W"] = float(np.percentile(_W, 10.0))
+            flow_sums["p90_W"] = float(np.percentile(_W, 90.0))
+
+            # Reparationen: varför lagas ingenting? Tre fall att skilja åt —
+            # ingen efterfrågan, taket binder, eller energin räcker inte.
+            _rep = {k: 0.0 for k in ("R_onskad", "R_max_dt", "R_gjord",
+                                     "E_behov", "E_betald", "tak_band",
+                                     "skada_band")}
+            _n_rep = 0
+            for a in alive:
+                _rt = getattr(a.body, "last_repair_terms", None)
+                if isinstance(_rt, dict):
+                    _n_rep += 1
+                    for _k in _rep:
+                        _rep[_k] += float(_rt.get(_k, 0.0))
+            if _n_rep > 0:
+                for _k in ("tak_band", "skada_band"):
+                    _rep[_k] /= float(_n_rep)
+                for _k, _v in _rep.items():
+                    flow_sums["rep_" + _k] = float(_v)
+
     
         # Backward compatible: mean_* som tidigare
         # Nya fält: median_* och pXX_* + mass/energy ledgers.

@@ -2614,7 +2614,7 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~—~~ | mätning: 150 månader i `f6-256`, och varför skadesystemet aldrig biter | dödligheten | **klart**, se nedan — åldrandets klocka är 53× för långsam; rättelse 3 kan inte mätas förrän den går |
 | — | dödligheten har **en** kanal: svält 3 188, skada 4 av 3 192 dödsfall på 150 månader. Ingen ålderstermin i hazarden (`death_h_age = 0`) | dödligheten | **öppen**, nästa — blockerar rättelse 3 och 4 |
 | ~~—~~ | konstruktionsskiss: åldrandet som två flöden med härledd klocka | dödligheten | **klart** — `docs/aldrandet.md`; rättelse 3 utgår som egen patch, allometrin faller ut ur mekanismen |
-| — | instrumentering: `D`, `W`, omsättningens andel av basalen och skadetermerna per massakvintil i pop-loggen | dödligheten | **öppen**, nästa — steg 1 i `docs/aldrandet.md` |
+| ~~0225~~ | instrumentering: `W`, `D`, ålder och skadetermer per massakvintil, plus reparationens tre kapningar (steg 1 i `docs/aldrandet.md`) | dödligheten | **klart**, se nedan — bitidentisk; taket binder i 100 %, skadan i 95,5 %, energin aldrig |
 | — | `M_target` går till 3,645 och fryser — men med p10–p90 på 0,02 efter en flaskhals på sju individer: drift, inte selektion | storleken | **öppen** — kräver flera frön och ett skadesystem som biter |
 | — | betning mot kontroll: `liten6` faller till hälften utan djur, betningen tar resten | ekologin | **öppen** — se mätningen nedan |
 | — | `_T_N_POOL` nålas mot taket 0,093 av 0,10 redan i första fjärdedelen: bärkostnaden är för svag mot nyttan | budgeten | **öppen** — funnen i 0222 |
@@ -2754,6 +2754,50 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Instrument: slitage, skada och reparation per massakvintil (0225)
+
+Instrumentpatch, bitidentisk bana. Steg 1 i `docs/aldrandet.md`. Loggen bar
+`D` som aggregat och `W` inte alls, och kunde därför inte svara på *varför*
+ingenting lagas. Nu skrivs, när en pop-logg är kopplad:
+
+- `median_W`, `p10_W`, `p90_W` — slitaget fanns inte i loggen alls.
+- Per massakvintil: `qN_n`, `qN_M`, `qN_D`, `qN_W`, `qN_alder` och de fem
+  skadetermerna. Kvintilerna behövs för allometrin — klockan ska gå som
+  `M^−0,25`, alltså fortare hos små kroppar, och ett aggregat över ett bestånd
+  som domineras av nyfödda döljer det.
+- `rep_R_onskad`, `rep_R_max_dt`, `rep_R_gjord`, `rep_E_behov`,
+  `rep_E_betald`, `rep_tak_band`, `rep_skada_band` — reparationens tre
+  kapningar var för sig.
+
+**Instrumentet svarade direkt på frågan det byggdes för.** Första körningen,
+`liten6` 400 tick:
+
+```
+  rep_R_onskad   8,05        efterfrågan före kapning
+  rep_R_max_dt   1,43        kapad mot taket        -> band i 100,0 % av kropparna
+  rep_R_gjord    0,185       kapad mot befintlig skada -> band i 95,5 %
+  rep_E_behov = rep_E_betald                        -> energin band aldrig
+```
+
+Efterfrågan överstiger taket 5,6 gånger, och taket överstiger det som faktiskt
+görs 7,7 gånger — för att det inte finns något att laga. **Den bindande
+restriktionen är skadan själv.** Energi och kapacitet är båda rikliga. Det
+bekräftar diagnosen: systemet är inflödessvultet, inte kapacitets- eller
+energibegränsat, och det är inflödet steg 2 ska rätta.
+
+Kvintilerna visar också att `W` följer åldern som avsett (0,149 i minsta
+kvintilen mot 1,705 i största) och att `dD_met` per djur faller med massan
+medan `dD_age` stiger — den senare för att den drivs av ålder och de stora
+djuren är gamla, vilket är just den dubbla ägarskapet skissen vill bort ifrån.
+
+**Bitprov:** ren HEAD mot arbetsträdet, `liten6` 400 tick frö 1, med pop- och
+världslogg på båda sidor. Världsloggen bitidentisk, pop-loggens samtliga
+tidigare fält identiska över alla åtta poster, och konsollen skiljer sig på en
+enda rad: etiketten `rad population.py:4682` mot `4748` i reservuttagstabellen,
+som namnger ett anropsställe med sitt radnummer. Samma antal anrop, samma
+kilotal, samma andel. Instrumentet ligger bakom `_emit_wanted`, så det kostar
+ingenting när ingen pop-logg är kopplad.
 
 ### 150 månader i `f6-256`, och varför skadesystemet aldrig biter (mätning)
 

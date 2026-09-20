@@ -1228,6 +1228,9 @@ class Body:
 
     # Skadeinflödets termer från senaste steget, för aggregering i pop-loggen.
     last_damage_terms: dict | None = None
+    # Reparationens termer från senaste steget (0225). Samma roll: rent
+    # additiv diagnostik, ingen läsare i den heta vägen.
+    last_repair_terms: dict | None = None
     ledger_steps: int = 0
     ledger_bad_steps: int = 0
     ledger_max_abs: float = 0.0
@@ -1582,6 +1585,7 @@ class Body:
         # halverad dt halverade skadan men lämnade reparationen orörd.
         # Med dt är R_max och repair_gain takter, som allt annat.
         R_des = max(0.0, float(AP.repair_gain) * float(self.P))
+        _R_onskad = R_des * dt          # före kapning; instrument (0225)
         R_des = min(R_des, R_max) * dt
 
         eta = float(AP.repair_eta0) * math.exp(-float(AP.repair_eta_W) * float(self.W))
@@ -1593,7 +1597,9 @@ class Body:
         # kapacitet varje tick för att laga skada det inte hade. Av 375 enheter
         # köpt reparationsförmåga användes 81, alltså **77 procent av energin
         # köpte ingenting**.
+        _R_fore_skada = R_des           # instrument (0225)
         R_des = min(R_des, float(self.D) / max(eta, 1e-9))
+        _R_kapad_av_skada = R_des < _R_fore_skada - 1e-18
 
         # **Reparation är anabolism av skadad vävnad.** Att laga andelen `R` av
         # en kropp på `M` kilo är att bygga om `R · M` kilo vävnad, till samma
@@ -1614,7 +1620,23 @@ class Body:
         R = E_paid / E_per_D
 
         self.D = max(0.0, float(self.D) - eta * R)
-    
+
+        # **Reparationens diagnostik (0225).** Rent additiv; ingen läsare i
+        # steget. Mätningen efter 0224 visade att `D` har medianen 0,0000 genom
+        # 150 månader, men inte *varför*: begärs ingen reparation, binder taket,
+        # eller räcker inte energin? De tre talen skiljer fallen åt.
+        # `R_bunden` är efterfrågan före kapningen mot `R_max` och mot
+        # `D/eta` — "man kan inte laga mer än som är trasigt".
+        self.last_repair_terms = {
+            "R_onskad": float(_R_onskad),
+            "R_max_dt": float(R_max * dt),
+            "R_gjord": float(R),
+            "E_behov": float(E_need),
+            "E_betald": float(E_paid),
+            "tak_band": 1.0 if _R_onskad > R_max * dt + 1e-15 else 0.0,
+            "skada_band": 1.0 if _R_kapad_av_skada else 0.0,
+        }
+
         self._D_prev = float(self.D)   # om du fortfarande vill ha den som debug/state
         return E_paid
 
