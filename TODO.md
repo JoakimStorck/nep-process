@@ -2599,7 +2599,9 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0217~~ | födans sammansättning och matsmältning: labilt, jäsbar fiber och lignin; jäsningen följer uppehållstiden i tarmen (steg 2) | serien | **klart**, se nedan — energin per kg 2,4×, faunan lever längre men bär sig inte |
 | ~~—~~ | mätning: varför faunan inte bär sig — ungarna dör, de vuxna är mätta | ekologin | **klart**, se nedan (`runs/dod`) |
 | ~~0218~~ | laktation: mjölk per tick inom en liten radie, ungen bärs av modern, massbaserad avvänjning | reproduktionen | **klart**, se nedan — mekanismen når fram men vänder inte rekryteringen |
-| — | ungarnas fart är en tiondel av de vuxnas (1,2 mot 13 cellbredder per tick) medan massan skiljer åtta gånger; intaget kollapsar till noll i utbetad omgivning | rörelsen | **öppen**, nästa — se 0218 |
+| ~~—~~ | mätning: fartens massberoende och skala | rörelsen | **klart**, se nedan — M^0,95 mot biologins M^0,2, och 40 gånger för långsamt |
+| — | farten härleds ur biomekanik i stället för en klampningsgräns; `v_max = 100` är 40 × under den bansträcka energimodellen redan betalar | rörelsen | **öppen**, nästa — se mätningen |
+| — | `docs/tidens-skalor.md` refereras på tre ställen men finns inte | städning | **öppen** |
 | — | hungern ser bara energi; 38 % av ungarnas tick är energirika men kvävefattiga | budgeten | **öppen** — se mätningen |
 | — | kvävepoolen rymmer ~2 tick, så 58–80 % av det intagna kvävet deamineras bort | budgeten | **öppen** — se mätningen |
 | — | `Body._add_N` har ingen anropare: intaget skriver samma logik inline | städning | **öppen** — funnen i mätningen |
@@ -2738,6 +2740,82 @@ Sjöarna hamnar över landet på förnakanalen, vilket de faktiskt är sedan 700
 Beståndet efter 400 tick: 32, 39, 39 mot 41, 39, 38. Frö 1 faller, de andra
 står. **Detta invaliderar kalibreringar mot den mättade kanalen** — födostyrkans
 skala och hungerns grindning sattes när `C` läste 1,0 i varje cell.
+
+### Fartens massberoende och skala (mätning)
+
+*Sond i scratchpad mot `f6-256`, frö 2, 400 tick, plus läsning av
+kraftbalansen. Ingen kodändring.*
+
+**Hur farten bestäms i dag.** `_integrate_motion` löser en kvasistatisk
+kraftbalans `F_prop = c₁v + c₂v²` med
+
+```
+F_prop = u · F0 · M^(2/3)      F0 = 5e4, u = gaspådrag × trötthet × svaghet
+c₁ = 440, c₂ = 1,2             dragkonstanter, oberoende av massan
+v_max = 100                    klampning, cellbredder per månad
+```
+
+Draget beror alltså inte på kroppsstorleken. I det linjära området ger det
+`v ∝ M^(2/3)`, och med klampningen blir den teoretiska kurvan `M^0,47` över
+0,05–4 kg.
+
+**Uppmätt:**
+
+```
+massa (våt)        fart, median (cellbredder/månad)
+0,00–0,10 kg        0,86
+0,15–0,40           3,19
+0,40–1,0            7,88
+1,0–2,0            18,80
+2,0–10             34,72
+uppmätt exponent: fart ~ M^0,95        biologi: M^0,17–0,24
+```
+
+**Två fel, och de är av olika slag.**
+
+1. **Massberoendet är fyra till fem gånger för brant.** Verklig löphastighet
+   skalar som M^0,17–0,24: en unge på 0,1 kg ska röra sig ungefär hälften så
+   fort som en vuxen på 2 kg, inte en fyrtiondel. Modellen gör små djur
+   närmast orörliga — 0,86 cellbredder per månad är 8,6 meter per månad,
+   alltså 0,3 m/dygn.
+2. **Skalan är fyrtio gånger för låg, och modellen säger emot sig själv.**
+   Energimodellen betalar för bansträckan `forage_path_rate = 4340`
+   cellbredder per månad, alltså 43 km/månad eller 1,4 km/dygn — vilket är
+   rätt storleksordning för en liten växtätare. Kinematiken förflyttar samtidigt
+   djuret högst `v_max = 100` cellbredder per månad, 33 m/dygn. Djuret betalar
+   för att gå 1,4 km om dagen och kommer 33 meter.
+
+**Motiveringen saknas, och koden säger det själv.**
+`docs/rorelsens-arkitektur.md` skriver rakt ut att `v_max = 100` "är en
+klampningsgräns och ingen biologisk fart", och kommentaren till
+`forage_path_rate` säger att dragets konstanter behöver "prövas mot en verklig
+transportkostnad" och hänvisar till `docs/tidens-skalor.md` — ett dokument som
+refereras på tre ställen men aldrig har skrivits.
+
+**Varför det är viktigt nu.** Mätningen efter 0217 visade att ungarnas intag
+kollapsar till noll i en utbetad omgivning medan de vuxna fortsätter äta.
+Ett djur som rör sig 0,3 meter om dygnet kan inte lämna en betad fläck. Det är
+en trolig huvudorsak till att rekryteringen aldrig lyckas, och den ligger före
+mätningens mekanism 2 och 3.
+
+**Vägar framåt**, att välja mellan:
+
+- **A. Farten härleds biomekaniskt.** Marschfarten sätts av kroppsstorleken,
+  `v = v_ref · (M/M_ref)^0,2`, med `v_ref` valt så att en vuxen på 2 kg
+  förflyttar sig i den storleksordning energimodellen redan betalar för.
+  Kraftbalansen och dragkonstanterna utgår. Energin ligger kvar på Taylors
+  transportkostnad, så de två sidorna talar samma språk.
+- **B. Kraftbalansen behålls** men draget får skala med massan så att
+  exponenten blir rätt, och `F0` höjs så att skalan stämmer. Mer maskineri,
+  samma utfall.
+- **C. Två rörelseregimer**, som `docs/rorelsens-arkitektur.md` redan
+  föreslår: lokalt sök till bansträckans takt, riktad färd till marschfart,
+  och valet mellan dem som beteende. Det är den fullständiga formen och
+  förutsätter A eller B.
+
+Rekommendation: **A**, sedan **C** när regimerna ska bli ett val. Ändringen
+rör allt som beror på rörelse — spridning, möten, betestryck — så tidigare
+kalibreringar måste mätas om.
 
 ### Laktation (0218)
 
