@@ -436,7 +436,7 @@ class AgentParams:
     # ------------------------
     # Starvation / weakness dynamics
     # ------------------------
-    M_crit: float = 0.50   # under detta försvagas rörelseförmågan
+    # `M_crit` är borttagen i 0230: se `Body.weakness`.
     # **Dödströskeln vid avmagring**, som andel av kroppens egen toppmassa.
     #
     # Villkoret var `M <= M_min` med `M_min = 0.14` — en absolut massa. Det
@@ -1582,13 +1582,38 @@ class Body:
         return h
 
     def weakness(self) -> float:
-        m = float(self.M)
-        mcrit = float(self.AP.M_crit)
-        if m >= mcrit:
+        """
+        Konditionen, 0–1: massan mot kroppens **egen** topp (0230).
+
+        Var `M / M_crit` med `M_crit = 0,50` — en absolut konstant, och därmed
+        inget konditionsmått utan ett dolt **storleksmått**. Varje kropp under
+        tröskeln var permanent "svag" oavsett hur välnärd den var, så en frisk
+        nyfödd på 25 gram gick i 28,7 procent av full fart medan en utsvulten
+        vuxen på 1,9 kg gick i full. Funnet i 0229, när bansträckan kopplades
+        till `move_factor` och medianlivslängden föll till en månad.
+
+        Konstanten bar dessutom ett **enhetsfel** sedan 0216: `AgentParams`
+        massor är våt levande massa, men jämförelsen gjordes mot `self.M`, som
+        är torrsubstans. Tröskeln var alltså i praktiken 0,50 kg torrt,
+        alltså 1,85 kg vått — nära fyra gånger det avsedda.
+
+        Referensen är nu kroppens egen topp, samma som svältskadan använder
+        sedan p179, och samma ramp: full kondition vid och över
+        `starve_mass_ok_frac`, noll vid och under `starve_mass_crit_frac`.
+        Formen ägs av `styrning.massunderskott`, så de två kan inte glida isär.
+
+        Att magra ihjäl sig är att ha förlorat mot sig själv — det gäller
+        konditionen lika mycket som skadan.
+        """
+        peak = float(getattr(self, "_M_peak", 0.0))
+        if peak <= 1e-9:
             return 1.0
-        if mcrit <= 1e-9:
-            return 0.0
-        return clamp(m / mcrit, 0.0, 1.0)
+        m_rel = float(self.M) / peak
+        return 1.0 - styrning.massunderskott(
+            m_rel,
+            float(getattr(self.AP, "starve_mass_ok_frac", 0.85)),
+            float(getattr(self.AP, "starve_mass_crit_frac", 0.65)),
+        )
 
     def step_pain_and_repair(self, ctx, pheno, *, D_before: float) -> float:    
         """
@@ -2029,7 +2054,6 @@ class Body:
         # Massorna i `AgentParams` och i genomet är våt levande massa;
         # tillstånden är torrsubstans sedan 0216. Omräkningen sker här.
         _M_min        = float(AP.M_min) * LEAN_DM_FRAC
-        _M_crit       = float(AP.M_crit) * LEAN_DM_FRAC
         _starve_gain  = float(AP.starve_stress_gain)
         _frailty_cap  = float(AP.frailty_gain_cap)
         _fatigue_eff  = float(AP.fatigue_effort)
@@ -4737,15 +4761,13 @@ class Agent:
         # förflyttningen.
         #
         # Här står `funktionell_andel()` och **inte** `move_factor()`, trots att
-        # den senare är det som gatar den riktade färden. Skälet är att
-        # `move_factor` bär `weakness()`, som jämför massan med den absoluta
-        # konstanten `M_crit = 0,5` — alltså inte ett avmagringsmått utan ett
-        # dolt **storleksmått**: varje kropp under 1,85 kg våt är permanent
-        # "svag", inklusive alla ungar. Kopplad till bansträckan blev den en
-        # betesstraffskala på storlek, och uppmätt föll medianlivslängden från
-        # 3,82 till 1,03 månader medan dödsfallen fyrdubblades. Se raden i
-        # TODO.md; `weakness()` ska mäta mot kroppens egen topp som
-        # svältskadan gör sedan p179, inte mot ett tal.
+        # den senare är det som gatar den riktade färden. `move_factor` bär
+        # också konditionen, och om bansträckan skulle bära den vore avmagring
+        # räknad två gånger — den sänker redan betet genom att sänka
+        # förflyttningen. Att koppla hela `move_factor` hit prövades i 0229 och
+        # föll, då mot ett `weakness()` som var ett dolt storleksmått; det är
+        # rättat i 0230, men frågan om konditionen *också* ska sänka
+        # bansträckan är en egen mätning och inte given.
         return max(0.0, float(self.AP.forage_path_rate) * float(dt) * skala
                    * float(self.body.funktionell_andel()))
 

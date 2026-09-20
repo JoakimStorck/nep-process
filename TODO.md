@@ -2618,7 +2618,8 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~0226~~ | de två flödena: omsättningen inom basalen, irreversibel skada `A`, `dD_age` borttagen (steg 2 i `docs/aldrandet.md`) | dödligheten | **klart**, se nedan — åldrandet biter: 18 % av dödsfallen mot 0,2 % |
 | ~~0227~~ | `repair_capacity`-intervallet ankrat om till 0,95–1,60 efter locusets nya innebörd | dödligheten | **klart**, se nedan — `liten6` återställt; optimumet 1,21 bekräftat från ett annat håll |
 | ~~0229~~ | skadan sänker farten och bansträckan: åldrandet dödar genom svälten (steg 3 i `docs/aldrandet.md`) | dödligheten | **klart**, se nedan — Gompertz-formen faller ut som utfall |
-| — | `weakness()` jämför massan med den absoluta konstanten `M_crit = 0,5`: det är inte ett avmagringsmått utan ett dolt storleksmått, och varje kropp under 1,85 kg våt är permanent svag | storleken | **öppen** — funnen i 0229; ska mäta mot kroppens egen topp som svältskadan gör |
+| ~~0230~~ | `weakness()` mäter mot kroppens egen topp i stället för mot `M_crit`; konstanten borttagen | storleken | **klart**, se nedan — en dold storleksbroms försvann, och jämviktsmassan halverades |
+| — | `M_target` landar på 1,57 utan den dolda bromsen mot 2,95 med den: vilket är rätt, och vad sätter nivån? | storleken | **öppen** — funnen i 0230; kräver flera frön och en lång körning |
 | ~~0228~~ | `k_age0`, `k_age1` och `k_ageD` borttagna — den kalenderdrivna åldrandeklockans konstanter | städning | **klart** — bitidentisk |
 | — | `M_target` går till 3,645 och fryser — men med p10–p90 på 0,02 efter en flaskhals på sju individer: drift, inte selektion | storleken | **öppen** — kräver flera frön och ett skadesystem som biter |
 | — | betning mot kontroll: `liten6` faller till hälften utan djur, betningen tar resten | ekologin | **öppen** — se mätningen nedan |
@@ -2772,6 +2773,71 @@ fortfarande bär det och en jämförelse bakåt mot p219–p226 ska kunna göras
 
 **Bitprov:** ren HEAD mot arbetsträdet, `liten6` 400 tick frö 1, med pop- och
 världslogg på båda sidor. Noll skillnad i konsoll, världslogg och pop-logg.
+
+### `weakness()` mäter mot kroppens egen topp (0230)
+
+Dynamikändring, rättelse funnen i 0229. Funktionen hette kondition men var det
+inte:
+
+```
+    weakness() = clamp(M / M_crit, 0, 1)        M_crit = 0,50
+```
+
+**`M_crit` är en absolut konstant, så det här är ett storleksmått och inte ett
+konditionsmått.** Varje kropp under tröskeln var permanent "svag" oavsett hur
+välnärd den var: en frisk nyfödd på 25 gram gick i 28,7 procent av full fart
+medan en utsvulten vuxen på 1,9 kg gick i full.
+
+Konstanten bar dessutom ett **enhetsfel sedan 0216**: `AgentParams` massor är
+våt levande massa, men jämförelsen gjordes mot `self.M`, som är torrsubstans.
+Tröskeln var alltså 0,50 kg torrt, alltså 1,85 kg vått — nära fyra gånger det
+avsedda. `weakness()` missades när kroppen blev torrsubstans.
+
+Referensen är nu kroppens egen topp, samma som svältskadan använder sedan p179,
+och samma ramp: full kondition vid och över `starve_mass_ok_frac`, noll vid och
+under `starve_mass_crit_frac`. Formen ägs av `styrning.massunderskott`, så de
+två kan inte glida isär. `M_crit` är borttagen.
+
+**Utfall**, `f6-256` frö 1 till månad 36 (`runs/p230`) mot 0229:
+
+```
+                        0229        0230
+  bestånd                131         164
+  toppbestånd            407       1 192
+  dödsfall             1 139       5 605
+  därav skada            4,7 %       0,8 %
+  livslängd median      2,82 mån    1,58 mån
+  kroppsmassa p50       0,528      0,112
+```
+
+**Felet var en dold broms på storleksaxeln.** `M_target` bland födda:
+
+```
+  0227   2,008  2,773  2,954  2,952
+  0229   1,945  2,021  2,749  2,546
+  0230   2,021  1,579  1,571  1,574
+```
+
+Med den absoluta tröskeln på plats straffades varje liten kropp med nedsatt
+rörelseförmåga, vilket sköt jämvikten uppåt. Utan den landar `M_target` på
+**1,574** — och stannar där från andra fjärdedelen, alltså ett inre värde och
+inte en vägg. Jämviktsmassan halveras, omsättningen mångdubblas och livslängden
+faller.
+
+**Det gör inte bromsen försvarbar.** Den var en konstant som dokumenterades som
+kondition och verkade som storlek, och den hörde till samma familj som
+`docs/revision-storleksskalningen.md` katalogiserade. Men resultatet visar att
+modellens jämviktsmassa hängde på den, och frågan om vad som *ska* sätta nivån
+är därmed öppen igen — egen rad i kön.
+
+**Åldrandet är opåverkat.** `repair_capacity` ligger på 1,25 mot 0229:s 1,43
+och 0227:s 1,21 — samma granne i tre körningar med tre olika omgivningar. Det
+optimumet är robust.
+
+I `liten6`: 1 788/2 853/1 069 djurmånader mot 0229:s 1 711/1 294/820, utdöd i
+alla tre frön. Frö 2 sticker ut med 897 födslar mot 195.
+
+Invariantsviten godkänd i alla fyra körningar.
 
 ### Skadan sänker farten: åldrandet dödar genom svälten (0229)
 
