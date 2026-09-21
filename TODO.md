@@ -2624,7 +2624,8 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~—~~ | baslinje: tre frön av `f6-256`, 150 månader, efter 0226–0232 | ekologin | **klart**, se nedan — två av tre frön dör ut kring månad 105 |
 | — | faunan dör ut i 2 av 3 frön kring månad 105 genom **parningsmisslyckande**, inte svält: under ~500 djur är medelavståndet till närmaste granne större än parningsradien | ekologin | **öppen**, nästa |
 | ~~0233~~ | instrument: parningsanspråkets faktorer var för sig, ackumulerade per tick | reproduktionen | **klart**, se nedan — bitidentisk; närheten stryper, inte driften |
-| — | partnern upptäcks ut till synvidden (7–12 celler) men parningsdriften är **noll** från 5 celler: djuret ser en partner och struntar i den i 84 % av fallen | reproduktionen | **öppen**, nästa — dynamikändring |
+| ~~—~~ | partnern upptäcks ut till synvidden men parningsdriften är noll från 5 celler | reproduktionen | **falsifierad** — att ta bort närhetsfaktorn gav färre parningar och utdöende i 3 frön av 3, se nedan |
+| — | parningsradien är 3,0 celler medan mediansteget är 2,06 och p90 är 10,6: ett par kan hoppa förbi varandra inom en tick | reproduktionen | **öppen**, nästa — samma fälla som 0219 löste för terrängen med delsteg |
 | — | flockningen är **inte** problemet: klustringen är 8,5× bättre än slump, bäst uppmätta någonsin, och flockanspråket vinner 48 % av tickarna | ekologin | **besvarad** i 0233 — hypotesen att farten brutit flockningen falsifierad |
 | — | kontroll saknas: vi vet inte om utdöendet vid månad 105 är nytt efter 0226–0232 eller fanns före | ekologin | **öppen** — kräver samma trefrökörning på 0224 |
 | ~~0228~~ | `k_age0`, `k_age1` och `k_ageD` borttagna — den kalenderdrivna åldrandeklockans konstanter | städning | **klart** — bitidentisk |
@@ -2780,6 +2781,58 @@ fortfarande bär det och en jämförelse bakåt mot p219–p226 ska kunna göras
 
 **Bitprov:** ren HEAD mot arbetsträdet, `liten6` 400 tick frö 1, med pop- och
 världslogg på båda sidor. Noll skillnad i konsoll, världslogg och pop-logg.
+
+### Falsifierat: närhetsfaktorn var inte det bindande (försök till 0234)
+
+*Dynamikändring, prövad och tillbakadragen. Skrivs in så att den inte prövas
+om. Underlag `runs/p234`, tre frön, 150 månader, mot baslinjens tre.*
+
+**Hypotesen.** 0233 mätte att parningsanspråket bär en närhetsfaktor som går
+till noll vid fem celler medan partnern upptäcks ut till synvidden, 7–12
+celler, och att medelavståndet till den upptäckta partnern är 9,36 celler.
+Djuret såg alltså en partner och fick noll drivkraft att gå dit. Argumentet för
+att ta bort faktorn var modellens eget: `narhet` hör till styrkan bara när
+avståndet ändrar hur **brådskande** saken är, och födosöket är redan undantaget
+på den grunden — *"avstånd till en födosignal minskar inte hungern"*. Avstånd
+till en partner minskar inte heller parningslusten.
+
+**Mekaniskt gjorde ändringen exakt vad den skulle.** Anspråkets styrka steg
+från median 0,032 till 0,365, och det vann 0,5 procent av tickarna mot 0,1.
+
+**Utfallet blev sämre.**
+
+```
+                     baslinje (0233)            0234 (utan närhetsfaktor)
+  frö 1      utdöd 105 mån, topp 520        utdöd  97 mån, topp 364
+  frö 2      ÖVERLEVER, 34 kvar, topp 662   utdöd  74 mån, topp 655
+  frö 3      utdöd 106 mån, topp 401        utdöd  82 mån, topp 341
+```
+
+Alla tre dör ut, och tidigare. Inom frö 2, där allt annat är lika:
+
+```
+  parningar                 1 261  ->  1 030      −18 %
+  utanför parningsradie      36,9 %  ->  45,3 %
+  flockanspråket vann        48,2 %  ->  52,5 %
+```
+
+**Fler anspråk, mer styrning mot partners — och färre parningar.** Flockningen
+trängdes inte undan; den vann till och med oftare.
+
+**Varför.** Den faktiska parningen sker inom `PP.mating_radius = 3,0` celler,
+inte inom de fem som närhetsrampen slutade vid. Med faktorn borta styr djuret
+mot partners på upp till tolv cellers håll, och mediansteget är 2,06 celler —
+en jakt på fyra till fem tick mot ett mål som självt rör sig. Tiden med
+"partner upptäckt men utanför parningsradien" steg från 37 till 45 procent.
+Förut levererade **flockningen** djuren till varandra inom parningsavstånd;
+nu jagar de i stället och missar.
+
+**Det pekar på nästa kandidat.** Parningsradien är 3,0 celler medan steget har
+median 2,06 och p90 **10,6**: vart tionde steg är mer än tre gånger radien, så
+ett par som borde mötas kan hoppa förbi varandra inom en enda tick.
+Parningsprövningen sker en gång per tick, på slutpositionerna. Det är samma
+fälla som 0219 fann för terrängen — steget var längre än synvidden — och som
+där löstes med delsteg inom ticken. Egen rad i kön.
 
 ### Instrument: parningsanspråkets faktorer (0233)
 
