@@ -3585,6 +3585,9 @@ class Agent:
     # Sätts av reflexkedjan när djuret är parningsberett och inte ser någon
     # artfrände alls. Läses av födostyrningen, som annars nollar utforskningen.
     _mate_search: bool = field(init=False, default=False)
+    # Parningsanspråkets faktorer från senaste tick (0233). Rent additiv
+    # diagnostik; nollställs av pop-loggen efter varje avläsning.
+    last_mate_terms: dict | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         self.AP = replace(self.AP)
@@ -4180,11 +4183,37 @@ class Agent:
                 (self.body.M_lean_wet() - mreq) / max(mreq, 1e-9),
                 float(self.body.reserve_frac()),
             )
-            st = drift * styrning.narhet(dist, float(self.AP.attack_range),
-                                         float(self.AP.mate_search_radius))
+            _narhet = styrning.narhet(dist, float(self.AP.attack_range),
+                                      float(self.AP.mate_search_radius))
+            st = drift * _narhet
+            # **Parningsanspråkets faktorer var för sig (0233).** Anspråket är
+            # det svagaste av åtta — median 0,032 mot flockens 0,781 — och
+            # vinner 0,1 procent av tickarna i varje version sedan p219. Utan
+            # uppdelningen går det inte att se om det är närheten, kapaciteten
+            # eller tiden som stryper. Råa insignaler loggas; produkten ägs
+            # fortfarande av `styrning.parningsdrift`, så formeln finns på ett
+            # ställe.
+            self.last_mate_terms = {
+                "n": 1.0,
+                "t_beredd": max(0.0, -float(getattr(self, "_repro_cd_s", 0.0))),
+                "massoverskott": (self.body.M_lean_wet() - mreq) / max(mreq, 1e-9),
+                "reservandel": float(self.body.reserve_frac()),
+                "drift": float(drift),
+                "narhet": float(_narhet),
+                "dist": float(dist),
+                "styrka": float(st),
+                "ensam": 0.0,
+            }
             A.append(("parning", styrning.NIVA_PARNING, st,
                       clamp(err / math.pi, -1.0, 1.0), 0.95, 0.0))
         elif in_mating_mode:
+            # Redo men ser ingen: räknas för sig, annars går det inte att
+            # skilja "hittar ingen" från "hittar någon men driften räcker inte".
+            self.last_mate_terms = {
+                "n": 0.0, "t_beredd": 0.0, "massoverskott": 0.0,
+                "reservandel": 0.0, "drift": 0.0, "narhet": 0.0,
+                "dist": 0.0, "styrka": 0.0, "ensam": 1.0,
+            }
             # Redo att para sig och ser ingen alls. Inget anspråk på kursen —
             # men utforskningen ska upp, annars slingrar det mättade djuret på
             # fläcken och hittar aldrig någon. Se p125 och p132.

@@ -477,6 +477,8 @@ class Population:
         self._diande_per_mor: dict[int, float] = {}
         self._efl: dict[str, float] = {}
         self._efl_ticks = 0
+        # Parningsanspråkets faktorer, summerade per tick sedan förra posten.
+        self._mate_acc: dict[str, float] = {}
         self._efl_E_prev = 0.0
         # Kumulativt antal dödsfall där ingen dödsorsak sattes. Ska förbli noll;
         # se check_death_cause_set i invariants.py.
@@ -652,6 +654,21 @@ class Population:
         # Energiflödena ackumuleras tills posten faktiskt levereras; byggs den
         # inte nu fortsätter summeringen till nästa gång någon vill ha den.
         self._efl_ticks += 1
+
+        # **Parningsanspråkets faktorer ackumuleras per tick (0233).**
+        # Anspråket är närvarande i 0,7 procent av agenttickarna, så en
+        # ögonblicksbild vid loggtillfället skulle ge ett par observationer per
+        # post. Summorna byggs därför varje tick, som energiflödena, och töms
+        # när posten levereras. Kostar ingenting utan hub.
+        if self.hub is not None:
+            _acc = self._mate_acc
+            for a in self.agents:
+                _mt = getattr(a, "last_mate_terms", None)
+                if isinstance(_mt, dict):
+                    for _k, _v in _mt.items():
+                        _acc[_k] = _acc.get(_k, 0.0) + float(_v)
+                    a.last_mate_terms = None
+
         if not self._emit_wanted("population", t):
             return
         # Räkna bara levande för statistik + pop (mer semantiskt korrekt)
@@ -741,6 +758,16 @@ class Population:
             for k in ("effort", "rest", "speed_n", "flode_oms", "u_oms"):
                 dmg_sums[k] /= float(pop_n)
         flow_sums.update(dmg_sums)
+
+        # **Parningsanspråkets faktorer (0233).** Summor över beståndet sedan
+        # förra posten; medelvärden fås genom att dela med `parning_n`
+        # respektive `parning_ensam`. Anspråket har median 0,032 och vinner
+        # 0,1 % av tickarna i varje version sedan p219 — uppdelningen ska visa
+        # om det är närheten, kapaciteten eller tiden som stryper.
+        for _k in ("n", "t_beredd", "massoverskott", "reservandel",
+                   "drift", "narhet", "dist", "styrka", "ensam"):
+            flow_sums["parning_" + _k] = float(self._mate_acc.get(_k, 0.0))
+        self._mate_acc = {}
 
         # **Reparationens och slitagets diagnostik, per massakvintil (0225).**
         #

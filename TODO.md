@@ -2623,6 +2623,9 @@ Geologin kommer med i samma steg, eftersom hydro inte går att pröva utan höjd
 | ~~—~~ | `M_target` landar på 1,57 utan den dolda bromsen mot 2,95 med den: vilket är rätt? | storleken | **besvarad** i baslinjen — ingendera; locus driver fritt mellan 1,38 och 2,82 mellan frön |
 | ~~—~~ | baslinje: tre frön av `f6-256`, 150 månader, efter 0226–0232 | ekologin | **klart**, se nedan — två av tre frön dör ut kring månad 105 |
 | — | faunan dör ut i 2 av 3 frön kring månad 105 genom **parningsmisslyckande**, inte svält: under ~500 djur är medelavståndet till närmaste granne större än parningsradien | ekologin | **öppen**, nästa |
+| ~~0233~~ | instrument: parningsanspråkets faktorer var för sig, ackumulerade per tick | reproduktionen | **klart**, se nedan — bitidentisk; närheten stryper, inte driften |
+| — | partnern upptäcks ut till synvidden (7–12 celler) men parningsdriften är **noll** från 5 celler: djuret ser en partner och struntar i den i 84 % av fallen | reproduktionen | **öppen**, nästa — dynamikändring |
+| — | flockningen är **inte** problemet: klustringen är 8,5× bättre än slump, bäst uppmätta någonsin, och flockanspråket vinner 48 % av tickarna | ekologin | **besvarad** i 0233 — hypotesen att farten brutit flockningen falsifierad |
 | — | kontroll saknas: vi vet inte om utdöendet vid månad 105 är nytt efter 0226–0232 eller fanns före | ekologin | **öppen** — kräver samma trefrökörning på 0224 |
 | ~~0228~~ | `k_age0`, `k_age1` och `k_ageD` borttagna — den kalenderdrivna åldrandeklockans konstanter | städning | **klart** — bitidentisk |
 | — | `M_target` går till 3,645 och fryser — men med p10–p90 på 0,02 efter en flaskhals på sju individer: drift, inte selektion | storleken | **öppen** — kräver flera frön och ett skadesystem som biter |
@@ -2777,6 +2780,77 @@ fortfarande bär det och en jämförelse bakåt mot p219–p226 ska kunna göras
 
 **Bitprov:** ren HEAD mot arbetsträdet, `liten6` 400 tick frö 1, med pop- och
 världslogg på båda sidor. Noll skillnad i konsoll, världslogg och pop-logg.
+
+### Instrument: parningsanspråkets faktorer (0233)
+
+Instrumentpatch, bitidentisk bana. Frågan kom ur baslinjen: faunan dör ut genom
+parningsmisslyckande, och hypotesen var att den höjda farten brutit flockningen.
+
+**Hypotesen är falsifierad.** Flockningen är bättre än någonsin, mätt i samma
+scenario över tre versioner:
+
+```
+                          p219        p224      baslinje
+  medelavstånd            10,58        5,76        6,06
+  mot slumpfördelning     17,42       11,54       22,28
+  klustring                1,6x        2,0x        3,7x
+  någon inom synhåll      38,9 %      88,6 %      63,6 %
+  mot slump               11,9 %      57,2 %       7,5 %
+  förbättring mot slump    3,3x        1,5x        8,5x
+  flockanspråkets styrka   0,623       0,711       0,781
+```
+
+Men parningsanspråket är det svagaste av åtta i alla tre, med oförändrad
+styrka: 0,035 / 0,034 / 0,032, och vinner 0,1 procent av tickarna. Nio av tio
+möten mellan klara djur ger ingen parning.
+
+Anspråket är en produkt,
+`styrka = tidsfaktor · min(massöverskott, reservandel) · närhet(avstånd)`,
+och instrumentet loggar de råa insignalerna per tick — summan ägs fortfarande
+av `styrning.parningsdrift`, så formeln finns på ett ställe. Ackumulering per
+tick och inte ögonblicksbild, eftersom anspråket finns i 0,7 procent av
+agenttickarna.
+
+**Utfall**, `f6-256` frö 1 till utdöendet vid månad 104 (`runs/p233`):
+
+```
+  99 680 redo-tick, varav 4 819 med upptäckt partner        4,8 %
+    medelavstånd till partnern      9,36 celler
+    medelnärhet                     0,156
+    medeldrift (inre)               0,491
+    medelstyrka                     0,074
+```
+
+**Närheten stryper, inte driften.** Den inre drivkraften ligger på 0,49 — halv
+kraft, rimligt. Men närhetsfaktorn ligger på 0,156, och den är noll så fort
+partnern är längre bort än fem celler.
+
+Och partnern **upptäcks ut till synvidden**: `best_mate` sätts ur sensingens
+träff utan något avståndsfilter, alltså ut till 7–12 celler beroende på
+sinnesnivå. `narhet(dist, attack_range=1,5, mate_search_radius=5,0)` går till
+noll vid fem.
+
+```
+   avstånd    1,5    2,0    3,0    4,0    5,0   6–12
+   närhet    1,000  0,857  0,571  0,286  0,000    0
+```
+
+Medelavståndet till den upptäckta partnern är 9,36 celler. **Djuret ser en
+partner och får noll drivkraft att gå dit** i det stora flertalet fall — mellan
+fem celler och synvidden finns en död zon där partnern är synlig men
+ointressant. Namnet `mate_search_radius` antyder en sökradie, men den begränsar
+ingen sökning: den är bara nollpunkten i närhetsrampen. Samma sorts
+namn-mot-beteende-glapp som `weakness()` och `M_crit` i 0230.
+
+Det andra ledet står kvar: **95,2 procent av alla redo-tick ser ingen behörig
+partner alls.** Beredskapen är 14 procent och rollerna måste vara
+komplementära, så kvadreringen biter före geometrin. Båda behöver åtgärdas,
+men den döda zonen är ett mekaniskt fel och tas först.
+
+**Bitprov:** ren HEAD mot arbetsträdet, `liten6` 400 tick frö 1. Världsloggen
+bitidentisk, pop-loggens samtliga tidigare fält identiska, konsollen skiljer sig
+bara på etiketten `rad population.py:4754` mot `4781` — samma antal anrop,
+samma kilotal, samma andel.
 
 ### Baslinje: tre frön, 150 månader (mätning)
 
